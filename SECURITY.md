@@ -9,7 +9,7 @@ Only the latest release receives security fixes.
 Please **do not** open a public issue for security problems. Instead:
 
 - Use GitHub's [private vulnerability reporting](https://github.com/emidhun/canopy/security/advisories/new), or
-- Email **midhun@tooljet.com** with details and reproduction steps.
+- Email **idhutest@gmail.com** with details and reproduction steps.
 
 You'll get an acknowledgement within a few days. Please allow a reasonable window
 for a fix before public disclosure.

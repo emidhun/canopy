@@ -6,5 +6,5 @@ This project follows the [Contributor Covenant, version 2.1](https://www.contrib
 attacks, and discriminatory behavior are not tolerated anywhere in the project's
 spaces (issues, PRs, discussions).
 
-Reports: **midhun@tooljet.com**. All reports are reviewed and handled
+Reports: **idhutest@gmail.com**. All reports are reviewed and handled
 confidentially.
