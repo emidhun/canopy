@@ -24,7 +24,7 @@ jobs:
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Tauri system deps (linux)
         if: matrix.platform == 'ubuntu-latest'
         run: |
