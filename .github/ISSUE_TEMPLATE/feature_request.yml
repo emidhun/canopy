@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an idea or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow pain, not just the feature — it helps find the best shape for it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How do you imagine it working? Sketches / mockups welcome.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered

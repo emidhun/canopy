@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in Canopy doesn't work as expected
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Canopy version
+      placeholder: "0.4.0 (menu bar → main window title, or the DMG filename)"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS (Apple Silicon)
+        - Linux (experimental build)
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version / distro
+      placeholder: "macOS 15.2 / Ubuntu 24.04 GNOME"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add repo …
+        2. Create worktree …
+        3. …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: >
+        Service logs from the in-app Console, or setup output from the worktree
+        header. For crashes on macOS include the report from Console.app.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: Your `.worktreemanager.json` (redact anything private) and the repo's service definitions, if related.
+      render: json
