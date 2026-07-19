@@ -18,6 +18,20 @@ Every branch checked out, provisioned, and running — side by side.</p>
   <img src="docs/assets/demo.gif" alt="Canopy demo — start a worktree's services on isolated ports with a per-worktree database, open the branch's app on its own port, switch branches in place, create worktrees" width="1080" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/emidhun/canopy/releases/download/v0.4.0/Canopy_0.4.0_aarch64.dmg"><img src="https://img.shields.io/badge/macOS-Download_.dmg_(Apple_Silicon)-58c2c8?style=for-the-badge&logo=apple&logoColor=white&labelColor=1e1f22" alt="Download DMG for macOS (Apple Silicon)" /></a>
+  <a href="#install"><img src="https://img.shields.io/badge/Homebrew-brew_install_canopy-58c2c8?style=for-the-badge&logo=homebrew&logoColor=white&labelColor=1e1f22" alt="Install with Homebrew" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/emidhun/canopy/releases/download/v0.4.0/Canopy_0.4.0_amd64.deb"><img src="https://img.shields.io/badge/Linux-.deb-9a9ba0?style=flat-square&logo=debian&logoColor=white&labelColor=1e1f22" alt="Download .deb" /></a>
+  <a href="https://github.com/emidhun/canopy/releases/download/v0.4.0/Canopy-0.4.0-1.x86_64.rpm"><img src="https://img.shields.io/badge/Linux-.rpm-9a9ba0?style=flat-square&logo=fedora&logoColor=white&labelColor=1e1f22" alt="Download .rpm" /></a>
+  <a href="https://github.com/emidhun/canopy/releases/download/v0.4.0/Canopy_0.4.0_amd64.AppImage"><img src="https://img.shields.io/badge/Linux-.AppImage-9a9ba0?style=flat-square&logo=linux&logoColor=white&labelColor=1e1f22" alt="Download AppImage" /></a>
+  <a href="https://github.com/emidhun/canopy/releases"><img src="https://img.shields.io/github/v/release/emidhun/canopy?style=flat-square&label=all%20releases&color=58c2c8&labelColor=1e1f22" alt="All releases" /></a>
+  <br/>
+  <sub>Linux builds are experimental — <a href="https://github.com/emidhun/canopy/issues">feedback welcome</a>. See <a href="#install">Install</a> for the one-line quarantine fix on macOS.</sub>
+</p>
+
 Canopy discovers every worktree of your registered repos, provisions each one (dependencies, an
 isolated database, deterministic ports), and lets you start/stop services, watch logs, manage
 databases, and change ports — from a tray popover and a main window. Built for fast multi-repo /

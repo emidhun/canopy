@@ -7,7 +7,10 @@ A task-oriented walkthrough of using Canopy day to day. For a reference of every
 
 ## 1. Install and launch
 
-Follow the install steps in the [README](../README.md#install-users) (or
+**Quickest:** `brew install --cask emidhun/canopy/canopy` — or grab the
+[macOS DMG](https://github.com/emidhun/canopy/releases/download/v0.4.0/Canopy_0.4.0_aarch64.dmg)
+/ [Linux packages](https://github.com/emidhun/canopy/releases) directly.
+Full steps in the [README](../README.md#install) (or
 [distribution.md](distribution.md) for the details). Once installed, launch **Canopy** — it runs as a
 **menu-bar app**, so it has no dock icon; look for its mark in the macOS menu bar.
 
@@ -153,7 +156,7 @@ prunes.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -dr com.apple.quarantine /Applications/Canopy.app` (see [Install](../README.md#install-users)). |
+| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -dr com.apple.quarantine /Applications/Canopy.app` (see [Install](../README.md#install)). |
 | `setup` fails with `notsup` / wrong Node | The project needs a newer Node than your default. Canopy uses the worktree's pinned Node (`.tool-versions`/`.nvmrc`); make sure that version is installed. |
 | Server can't find `@tooljet/plugins/dist/server` | Plugins must be built per worktree — add `npm --prefix plugins install && npm --prefix plugins run build` to `setup`. |
 | Frontend hits the wrong API port | The frontend bakes the server URL from `TOOLJET_SERVER_PORT` at launch — set it in `env` to `${WT_SERVER_PORT}`, and give the frontend `--port $PORT`. |
