@@ -1,0 +1,179 @@
+// Typed IPC surface — invoke wrappers + event payloads, mirroring src-tauri.
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { GitMeta, LogLine, RepoNode, SubmoduleStatus, SvcStatus } from "./types";
+
+export interface ServiceCfg {
+  id: string;
+  name: string;
+  kind: string;
+  command: string;
+  cwd: string;
+  basePort: number | null;
+  env: Record<string, string>;
+}
+
+export interface CustomCmd {
+  label: string;
+  command: string;
+}
+
+export interface RepoCfg {
+  id: string;
+  name: string;
+  path: string;
+  worktreeDir: string;
+  resetDb: string;
+  migrateDb: string;
+  services: ServiceCfg[];
+  customCommands: CustomCmd[];
+}
+
+export interface Settings {
+  version: number;
+  editor: { command: string };
+  terminal: string;
+  repos: RepoCfg[];
+  showSwitchBranch: boolean;
+}
+
+export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
+
+/** One file seeded + templated into every new worktree (Files-to-provision). */
+export interface ProvisionEntry {
+  path: string;
+  format: ProvisionFormat;
+  from: string;
+  interpolate: boolean;
+  /** ordered [key, value-template] pairs (ignored for `text`) */
+  keys: [string, string][];
+}
+
+/** The repo's `.worktreemanager.json` as exchanged with Settings. `teardown` /
+ * `migrate` are read-only there today — returned so preview/export match disk. */
+export interface RepoConfigFile {
+  provision: ProvisionEntry[];
+  setup: string[];
+  teardown: string[];
+  migrate: string[];
+}
+
+export interface Branches {
+  local: string[];
+  remote: string[];
+  tags: string[];
+}
+
+export interface RepoDetection {
+  top: string;
+  name: string;
+  branch: string;
+  origin: string;
+  stack: string;
+  scripts: { name: string; command: string }[];
+}
+
+export const ipc = {
+  getTree: () => invoke<RepoNode[]>("get_tree"),
+  refresh: (wtKey?: string) => invoke<void>("refresh", { wtKey: wtKey ?? null }),
+  getSettings: () => invoke<Settings>("get_settings"),
+  saveSettings: (newSettings: Settings) => invoke<void>("save_settings", { newSettings }),
+  addRepo: (path: string) => invoke<RepoCfg>("add_repo", { path }),
+  detectRepo: (path: string) => invoke<RepoDetection>("detect_repo", { path }),
+  removeRepo: (repoId: string) => invoke<void>("remove_repo", { repoId }),
+  gitPull: (wtKey: string) => invoke<string>("git_pull", { wtKey }),
+  submoduleStatus: (wtKey: string) => invoke<SubmoduleStatus[]>("submodule_status", { wtKey }),
+  pullSubmodule: (wtKey: string, path: string) => invoke<string>("pull_submodule", { wtKey, path }),
+  switchSubmoduleBranch: (wtKey: string, path: string, branch: string) =>
+    invoke<void>("switch_submodule_branch", { wtKey, path, branch }),
+  listSubmoduleBranches: (wtKey: string, path: string) => invoke<Branches>("list_submodule_branches", { wtKey, path }),
+  fetchSubmodules: (wtKey: string) => invoke<number>("fetch_submodules", { wtKey }),
+  switchWorktreeBranch: (wtKey: string, branch: string, create: boolean, base?: string) =>
+    invoke<void>("switch_worktree_branch", { wtKey, branch, create, base: base ?? null }),
+  listBranches: (repoId: string) => invoke<Branches>("list_branches", { repoId }),
+  fetchBranches: (repoId: string) => invoke<Branches>("fetch_branches", { repoId }),
+  getRepoConfig: (repoId: string) => invoke<RepoConfigFile>("get_repo_config", { repoId }),
+  saveRepoConfig: (repoId: string, provision: ProvisionEntry[], setup: string[]) =>
+    invoke<void>("save_repo_config", { repoId, provision, setup }),
+  saveTextFile: (path: string, contents: string) => invoke<void>("save_text_file", { path, contents }),
+
+  getLogs: (svcKey: string) => invoke<LogLine[]>("get_logs", { svcKey }),
+  serviceStart: (svcKey: string) => invoke<void>("service_start", { svcKey }),
+  serviceStop: (svcKey: string) => invoke<void>("service_stop", { svcKey }),
+  serviceRestart: (svcKey: string) => invoke<void>("service_restart", { svcKey }),
+  worktreeStartAll: (wtKey: string) => invoke<void>("worktree_start_all", { wtKey }),
+  worktreeStopAll: (wtKey: string) => invoke<void>("worktree_stop_all", { wtKey }),
+  resetDb: (wtKey: string) => invoke<void>("reset_db", { wtKey }),
+
+  openInEditor: (wtKey: string) => invoke<void>("open_in_editor", { wtKey }),
+  revealInFinder: (wtKey: string) => invoke<void>("reveal_in_finder", { wtKey }),
+  openTerminal: (wtKey: string) => invoke<void>("open_terminal", { wtKey }),
+  openPort: (port: number) => invoke<void>("open_port", { port }),
+  showMainWindow: () => invoke<void>("show_main_window"),
+  quitApp: () => invoke<void>("quit_app"),
+
+  listDatabases: (wtKey: string) => invoke<string[]>("list_databases", { wtKey }),
+  currentDatabase: (wtKey: string) => invoke<string | null>("current_database", { wtKey }),
+  snapshotDatabase: (wtKey: string, name: string) => invoke<void>("snapshot_database", { wtKey, name }),
+  exportDatabase: (wtKey: string, filePath: string) => invoke<void>("export_database", { wtKey, filePath }),
+  restoreDatabase: (wtKey: string, filePath: string) => invoke<void>("restore_database", { wtKey, filePath }),
+  switchDatabase: (wtKey: string, dbName: string) => invoke<void>("switch_database", { wtKey, dbName }),
+  setServicePort: (svcKey: string, port: number) => invoke<void>("set_service_port", { svcKey, port }),
+  runMigration: (wtKey: string) => invoke<void>("run_migration", { wtKey }),
+  runCustomCommand: (wtKey: string, command: string) => invoke<void>("run_custom_command", { wtKey, command }),
+
+  createWorktree: (args: { repoId: string; branch: string; base?: string; createBranch: boolean }) =>
+    invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
+  runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),
+  worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[] }>("worktree_dirty_report", { wtKey }),
+  removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
+    invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
+};
+
+export interface GitEvent extends GitMeta {
+  wtKey: string;
+}
+export interface StatusEvent {
+  svcKey: string;
+  status: SvcStatus;
+  startedAt?: number;
+  exitCode?: number;
+}
+export interface LogEvent {
+  svcKey: string;
+  lines: LogLine[];
+}
+export interface StatsEvent {
+  entries: { svcKey: string; cpu: number; memMb: number; uptimeSec: number }[];
+}
+export interface ResetEvent {
+  wtKey: string;
+  state: "started" | "done" | "error";
+  message?: string;
+}
+export interface OpEvent {
+  wtKey: string;
+  op: string;
+  state: "progress" | "done" | "error";
+  detail: string;
+}
+
+export const on = {
+  treeChanged: (cb: (tree: RepoNode[]) => void): Promise<UnlistenFn> =>
+    listen<RepoNode[]>("tree:changed", (e) => cb(e.payload)),
+  worktreeGit: (cb: (e: GitEvent) => void): Promise<UnlistenFn> =>
+    listen<GitEvent>("worktree:git", (e) => cb(e.payload)),
+  serviceStatus: (cb: (e: StatusEvent) => void): Promise<UnlistenFn> =>
+    listen<StatusEvent>("service:status", (e) => cb(e.payload)),
+  serviceLog: (cb: (e: LogEvent) => void): Promise<UnlistenFn> =>
+    listen<LogEvent>("service:log", (e) => cb(e.payload)),
+  serviceStats: (cb: (e: StatsEvent) => void): Promise<UnlistenFn> =>
+    listen<StatsEvent>("service:stats", (e) => cb(e.payload)),
+  resetStatus: (cb: (e: ResetEvent) => void): Promise<UnlistenFn> =>
+    listen<ResetEvent>("reset:status", (e) => cb(e.payload)),
+  worktreeOp: (cb: (e: OpEvent) => void): Promise<UnlistenFn> =>
+    listen<OpEvent>("worktree:op", (e) => cb(e.payload)),
+};
+
+/** True when running inside the Tauri webview (false in a plain browser tab). */
+export const hasBackend = () => "__TAURI_INTERNALS__" in window;

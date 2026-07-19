@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Canopy — Logo v2</title>
+<style>
+  :root {
+    --bg: #1e1f22; --text: #e8e8ea; --dim: #9a9ba0; --faint: #6a6c72;
+    --accent: #58c2c8; --run: #3fb950; --border: #3a3d42;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+
+  .board { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; height: 100%; }
+  .board.dark { background: var(--bg); color: var(--text); }
+  .board.light { background: #f4f5f7; color: #23262c; }
+
+  .sizes { display: flex; align-items: flex-end; gap: 26px; }
+  .size-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .size-cell .cap { font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .lockup { display: flex; align-items: center; gap: 13px; }
+  .wordmark { font-size: 34px; font-weight: 650; letter-spacing: -.025em; line-height: 1; }
+  .wordmark .py { color: var(--accent); }
+  .lockup-sm { display: flex; align-items: center; gap: 8px; }
+  .wordmark-sm { font-size: 16px; font-weight: 620; letter-spacing: -.02em; }
+
+  /* menu bar context */
+  .mbar {
+    width: 360px; height: 27px; border-radius: 8px;
+    display: flex; align-items: center; gap: 15px; padding: 0 12px;
+    background: rgba(28,26,40,.92); color: rgba(255,255,255,.92); font-size: 12.5px;
+  }
+  .mbar .sp { flex: 1; }
+  .mbar .tray { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 21px; border-radius: 5px; background: rgba(255,255,255,.2); }
+
+  /* app icon */
+  .appicon { border-radius: 22.5%; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 10px 26px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.12); }
+  .appicon.g1 { background: linear-gradient(160deg, #2c3e44 0%, #17282c 58%, #101a1e 100%); }
+  .appicon.g2 { background: linear-gradient(160deg, #58c2c8 0%, #2e8a8f 55%, #1d5c60 100%); }
+
+  .titlebar-demo {
+    width: 360px; height: 40px; border-radius: 9px; background: #25272b;
+    border: 1px solid #2b2d32; display: flex; align-items: center; gap: 12px; padding: 0 12px;
+    color: var(--dim); font-size: 13px; font-weight: 600;
+  }
+  .titlebar-demo .lights { display: flex; gap: 7px; }
+  .titlebar-demo .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .titlebar-demo .tb-lock { display: flex; align-items: center; gap: 7px; }
+
+  .note { font-size: 11.5px; color: var(--faint); text-align: center; max-width: 240px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="canopy-logos-v2.jsx"></script>
+</body>
+</html>

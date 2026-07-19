@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Canopy — Brandmark</title>
+<style>
+  :root {
+    --bg: #1e1f22; --panel: #232529; --panel-2: #1b1c1f;
+    --border: #34373c; --border-soft: #2b2d32;
+    --text: #e8e8ea; --dim: #9a9ba0; --faint: #6a6c72;
+    --accent: #58c2c8; --green: #3fb950;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--sans); background: var(--bg); color: var(--text);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .sheet { max-width: 1080px; margin: 0 auto; padding: 64px 56px 110px; }
+
+  /* hero */
+  .hero {
+    border: 1px solid var(--border-soft); border-radius: 18px;
+    background:
+      radial-gradient(120% 140% at 50% -20%, #26282d 0%, #1c1d20 60%, #191a1d 100%);
+    padding: 76px 40px 70px; text-align: center; position: relative; overflow: hidden;
+  }
+  .hero .lock { display: inline-flex; align-items: center; gap: 24px; }
+  .hero .wm { font-size: 76px; font-weight: 640; letter-spacing: -.035em; line-height: 1; }
+  .hero .tag { margin: 34px 0 0; font-size: 14px; color: var(--dim); letter-spacing: .01em; }
+  .hero .tag b { color: var(--text); font-weight: 600; }
+
+  .eyebrow { font-size: 11.5px; font-weight: 650; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); margin: 0 0 14px; }
+  section { margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 22px; }
+  .sec-head h2 { font-size: 17px; font-weight: 620; letter-spacing: -.01em; margin: 0; }
+  .sec-head p { font-size: 13px; color: var(--dim); margin: 0; }
+
+  .grid { display: grid; gap: 18px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border-soft); border-radius: 13px;
+    padding: 26px; display: flex; flex-direction: column; align-items: center; gap: 16px;
+    justify-content: center;
+  }
+  .card .cap { font-size: 11.5px; color: var(--faint); letter-spacing: .01em; text-align: center; }
+  .card .cap b { color: var(--dim); font-weight: 600; }
+
+  .swatch-line { display: flex; align-items: center; gap: 12px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .dot { width: 15px; height: 15px; border-radius: 4px; border: 1px solid rgba(255,255,255,.12); }
+
+  /* construction */
+  .construct { background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 13px; padding: 32px; display: flex; gap: 32px; align-items: center; flex-wrap: wrap; justify-content: center; }
+  .construct .blueprint { background: #15161a; border-radius: 12px; padding: 8px; }
+  .construct .legend { max-width: 300px; }
+  .construct .legend li { font-size: 13px; color: var(--dim); line-height: 1.7; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+  .construct .legend ul { margin: 0; padding: 0; }
+  .construct .legend .k { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 1px; }
+
+  /* clearspace */
+  .cs-wrap { display: flex; gap: 18px; }
+  .cs-wrap .card { flex: 1; }
+
+  /* lockups */
+  .lock-card { padding: 40px; }
+  .lock-card.light { background: #f4f5f7; border-color: #e2e4e9; }
+  .lock-h { display: flex; align-items: center; gap: 20px; }
+  .lock-v { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .wm { font-weight: 640; letter-spacing: -.03em; line-height: 1; }
+  .wm-lg { font-size: 44px; }
+  .wm-md { font-size: 30px; }
+
+  /* app icon */
+  .appicon { border-radius: 22.4%; display: flex; align-items: center; justify-content: center; box-shadow: 0 16px 38px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.14); }
+  .ic-dark { background: linear-gradient(157deg, #2b3a3f 0%, #1a2a2e 52%, #11191c 100%); }
+  .ic-teal { background: linear-gradient(157deg, #6fd2d8 0%, #3a9aa0 52%, #237074 100%); }
+  .ic-ink { background: linear-gradient(157deg, #34373c 0%, #232529 60%, #1a1b1e 100%); }
+
+  /* context */
+  .mbar { width: 100%; max-width: 380px; height: 28px; border-radius: 8px; display: flex; align-items: center; gap: 16px; padding: 0 12px; background: rgba(20,18,26,.94); color: rgba(255,255,255,.92); font-size: 12.5px; }
+  .mbar .sp { flex: 1; }
+  .mbar .tray { display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 22px; border-radius: 5px; background: rgba(255,255,255,.2); }
+  .tbar { width: 100%; max-width: 380px; height: 42px; border-radius: 9px; background: #25272b; border: 1px solid var(--border-soft); display: flex; align-items: center; gap: 12px; padding: 0 13px; }
+  .tbar .lights { display: flex; gap: 7px; }
+  .tbar .lights i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .tbar .tt { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--dim); }
+
+  /* don'ts */
+  .dont .card { gap: 12px; }
+  .dont .x { color: #e0533d; font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--border-soft); font-size: 12px; color: var(--faint); display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="canopy-brand.jsx"></script>
+</body>
+</html>

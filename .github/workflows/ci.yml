@@ -1,0 +1,53 @@
+# CI — the Linux job exists specifically to compile the cfg(not(macos)) code
+# paths (tray fallback, xdg-open, terminal detection) that a macOS `cargo
+# check` never sees. macOS job mirrors local dev.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system deps (webkit2gtk, appindicator)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev build-essential \
+            curl wget file libxdo-dev libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # tauri::generate_context! embeds ../dist at compile time
+      - run: npm ci
+      - run: npm run build
+      - run: cargo check --locked
+        working-directory: src-tauri
+      - run: cargo test --locked
+        working-directory: src-tauri
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: npm run build
+      - run: cargo check --locked
+        working-directory: src-tauri
+      - run: cargo test --locked
+        working-directory: src-tauri

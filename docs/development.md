@@ -1,0 +1,85 @@
+# Development & build
+
+## Prerequisites (this machine)
+- **Rust** (rustup) — `source "$HOME/.cargo/env"` to put `cargo` on PATH.
+- **Node 22+** — the asdf default here is **18** (too old for Vite). Use Node 22 explicitly:
+  ```sh
+  export PATH="$HOME/.asdf/installs/nodejs/v22.15.1/bin:$PATH"
+  ```
+  (asdf stores it v-prefixed: `v22.15.1`.) The project has a `.tool-versions` pinning `nodejs v22.15.1`.
+- **Xcode Command Line Tools** (for codesign).
+- For running ToolJet itself: git, Postgres, and the repo's `.worktreemanager.json`.
+
+Standard preamble for any build command:
+```sh
+export PATH="$HOME/.asdf/installs/nodejs/v22.15.1/bin:$PATH" && source "$HOME/.cargo/env"
+```
+
+## Commands
+```sh
+npm install
+npm run dev            # vite only
+npm run tauri dev      # full app (both windows + tray); rebuilds on src-tauri changes
+npm run build          # type-check + vite build (frontend)
+cargo check            # from src-tauri/ — fast Rust check
+cargo test --lib       # from src-tauri/ — unit tests
+npm run tauri build    # release .app (see DMG note below)
+```
+
+## Building a release DMG (important workarounds)
+1. **Bundle is app-only.** `tauri.conf.json` sets `bundle.targets: ["app"]` because Tauri's
+   `bundle_dmg.sh` step **hangs** on this machine (it drives Finder/AppleScript). So `tauri build`
+   produces only `Canopy.app` (~22s), no DMG.
+2. **Ad-hoc sign** the app (Tauri's default ad-hoc signature can be subtly broken → "damaged"):
+   ```sh
+   APP="src-tauri/target/release/bundle/macos/Canopy.app"
+   codesign --remove-signature "$APP"; codesign --force --deep --sign - "$APP"
+   codesign --verify --deep --strict "$APP"   # should pass
+   ```
+3. **Make the DMG with hdiutil** (not bundle_dmg):
+   ```sh
+   STAGE=/tmp/canopy-dmg; rm -rf "$STAGE" ~/Desktop/Canopy-0.3.0-arm64.dmg; mkdir -p "$STAGE"
+   cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
+   hdiutil create -volname Canopy -srcfolder "$STAGE" -ov -format UDZO ~/Desktop/Canopy-0.3.0-arm64.dmg
+   rm -rf "$STAGE"
+   ```
+4. Relaunch: `pkill -f "Canopy.app"; open "$APP"`.
+
+The full one-shot block is what the assistant runs each ship; keep it together.
+
+## App icon
+Regenerated from a 1024px PNG (dark squircle + Canopy mark) via `npm run tauri icon <png>` →
+`src-tauri/icons/*` (incl. `.icns`/`.ico`). Source PNG: `design/canopy-appicon-1024.png`. The
+icon HTML used to render it is ephemeral (`/tmp/canopy-appicon.html` in history). Android/iOS icon
+dirs are deleted (macOS-only).
+
+## Visual verification without the GUI
+Screenshots of the live NSPanel are unreliable (Screen Recording perms). To eyeball UI, serve `dist`
+and headless-render with Chrome:
+```sh
+python3 -m http.server 4173 --directory dist &
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu \
+  --window-size=1240,800 --screenshot=/tmp/app.png http://localhost:4173/index.html
+```
+Note: in a plain browser the app falls back to **mock data** (`src/mock.ts`); `hasBackend()` is false.
+Some UI (e.g. the database bar) only shows when a worktree has a `dbName`.
+
+## Gotchas that have bitten us (read before debugging)
+- **Node 18 vs 22.** asdf default is 18; ToolJet's server is `engine-strict` Node 22.15.1. Canopy
+  prepends the worktree's pinned Node (`toolchain.rs`) for setup/service/reset/migrate/teardown. Don't
+  remove that or installs fail with `notsup`.
+- **Plugins must be built per worktree.** ToolJet server imports `@tooljet/plugins/dist/server`; setup
+  must `npm --prefix plugins install && npm --prefix plugins run build` or migrations fail with
+  `Cannot find module @tooljet/plugins/dist/server`.
+- **`TOOLJET_SERVER_PORT`.** The frontend bakes the server URL at webpack launch from
+  `process.env.TOOLJET_SERVER_PORT` (falls back to 3000). It's set in the worktree `.env` via the
+  `env` block (`${WT_SERVER_PORT}`). The frontend's *own* port needs `--port $PORT` in its command.
+- **`pg_dump` version.** Snapshot/export must use binaries **matching the server's major version**.
+  PATH's `pg_dump` here is 14 (too old → refuses to dump a 16 server), but the newest (Postgres.app
+  `latest` = 17) is also wrong: a 17 dump emits `SET transaction_timeout` (a PG17 GUC) and a newer
+  archive format that a 16 server/pg_restore rejects on restore. `db.rs` now queries the live server
+  (`SHOW server_version_num`) and `pg_path_prefix_for(major)` prefers `Postgres.app/Versions/<major>/bin`,
+  falling back to the newest only when no exact match is installed.
+- **BSD `sed`** doesn't support `0,/re/` (GNU-ism). Use perl/python or the Edit tool for one-shot
+  in-place edits in scripts.
+- **`tauri build` DMG hang** — see above; bundle app-only + hdiutil.

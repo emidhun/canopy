@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Worktree Manager — Menu-bar Popover</title>
+<style>
+  :root {
+    /* §6 palette — dark, fixed */
+    --wm-bg: #1e1f22;
+    --wm-hover: rgba(255,255,255,.05);
+    --wm-border: #3a3d42;
+    --wm-text: #e8e8ea;
+    --wm-dim: #9a9ba0;
+    --wm-grouplabel: #6a6c72;
+    --wm-run: #3fb950;
+    --wm-stop: #e0533d;
+    --wm-accent: #58c2c8;
+    --wm-btn: rgba(255,255,255,.11);
+    --wm-btn-hover: rgba(255,255,255,.18);
+    --wm-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: var(--wm-sans);
+    background:
+      radial-gradient(1200px 700px at 18% -10%, #f3f4f7 0%, transparent 60%),
+      linear-gradient(180deg, #eceef2 0%, #e3e5ea 100%);
+    color: #1d1f24;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ── Page scaffold ───────────────────────────────────────────── */
+  .page { max-width: 1140px; margin: 0 auto; padding: 46px 40px 90px; }
+  .page-head { margin-bottom: 38px; }
+  .eyebrow {
+    font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase;
+    color: #8a8f99; margin: 0 0 10px;
+  }
+  .page-head h1 { font-size: 27px; font-weight: 650; letter-spacing: -.018em; margin: 0 0 9px; }
+  .page-head p { font-size: 15px; line-height: 1.55; color: #5b606b; max-width: 600px; margin: 0; }
+
+  .stage {
+    display: grid; grid-template-columns: 380px 1fr; gap: 34px; align-items: start;
+  }
+  @media (max-width: 940px) { .stage { grid-template-columns: 1fr; } }
+
+  .frame-label {
+    display: flex; align-items: baseline; gap: 9px; margin: 0 0 16px;
+  }
+  .frame-label .n {
+    font-size: 11px; font-weight: 700; color: #fff; background: #2b2d31;
+    width: 19px; height: 19px; border-radius: 6px; display: inline-flex;
+    align-items: center; justify-content: center; letter-spacing: 0;
+  }
+  .frame-label h2 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .frame-label .hint { font-size: 12.5px; color: #8a8f99; }
+
+  .swatch-card {
+    background: #fafbfc; border: 1px solid #dfe2e8; border-radius: 16px;
+    padding: 36px; display: flex; justify-content: center;
+    box-shadow: 0 1px 2px rgba(20,24,33,.04);
+    background-image:
+      linear-gradient(#eef0f4 1px, transparent 1px),
+      linear-gradient(90deg, #eef0f4 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
+  }
+
+  /* ── §6 POPOVER ──────────────────────────────────────────────── */
+  .wm-pop {
+    width: 284px; flex: none;
+    background: var(--wm-bg);
+    border: 1px solid var(--wm-border);
+    border-radius: 11px;
+    box-shadow: 0 14px 44px rgba(0,0,0,.55);
+    padding: 5px 0;
+    color: var(--wm-text);
+    font-family: var(--wm-sans);
+    user-select: none;
+    overflow: hidden;
+  }
+
+  .wm-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    background: none; border: 0; cursor: pointer;
+    font-family: inherit; font-size: 14px; color: var(--wm-text);
+    text-align: left; padding: 6px 14px; border-radius: 7px;
+    margin: 0; transition: background .09s ease;
+  }
+  .wm-item:hover { background: var(--wm-hover); }
+  .wm-item-ic { display: inline-flex; color: var(--wm-dim); }
+  .wm-item--flash { background: var(--wm-accent) !important; color: #07181a; }
+  .wm-item--flash .wm-item-ic { color: #07181a; }
+
+  .wm-sep { height: 1px; background: var(--wm-border); margin: 6px 12px; }
+
+  .wm-grp { padding: 0; }
+  .wm-grp--div { border-top: 1px solid var(--wm-border); margin-top: 5px; padding-top: 5px; }
+
+  .wm-group {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; color: var(--wm-grouplabel);
+    padding: 8px 14px 3px; letter-spacing: .01em; line-height: 1;
+  }
+  .wm-group--caps { text-transform: uppercase; letter-spacing: .08em; font-weight: 600; font-size: 11px; }
+  .wm-fork { display: inline-flex; color: var(--wm-accent); }
+  .wm-mid { color: var(--wm-border); padding: 0 1px; }
+  .wm-slash { color: var(--wm-grouplabel); padding: 0 1px; }
+  .wm-group--pill .wm-repo { color: var(--wm-dim); }
+  .wm-branchpill {
+    background: rgba(255,255,255,.07); color: var(--wm-dim);
+    padding: 2px 7px; border-radius: 5px; font-size: 11px; margin-left: 1px;
+  }
+
+  .wm-row {
+    display: flex; align-items: center; gap: 11px;
+    padding: 7px 12px 7px 16px; border-radius: 7px; margin: 0 0;
+    transition: background .09s ease;
+  }
+  .wm-row:hover { background: var(--wm-hover); }
+  .wm-ic { display: inline-flex; flex: none; }
+  .wm-name { flex: 1 1 auto; font-size: 15px; color: var(--wm-text); letter-spacing: -.005em; }
+
+  /* worktree row — branch + actions, then service chips */
+  .wm-wt {
+    padding: 5px 10px 7px 14px; border-radius: 7px; margin: 1px 0;
+    transition: background .09s ease;
+  }
+  .wm-wt:hover { background: var(--wm-hover); }
+  .wm-wt-top { display: flex; align-items: center; gap: 8px; }
+  .wm-wt-branch {
+    flex: 1 1 auto; min-width: 0; font-size: 14px; font-weight: 550;
+    color: var(--wm-text); letter-spacing: -.005em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .wm-acts { flex: none; display: flex; align-items: center; gap: 2px; }
+  .wm-act {
+    flex: none; width: 26px; height: 24px; border: 0; cursor: pointer;
+    background: none; color: var(--wm-dim); border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background .1s ease, color .1s ease;
+  }
+  .wm-act:hover { background: var(--wm-btn); color: var(--wm-text); }
+  .wm-act--busy { color: var(--wm-accent); cursor: default; }
+  .wm-toggle {
+    flex: none; min-width: 52px; margin-left: 3px; border: 0; cursor: pointer;
+    background: var(--wm-btn); color: var(--wm-text);
+    font-family: inherit; font-size: 12.5px; font-weight: 500;
+    padding: 4px 12px; border-radius: 6px; line-height: 1.3;
+    transition: background .1s ease, opacity .1s ease;
+  }
+  .wm-toggle:hover { background: var(--wm-btn-hover); }
+  .wm-toggle:active { transform: translateY(.5px); }
+  .wm-toggle.is-busy { opacity: .5; cursor: default; color: var(--wm-dim); }
+
+  .wm-svcs {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px;
+    margin-top: 3px; padding-left: 1px;
+  }
+  .wm-svc {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--wm-dim);
+  }
+  .wm-svc-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--wm-grouplabel); }
+  .wm-svc-dot.s-running { background: var(--wm-run); }
+  .wm-svc-dot.s-stopped { background: var(--wm-grouplabel); }
+  .wm-svc-dot.s-error   { background: var(--wm-stop); }
+  .wm-svc-dot.s-starting, .wm-svc-dot.s-stopping {
+    background: var(--wm-accent); animation: wm-pulse .9s ease-in-out infinite;
+  }
+  @keyframes wm-pulse { 50% { opacity: .35; } }
+
+  .wm-btn {
+    flex: none; min-width: 58px; border: 0; cursor: pointer;
+    background: var(--wm-btn); color: var(--wm-text);
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    padding: 4px 11px; border-radius: 7px; line-height: 1.3;
+    transition: background .1s ease, opacity .1s ease;
+  }
+  .wm-btn:hover { background: var(--wm-btn-hover); }
+  .wm-btn:active { transform: translateY(.5px); }
+  .wm-btn--busy { opacity: .55; cursor: default; color: var(--wm-dim); }
+
+  /* density */
+  .wm-pop--compact .wm-item { padding-top: 5px; padding-bottom: 5px; }
+  .wm-pop--compact .wm-row { padding-top: 4px; padding-bottom: 4px; }
+  .wm-pop--compact .wm-wt { padding-top: 4px; padding-bottom: 5px; }
+  .wm-pop--compact .wm-svcs { display: none; }
+  .wm-pop--compact .wm-group { padding-top: 6px; padding-bottom: 3px; }
+
+  .wm-spin { animation: wm-spin 0.8s linear infinite; transform-origin: 50% 50%; }
+  @keyframes wm-spin { to { transform: rotate(360deg); } }
+
+  /* ── macOS menu-bar scene ────────────────────────────────────── */
+  .mac {
+    position: relative; border-radius: 14px; overflow: hidden;
+    border: 1px solid #cfd3da; height: 648px;
+    box-shadow: 0 18px 50px rgba(30,40,60,.16), 0 2px 6px rgba(30,40,60,.08);
+    background:
+      radial-gradient(120% 120% at 78% 8%, #4a3d72 0%, #2c2a55 38%, #18213f 72%, #0d1430 100%);
+  }
+  .mac::after { /* faint wallpaper streaks */
+    content: ""; position: absolute; inset: 0;
+    background:
+      radial-gradient(60% 50% at 22% 88%, rgba(255,150,90,.20), transparent 60%),
+      radial-gradient(50% 40% at 90% 70%, rgba(90,200,220,.16), transparent 60%);
+    pointer-events: none;
+  }
+  .menubar {
+    position: absolute; top: 0; left: 0; right: 0; height: 26px; z-index: 5;
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 12px 0 12px;
+    background: rgba(20,18,30,.34);
+    backdrop-filter: blur(18px) saturate(1.4);
+    -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-bottom: .5px solid rgba(255,255,255,.10);
+    font-size: 13px; color: rgba(255,255,255,.92);
+  }
+  .menubar .apple { font-size: 14px; }
+  .menubar .appname { font-weight: 700; }
+  .menubar .mb-menu { font-weight: 400; opacity: .9; }
+  .menubar .spacer { flex: 1; }
+  .menubar .mb-status { display: flex; align-items: center; gap: 14px; opacity: .92; }
+  .menubar .mb-status svg { display: block; }
+  .tray-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 22px; border-radius: 5px; cursor: pointer;
+    color: #fff; border: 0; background: transparent; padding: 0;
+    transition: background .1s ease;
+  }
+  .tray-btn:hover { background: rgba(255,255,255,.14); }
+  .tray-btn.active { background: rgba(255,255,255,.22); }
+  .tray-running-dot {
+    position: absolute; margin-left: 13px; margin-top: -9px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--wm-run);
+    box-shadow: 0 0 0 1.5px rgba(20,18,30,.5);
+  }
+  .mb-clock { font-variant-numeric: tabular-nums; font-size: 12.5px; }
+
+  .mac-pop-anchor {
+    position: absolute; z-index: 6; top: 30px;
+    transform-origin: top right;
+    opacity: 1;
+  }
+  .mac .wm-pop { box-shadow: 0 18px 52px rgba(0,0,0,.62); }
+
+  .scene-hint {
+    position: absolute; left: 16px; bottom: 14px; z-index: 6;
+    font-size: 12px; color: rgba(255,255,255,.62);
+    background: rgba(0,0,0,.28); padding: 5px 11px; border-radius: 8px;
+    backdrop-filter: blur(8px);
+  }
+
+  /* desktop icons (decoration) */
+  .desk-icons { position: absolute; top: 40px; left: 18px; display: flex; flex-direction: column; gap: 18px; z-index: 2; }
+  .desk-ico { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 56px; }
+  .desk-ico .glyph { width: 42px; height: 34px; border-radius: 7px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.16); }
+  .desk-ico span { font-size: 10.5px; color: rgba(255,255,255,.85); }
+
+  .footnote { margin-top: 30px; font-size: 13px; color: #6b7080; line-height: 1.6; max-width: 720px; }
+  .footnote code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; background: #e6e9ef; padding: 1px 6px; border-radius: 5px; color: #41454f; }
+  .footnote b { color: #41454f; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="popover.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

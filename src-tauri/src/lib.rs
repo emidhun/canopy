@@ -1,0 +1,213 @@
+mod commands;
+mod db;
+mod git;
+mod services;
+mod settings;
+mod setup;
+mod state;
+mod stats;
+mod suite;
+mod toolchain;
+mod tray;
+
+use services::ProcTable;
+use state::AppState;
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // GUI apps on macOS get a bare PATH; fix it so git/node/nvm resolve.
+    let _ = fix_path_env::fix();
+
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_dialog::init());
+    // NSPanel plugin is macOS-only; other platforms use a plain popover window.
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tray::init(&handle)?;
+            app.manage(AppState::new(
+                settings::load_settings(&handle),
+                settings::load_runtime(&handle),
+            ));
+            app.manage(ProcTable::default());
+
+            // kill process groups left over from a crashed previous run
+            services::sweep_orphans(&handle);
+
+            stats::spawn_stats_task(handle.clone());
+
+            // initial scan + 60s background git refresh
+            tauri::async_runtime::spawn(async move {
+                let _ = state::refresh_tree(&handle).await;
+                state::refresh_all_git_meta(&handle).await;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let _ = state::refresh_tree(&handle).await;
+                    state::refresh_all_git_meta(&handle).await;
+                }
+            });
+
+            // headless end-to-end suite: WTM_SUITE=<repoId>
+            if let Ok(repo_id) = std::env::var("WTM_SUITE") {
+                suite::run(app.handle().clone(), repo_id);
+            }
+
+            // headless smoke test of the process layer: WTM_SELFTEST=<svcKey>
+            if let Ok(key) = std::env::var("WTM_SELFTEST") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    eprintln!("[selftest] starting {key}");
+                    match services::start_service(&handle, &key).await {
+                        Err(e) => eprintln!("[selftest] FAIL start: {e}"),
+                        Ok(()) => {
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                            let (running, pgid) = {
+                                let table = handle.state::<ProcTable>();
+                                let procs = table.procs.lock().unwrap();
+                                (procs.contains_key(&key), procs.get(&key).map(|p| p.pgid))
+                            };
+                            let log_len = {
+                                let table = handle.state::<ProcTable>();
+                                let logs = table.logs.lock().unwrap();
+                                logs.get(&key).map(|b| b.len()).unwrap_or(0)
+                            };
+                            eprintln!("[selftest] running={running} pgid={pgid:?} log_lines={log_len}");
+                            let _ = services::stop_service(&handle, &key).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                            let table = handle.state::<ProcTable>();
+                            let gone = table.procs.lock().unwrap().is_empty();
+                            let pg_dead = pgid.map(|p| unsafe { libc::killpg(p, 0) != 0 }).unwrap_or(true);
+                            eprintln!("[selftest] after stop: table_empty={gone} pgid_dead={pg_dead}");
+                            eprintln!("[selftest] {}", if running && gone && pg_dead && log_len > 0 { "PASS" } else { "FAIL" });
+                        }
+                    }
+                });
+            }
+            // headless create+start test: WTM_SELFTEST_CREATE="repoId|branch|serviceId"
+            if let Ok(spec) = std::env::var("WTM_SELFTEST_CREATE") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let parts: Vec<&str> = spec.split('|').collect();
+                    let (repo_id, branch, service_id) = (parts[0], parts[1], parts[2]);
+                    eprintln!("[ct] create_worktree repo={repo_id} branch={branch}");
+                    match commands::create_worktree(
+                        handle.clone(),
+                        repo_id.to_string(),
+                        branch.to_string(),
+                        Some("HEAD".to_string()),
+                        true,
+                    )
+                    .await
+                    {
+                        Err(e) => eprintln!("[ct] FAIL create: {e}"),
+                        Ok(wt_path) => {
+                            eprintln!("[ct] created at {wt_path}");
+                            let svc_key = format!("{wt_path}::{service_id}");
+                            // confirm the new service is in the tree
+                            let in_tree = {
+                                let st = handle.state::<state::AppState>();
+                                let tree = st.tree.read().unwrap();
+                                tree.iter().flat_map(|r| r.worktrees.iter()).flat_map(|w| w.services.iter()).any(|s| s.svc_key == svc_key)
+                            };
+                            eprintln!("[ct] service {svc_key} in tree: {in_tree}");
+                            match services::start_service(&handle, &svc_key).await {
+                                Err(e) => eprintln!("[ct] FAIL start: {e}"),
+                                Ok(()) => {
+                                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                    let running = {
+                                        let t = handle.state::<services::ProcTable>();
+                                        let p = t.procs.lock().unwrap();
+                                        p.contains_key(&svc_key)
+                                    };
+                                    eprintln!("[ct] running={running}");
+                                    let _ = services::stop_service(&handle, &svc_key).await;
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                    eprintln!("[ct] {}", if in_tree && running { "PASS" } else { "FAIL" });
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // main window close = hide to tray; the app lives in the menu bar
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    // macOS: drop out of the Dock while only the tray is showing
+                    #[cfg(target_os = "macos")]
+                    let _ = window
+                        .app_handle()
+                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::get_tree,
+            commands::refresh,
+            commands::get_settings,
+            commands::save_settings,
+            commands::add_repo,
+            commands::detect_repo,
+            commands::remove_repo,
+            commands::git_pull,
+            commands::submodule_status,
+            commands::pull_submodule,
+            commands::switch_submodule_branch,
+            commands::list_submodule_branches,
+            commands::fetch_submodules,
+            commands::switch_worktree_branch,
+            commands::list_branches,
+            commands::fetch_branches,
+            commands::get_repo_config,
+            commands::save_repo_config,
+            commands::save_text_file,
+            commands::get_logs,
+            commands::service_start,
+            commands::service_stop,
+            commands::service_restart,
+            commands::worktree_start_all,
+            commands::worktree_stop_all,
+            commands::reset_db,
+            commands::open_in_editor,
+            commands::reveal_in_finder,
+            commands::open_terminal,
+            commands::open_port,
+            commands::show_main_window,
+            commands::quit_app,
+            commands::create_worktree,
+            commands::run_worktree_setup,
+            commands::worktree_dirty_report,
+            commands::remove_worktree,
+            commands::list_databases,
+            commands::current_database,
+            commands::snapshot_database,
+            commands::export_database,
+            commands::restore_database,
+            commands::switch_database,
+            commands::set_service_port,
+            commands::run_migration,
+            commands::run_custom_command,
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Cmd-Q / app exit: kill every spawned process group before dying
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let handle = app.clone();
+                tauri::async_runtime::block_on(async move {
+                    services::stop_all(&handle).await;
+                });
+            }
+        });
+}

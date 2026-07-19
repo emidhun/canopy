@@ -1,0 +1,71 @@
+/* Design tokens — redesigned palette (darker surfaces, teal accent).
+   New names drive the redesigned main window; legacy aliases keep Settings,
+   modals, the branch picker, and the popover coherent without rewriting them. */
+:root {
+  /* ── v0.4 palette — layered charcoals (depth instead of flat near-black) ── */
+  --bg: #1d1e22; /* main pane */
+  --sidebar: #17181b; /* sidebar (recedes) */
+  --titlebar: #212327; /* title bar (lifts) */
+  --surface: #232529; /* subtle hover tone (rows) */
+  --panel: #24262b; /* service / db cards */
+  --panel-hi: #292b31; /* card hover */
+  --panel-2: #191a1d; /* console */
+  --raised: #292b31; /* active row / button hover / menu */
+  --raised-hi: #303239; /* menu item hover */
+  --border: #34373d;
+  --border-soft: #2b2d33;
+  /* contrast tiers — all lifted for readability */
+  --text: #edeef1;
+  --muted: #aeb0b6;
+  --faint: #7c7e86;
+  --teal: #5cc7cd;
+  --teal-dim: rgba(92, 199, 205, 0.15);
+  --green: #4cc266;
+  --green-dim: rgba(76, 194, 102, 0.16);
+  --amber: #e6ad5f;
+  --red: #e0533d;
+  --red-dim: rgba(224, 83, 61, 0.12);
+
+  /* ── legacy aliases (Settings / modals / branch picker / popover) ── */
+  --sidebar-bg: var(--sidebar);
+  --titlebar-bg: var(--titlebar);
+  --border-pop: #3a3d42;
+  --dim: var(--muted);
+  --accent: var(--teal);
+  --accent-dim: var(--teal-dim);
+  --run: var(--green);
+  --stop: var(--red);
+  --warn: var(--amber);
+  --btn: rgba(255, 255, 255, 0.07);
+  --btn-hover: rgba(255, 255, 255, 0.13);
+  --hover: rgba(255, 255, 255, 0.04);
+  --row-hover: rgba(255, 255, 255, 0.045);
+
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
+  --ui: var(--sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  cursor: default;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#root {
+  height: 100%;
+}

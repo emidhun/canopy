@@ -1,0 +1,33 @@
+[package]
+name = "canopy"
+version = "0.4.0"
+description = "Canopy — lightweight git worktree and dev-service manager"
+authors = ["Midhun Kumar"]
+license = "AGPL-3.0-only"
+edition = "2021"
+
+[lib]
+name = "canopy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+# preserve_order: provision `keys` and user config files round-trip in the
+# order the user wrote them instead of being alphabetized
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt-multi-thread"] }
+libc = "0.2"
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+sysinfo = "0.39.3"
+
+# macOS-only: the tray popover is a non-activating NSPanel. Other platforms fall
+# back to a plain borderless window (see src/tray.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1", version = "2.1.0" }
