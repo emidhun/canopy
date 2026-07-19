@@ -7,6 +7,11 @@ on:
   push:
     tags: ["v*"]
 
+# the default GITHUB_TOKEN is read-only on new repos; tauri-action needs to
+# create the release and upload assets
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
