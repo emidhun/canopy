@@ -55,23 +55,36 @@ hand is tedious and error-prone. Canopy automates it:
 
 ---
 
-## Install (users)
+## Install
 
-Canopy ships as an ad-hoc-signed, **not notarized**, arm64 `.app` (usually inside a DMG). Because it
-isn't notarized, macOS quarantines it on transfer — clearing that quarantine is the step that matters:
+### macOS (Apple Silicon)
+
+**Homebrew** (recommended — handles quarantine for you):
 
 ```sh
-hdiutil attach ~/Downloads/Canopy-<version>-arm64.dmg
+brew install --cask emidhun/canopy/canopy
+```
+
+**Or the DMG** from [Releases](https://github.com/emidhun/canopy/releases): Canopy isn't notarized
+yet, so macOS quarantines it on download — clearing that quarantine is the step that matters:
+
+```sh
+hdiutil attach ~/Downloads/Canopy_<version>_aarch64.dmg
 cp -R "/Volumes/Canopy/Canopy.app" /Applications/
 hdiutil detach "/Volumes/Canopy"
 xattr -cr /Applications/Canopy.app      # clears quarantine
 open /Applications/Canopy.app
 ```
 
-Or double-click the DMG, drag **Canopy** to Applications, then run only the `xattr -cr` line. On
-macOS Sequoia you can instead use System Settings → Privacy & Security → **Open Anyway**.
+Or drag **Canopy** to Applications and run only the `xattr -cr` line. On macOS Sequoia you can
+instead use System Settings → Privacy & Security → **Open Anyway**.
 
-Canopy runs as a **menu-bar app** — look for its icon in the macOS menu bar after launch. Full
+### Linux (experimental)
+
+`.AppImage`, `.deb`, and `.rpm` packages are on the [Releases](https://github.com/emidhun/canopy/releases)
+page. They build and pass CI but haven't been validated on a real desktop yet — issues welcome.
+
+Canopy runs as a **menu-bar / tray app** — look for the fork icon after launch. Full
 install/signing details are in [docs/distribution.md](docs/distribution.md).
 
 ---
