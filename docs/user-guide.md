@@ -153,7 +153,7 @@ prunes.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -cr /Applications/Canopy.app` (see [Install](../README.md#install-users)). |
+| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -dr com.apple.quarantine /Applications/Canopy.app` (see [Install](../README.md#install-users)). |
 | `setup` fails with `notsup` / wrong Node | The project needs a newer Node than your default. Canopy uses the worktree's pinned Node (`.tool-versions`/`.nvmrc`); make sure that version is installed. |
 | Server can't find `@tooljet/plugins/dist/server` | Plugins must be built per worktree — add `npm --prefix plugins install && npm --prefix plugins run build` to `setup`. |
 | Frontend hits the wrong API port | The frontend bakes the server URL from `TOOLJET_SERVER_PORT` at launch — set it in `env` to `${WT_SERVER_PORT}`, and give the frontend `--port $PORT`. |

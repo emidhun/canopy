@@ -72,11 +72,11 @@ yet, so macOS quarantines it on download — clearing that quarantine is the ste
 hdiutil attach ~/Downloads/Canopy_<version>_aarch64.dmg
 cp -R "/Volumes/Canopy/Canopy.app" /Applications/
 hdiutil detach "/Volumes/Canopy"
-xattr -cr /Applications/Canopy.app      # clears quarantine
+xattr -dr com.apple.quarantine /Applications/Canopy.app      # clears quarantine
 open /Applications/Canopy.app
 ```
 
-Or drag **Canopy** to Applications and run only the `xattr -cr` line. On macOS Sequoia you can
+Or drag **Canopy** to Applications and run only the `xattr -dr com.apple.quarantine` line. On macOS Sequoia you can
 instead use System Settings → Privacy & Security → **Open Anyway**.
 
 ### Linux (experimental)

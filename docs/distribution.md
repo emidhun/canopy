@@ -10,10 +10,10 @@ on transfer and shows "damaged" / "unidentified developer" / "can't verify it's 
 hdiutil attach ~/Desktop/Canopy-0.3.0-arm64.dmg
 cp -R "/Volumes/Canopy/Canopy.app" /Applications/
 hdiutil detach "/Volumes/Canopy"
-xattr -cr /Applications/Canopy.app      # clears quarantine — the step that matters
+xattr -dr com.apple.quarantine /Applications/Canopy.app      # clears quarantine — the step that matters
 open /Applications/Canopy.app
 ```
-Or: double-click the DMG, drag Canopy to Applications, then run only the `xattr -cr` line.
+Or: double-click the DMG, drag Canopy to Applications, then run only the `xattr -dr com.apple.quarantine` line.
 On macOS Sequoia, the GUI alternative is System Settings → Privacy & Security → **Open Anyway**.
 
 Recipient prerequisites: git, **Node 22.15.1** (via a version manager), **Postgres** running (for

@@ -56,7 +56,7 @@ Canopy is a **macOS (Apple Silicon)** app distributed as a `.dmg`.
 1. Open the DMG and drag **Canopy** to Applications.
 2. Because the current build isn't notarized, clear the quarantine flag once (in Terminal):
    ```sh
-   xattr -cr /Applications/Canopy.app
+   xattr -dr com.apple.quarantine /Applications/Canopy.app
    ```
    (Or: System Settings → Privacy & Security → **Open Anyway**.)
 3. Launch Canopy. It runs in the **menu bar** — there is no Dock icon. Look for the Canopy mark (a small
@@ -416,7 +416,7 @@ Open with the **Settings** gear. Contains:
 
 | Symptom | Cause / fix |
 |---|---|
-| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -cr /Applications/Canopy.app`. |
+| App won't open ("damaged" / "unverified") | Quarantine — run `xattr -dr com.apple.quarantine /Applications/Canopy.app`. |
 | Setup fails with wrong Node / `notsup` | The repo needs a Node version that isn't installed, or your manager isn't found. Install the pinned version. |
 | Frontend hits the wrong API port | Set the server URL from a port variable (`http://localhost:${WT_SERVER_PORT}`) in your `env`, and start the frontend with `--port $PORT`. |
 | DB action fails on version | Install the Postgres version matching your server's major version. |
@@ -431,7 +431,7 @@ Open with the **Settings** gear. Contains:
 - **Database tooling assumes Postgres** — snapshot / switch / export / restore / reset are Postgres-only.
   Other databases still work as services, but those DB actions won't.
 - **Auto-detection is Node-centric** — non-Node stacks are detected but services are configured manually.
-- Distributed builds are currently **ad-hoc signed, not notarized** (one-time `xattr -cr` on install).
+- Distributed builds are currently **ad-hoc signed, not notarized** (one-time `xattr -dr com.apple.quarantine` on install).
 
 ---
 
