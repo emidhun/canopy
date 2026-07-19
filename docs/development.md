@@ -27,14 +27,16 @@ npm run tauri build    # release .app (see DMG note below)
 ```
 
 ## Building a release DMG (important workarounds)
-1. **Bundle is app-only.** `tauri.conf.json` sets `bundle.targets: ["app"]` because Tauri's
-   `bundle_dmg.sh` step **hangs** on this machine (it drives Finder/AppleScript). So `tauri build`
-   produces only `Canopy.app` (~22s), no DMG.
-2. **Ad-hoc sign** the app (Tauri's default ad-hoc signature can be subtly broken → "damaged"):
+0. **Official releases come from CI** — pushing a `v*` tag builds and uploads the DMG + Linux
+   packages via `.github/workflows/release.yml`. The steps below are for local one-off builds.
+1. **Build app-only locally.** Tauri's `bundle_dmg.sh` step **hangs** on this machine (it drives
+   Finder/AppleScript), so pass `--bundles app`: `npm run tauri build -- --bundles app`
+   (CI runners bundle the DMG fine).
+2. **Signing is automatic** — `bundle.macOS.signingIdentity: "-"` in `tauri.conf.json` makes Tauri
+   run a real ad-hoc `codesign` pass. (The linker's default per-binary signature seals resource
+   metadata that doesn't survive copying the app off a DMG → "damaged". Never again.) Verify:
    ```sh
-   APP="src-tauri/target/release/bundle/macos/Canopy.app"
-   codesign --remove-signature "$APP"; codesign --force --deep --sign - "$APP"
-   codesign --verify --deep --strict "$APP"   # should pass
+   codesign --verify --deep --strict src-tauri/target/release/bundle/macos/Canopy.app
    ```
 3. **Make the DMG with hdiutil** (not bundle_dmg):
    ```sh
