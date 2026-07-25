@@ -15,12 +15,19 @@ use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Per-session scrollback cap (bytes). Big enough for a screenful of history on
 /// rehydrate, small enough to stay cheap across many idle worktrees.
 const SCROLLBACK_CAP: usize = 256 * 1024;
-const READ_CHUNK: usize = 8 * 1024;
+/// Idle shell sessions past this are swept (bounds long-run memory/threads over,
+/// e.g., an overnight run of visiting many worktrees). Agents are exempt.
+const IDLE_LIMIT: Duration = Duration::from_secs(60 * 60);
+// a read() returns whatever bytes are already available (up to this size), so a
+// larger buffer coalesces bursts into fewer events — fewer base64/JSON emits
+// under heavy output, with no added latency for small writes.
+const READ_CHUNK: usize = 32 * 1024;
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
@@ -32,6 +39,8 @@ pub struct PtySession {
     /// window rehydrate without double-rendering: it replays the snapshot up to
     /// this cursor and applies only later `terminal:data` events.
     seq: u64,
+    /// last output or input time, for idle sweeping
+    last_activity: Instant,
 }
 
 #[derive(Default)]
@@ -128,7 +137,14 @@ pub fn open(
 
     sessions.insert(
         id.to_string(),
-        PtySession { master: pair.master, writer, child, scrollback: VecDeque::new(), seq: 0 },
+        PtySession {
+            master: pair.master,
+            writer,
+            child,
+            scrollback: VecDeque::new(),
+            seq: 0,
+            last_activity: Instant::now(),
+        },
     );
     drop(sessions); // release before spawning the reader thread
 
@@ -153,6 +169,7 @@ pub fn open(
                                 sess.scrollback.drain(0..overflow);
                             }
                             sess.seq += n as u64;
+                            sess.last_activity = Instant::now();
                             seq = sess.seq;
                         }
                     }
@@ -177,6 +194,7 @@ pub fn write(table: &TermTable, id: &str, data: &str) -> Result<(), String> {
     let mut sessions = table.sessions.lock().unwrap();
     let sess = sessions.get_mut(id).ok_or("no such terminal")?;
     sess.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    sess.last_activity = Instant::now();
     sess.writer.flush().map_err(|e| e.to_string())
 }
 
@@ -211,5 +229,18 @@ pub fn close_all(table: &TermTable) {
     let mut sessions = table.sessions.lock().unwrap();
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
+    }
+}
+
+/// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
+/// child makes its reader hit EOF, which removes the session and emits
+/// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
+/// waiting for the user, and killing it would lose work.
+pub fn sweep_idle(table: &TermTable) {
+    let mut sessions = table.sessions.lock().unwrap();
+    for (id, sess) in sessions.iter_mut() {
+        if id.ends_with("::shell") && sess.last_activity.elapsed() > IDLE_LIMIT {
+            let _ = sess.child.kill();
+        }
     }
 }

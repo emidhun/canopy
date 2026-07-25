@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { hasBackend, ipc, on } from "../ipc";
 
 /** base64 (raw PTY bytes) → Uint8Array for xterm.write */
@@ -62,13 +63,23 @@ export default function TerminalPane({
       cursorBlink: true,
       theme: THEME,
       allowProposedApi: true,
-      scrollback: 5000,
+      scrollback: 2500,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
     termRef.current = term;
     fitRef.current = fit;
+
+    // GPU rendering — far faster under heavy output. Fall back to the DOM
+    // renderer if WebGL is unavailable or its context is lost.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      /* no WebGL — DOM renderer stays */
+    }
 
     let disposed = false;
     let unlistenData: (() => void) | undefined;

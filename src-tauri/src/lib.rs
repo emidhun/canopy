@@ -44,6 +44,19 @@ pub fn run() {
 
             stats::spawn_stats_task(handle.clone());
 
+            // periodically sweep idle shell terminals (bounds long-run memory)
+            {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        if let Some(table) = handle.try_state::<TermTable>() {
+                            terminal::sweep_idle(&table);
+                        }
+                    }
+                });
+            }
+
             // initial scan + 60s background git refresh
             tauri::async_runtime::spawn(async move {
                 let _ = state::refresh_tree(&handle).await;
