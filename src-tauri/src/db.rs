@@ -98,16 +98,23 @@ fn pg_path_prefix_for(server_major: Option<u32>) -> String {
         candidates.push(format!("/Applications/Postgres.app/Contents/Versions/{maj}/bin"));
         candidates.push(format!("/opt/homebrew/opt/postgresql@{maj}/bin"));
         candidates.push(format!("/usr/local/opt/postgresql@{maj}/bin"));
+        #[cfg(target_os = "windows")]
+        candidates.push(format!("C:\\Program Files\\PostgreSQL\\{maj}\\bin"));
     }
     candidates.push("/Applications/Postgres.app/Contents/Versions/latest/bin".into());
     for major in (12..=18).rev() {
         candidates.push(format!("/Applications/Postgres.app/Contents/Versions/{major}/bin"));
         candidates.push(format!("/opt/homebrew/opt/postgresql@{major}/bin"));
         candidates.push(format!("/usr/local/opt/postgresql@{major}/bin"));
+        #[cfg(target_os = "windows")]
+        candidates.push(format!("C:\\Program Files\\PostgreSQL\\{major}\\bin"));
     }
     for dir in candidates {
-        if Path::new(&dir).join("pg_dump").exists() {
-            return format!("export PATH={}:\"$PATH\"; ", q(&dir));
+        let p = Path::new(&dir);
+        // pg_dump on Windows is pg_dump.exe; the command runs under Git Bash so
+        // the emitted PATH entry is converted to MSYS form (see toolchain::bash_path)
+        if p.join("pg_dump").exists() || p.join("pg_dump.exe").exists() {
+            return format!("export PATH={}:\"$PATH\"; ", q(&crate::toolchain::bash_path(&dir)));
         }
     }
     String::new()

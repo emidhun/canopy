@@ -3,8 +3,11 @@ import ReactDOM from "react-dom/client";
 import Popover from "./popover/Popover";
 import { initSync, useStore } from "./store";
 import { hasBackend } from "./ipc";
+import { applyPlatformClass } from "./platform";
 import "./styles/tokens.css";
 import "./styles/popover.css";
+
+applyPlatformClass();
 
 const GUTTER_X = 0; // window hugs the card (no shadow gutter)
 const GUTTER_Y = 0;

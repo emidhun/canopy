@@ -12,6 +12,7 @@
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
+#[cfg(unix)]
 use crate::settings::TermOrphan;
 use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
@@ -47,8 +48,12 @@ pub struct PtySession {
     /// generation guard: a fast reopen under the same id bumps this so a stale
     /// reader thread doesn't remove/exit the replacement session.
     generation: u64,
-    /// child pgid (session leader) + spawn time, persisted for crash-orphan sweep
+    /// child pgid (session leader) + spawn time, persisted for the Unix
+    /// crash-orphan sweep. On Windows there is no sweep (portable-pty's ConPTY
+    /// child is killed directly), so these go unread there.
+    #[allow(dead_code)]
     pgid: i32,
+    #[allow(dead_code)]
     started_unix: u64,
 }
 
@@ -285,7 +290,9 @@ pub fn close_all(table: &TermTable) {
 }
 
 /// Snapshot live sessions' pgids into persisted runtime state, so a crash can be
-/// cleaned up on next launch (mirrors the service orphan sweep).
+/// cleaned up on next launch (mirrors the service orphan sweep). Unix-only — see
+/// `sweep_orphans`.
+#[cfg(unix)]
 fn persist_orphans(app: &AppHandle) {
     let table = app.state::<TermTable>();
     let orphans: Vec<TermOrphan> = table
@@ -304,8 +311,17 @@ fn persist_orphans(app: &AppHandle) {
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+#[cfg(windows)]
+fn persist_orphans(_app: &AppHandle) {}
+
 /// Startup: kill terminal process groups left over from a crashed previous run
-/// (only when the group leader still exists and its start time matches).
+/// (only when the group leader still exists and its start time matches). Unix-only
+/// — on Windows portable-pty's ConPTY child is killed directly and there is no
+/// pgid to sweep (a documented limitation: PTY grandchildren may linger).
+#[cfg(windows)]
+pub fn sweep_orphans(_app: &AppHandle) {}
+
+#[cfg(unix)]
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
