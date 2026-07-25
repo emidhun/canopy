@@ -103,11 +103,11 @@ export const ipc = {
 
   // embedded terminals (agent lane). `id` is opaque (e.g. `${wtKey}::shell`);
   // `data` on read events is base64 of the raw PTY bytes.
-  terminalOpen: (id: string, cwd: string, cols: number, rows: number) =>
-    invoke<void>("terminal_open", { id, cwd, cols, rows }),
+  terminalOpen: (id: string, cwd: string, cols: number, rows: number, command?: string) =>
+    invoke<void>("terminal_open", { id, cwd, cols, rows, command: command ?? null }),
   terminalWrite: (id: string, data: string) => invoke<void>("terminal_write", { id, data }),
   terminalResize: (id: string, cols: number, rows: number) => invoke<void>("terminal_resize", { id, cols, rows }),
-  terminalGetBuffer: (id: string) => invoke<string | null>("terminal_get_buffer", { id }),
+  terminalGetBuffer: (id: string) => invoke<TerminalSnapshot | null>("terminal_get_buffer", { id }),
   terminalClose: (id: string) => invoke<void>("terminal_close", { id }),
   resolveAgentCommand: (wtKey: string) => invoke<string>("resolve_agent_command", { wtKey }),
 
@@ -174,9 +174,16 @@ export interface TerminalDataEvent {
   id: string;
   /** base64 of raw PTY bytes */
   data: string;
+  /** cumulative byte cursor after this chunk */
+  seq: number;
 }
 export interface TerminalExitEvent {
   id: string;
+}
+/** Scrollback snapshot + the cursor it ends at (race-free rehydrate). */
+export interface TerminalSnapshot {
+  buffer: string;
+  seq: number;
 }
 
 export const on = {

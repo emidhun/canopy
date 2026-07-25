@@ -33,6 +33,25 @@ function DetachedPlaceholder({ onBack }: { onBack: () => void }) {
   );
 }
 
+function AgentIdle({ onStart }: { onStart: () => void }) {
+  return (
+    <div className="term-ph">
+      <span className="ph-ic">
+        <Sparkle size={19} />
+      </span>
+      <span className="ph-t">No agent running</span>
+      <span className="ph-s">
+        Start the coding agent in this worktree. It runs in a real terminal, seeded with the context above.
+      </span>
+      <button className="startagent" onClick={onStart}>
+        <Sparkle size={13} />
+        Start agent
+        <span className="ar">▸</span>
+      </button>
+    </div>
+  );
+}
+
 const COLLAPSE_KEY = "canopy.lane.collapsed";
 const WIDTH_KEY = "canopy.lane.width";
 
@@ -48,18 +67,6 @@ const TIGHT = 1180;
 
 type Tab = "agent" | "shell";
 
-/** Write to a PTY that may have only just been opened (retry briefly). */
-async function writeWhenReady(id: string, data: string, tries = 6) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      await ipc.terminalWrite(id, data);
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 250));
-    }
-  }
-}
-
 export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNode }) {
   const showToast = useStore((s) => s.showToast);
   const agentState = useStore((s) => s.agents[wt.wtKey] ?? "off");
@@ -74,11 +81,14 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   const [resizing, setResizing] = useState(false);
   const [tight, setTight] = useState(() => window.innerWidth < TIGHT);
   const [detached, setDetached] = useState<Set<string>>(new Set());
+  // resolved agent CLI, set on the first Start; only needed to *create* the
+  // agent PTY — remounts while it's already running attach without it.
+  const [agentCmd, setAgentCmd] = useState<string | null>(null);
   const asideRef = useRef<HTMLElement>(null);
-  // lazily mount a tab's terminal the first time it's shown, then keep it
-  // mounted (hidden) so its PTY keeps running in the background.
-  const activated = useRef<Set<Tab>>(new Set(["agent"]));
-  activated.current.add(tab);
+  // the shell terminal is lazily mounted the first time its tab is shown, then
+  // kept mounted (hidden) so its PTY keeps running in the background.
+  const shellActivated = useRef(false);
+  if (tab === "shell") shellActivated.current = true;
 
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
@@ -211,33 +221,37 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
     );
   }
 
-  // Start the configured agent CLI inside the agent PTY (the terminal *is* the
-  // chat). The context, if any, is written to .canopy/context.md so the agent
-  // can read it, and we show a banner noting the seed.
+  // Start the coding agent as its OWN PTY session (the terminal *is* the chat).
+  // Running it as the session's command means the session ends — and the run
+  // state clears via terminal:exit — exactly when the agent exits. The context,
+  // if any, is written to .canopy/context.md first so the agent can read it.
   const startAgent = async () => {
     setCtxOpen(false);
     setTab("agent");
     if (!hasBackend()) {
+      setAgentCmd("agent");
       setAgent(wt.wtKey, "running");
       showToast(`Agent — ${repo.name} · ${wt.branch}`);
       return;
     }
     try {
       if (!isBlank(ctx)) {
-        await ipc.saveTextFile(`${wt.path}/.canopy/context.md`, composeContextMd(ctx)).catch(() => {});
+        // propagate failure — don't claim "seeded" if the write failed
+        await ipc.saveTextFile(`${wt.path}/.canopy/context.md`, composeContextMd(ctx));
       }
       const cmd = (await ipc.resolveAgentCommand(wt.wtKey)) || "claude";
-      await writeWhenReady(`${wt.wtKey}::agent`, `${cmd}\n`);
-      setAgent(wt.wtKey, "running");
+      setAgentCmd(cmd);
+      setAgent(wt.wtKey, "running"); // TerminalPane mounts and creates the PTY with `cmd`
       showToast(`Agent started — ${repo.name} · ${wt.branch}`);
     } catch (e) {
-      showToast(String(e));
+      showToast(`Agent start failed — ${String(e)}`);
     }
   };
 
+  // Kill the agent PTY; terminal:exit then clears run state (see the store).
   const stopAgent = () => {
-    if (hasBackend()) ipc.terminalWrite(`${wt.wtKey}::agent`, "\x03").catch(() => {}); // Ctrl-C
     setAgent(wt.wtKey, "off");
+    if (hasBackend()) ipc.terminalClose(agentId).catch(() => {});
     showToast("Agent stopped");
   };
 
@@ -390,16 +404,16 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
 
       <div className="lane-body">
         <div className="term">
-          {activated.current.has("agent") && (
-            <div className={"term-body" + (tab === "agent" ? "" : " hidden")}>
-              {detached.has(agentId) ? (
-                <DetachedPlaceholder onBack={() => bringBack(agentId)} />
-              ) : (
-                <TerminalPane termId={agentId} cwd={wt.path} hidden={tab !== "agent"} />
-              )}
-            </div>
-          )}
-          {activated.current.has("shell") && (
+          <div className={"term-body" + (tab === "agent" ? "" : " hidden")}>
+            {detached.has(agentId) ? (
+              <DetachedPlaceholder onBack={() => bringBack(agentId)} />
+            ) : agentState === "running" ? (
+              <TerminalPane termId={agentId} cwd={wt.path} hidden={tab !== "agent"} command={agentCmd ?? undefined} />
+            ) : (
+              <AgentIdle onStart={startAgent} />
+            )}
+          </div>
+          {shellActivated.current && (
             <div className={"term-body" + (tab === "shell" ? "" : " hidden")}>
               {detached.has(shellId) ? (
                 <DetachedPlaceholder onBack={() => bringBack(shellId)} />

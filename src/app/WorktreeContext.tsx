@@ -4,6 +4,31 @@
 // that travels with the branch is an open product question — see the handoff.
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Chevron, Copy, Doc, Info, Link as LinkIcon, Plus, Sparkle } from "../icons";
+import { hasBackend } from "../ipc";
+
+const isUrl = (s: string) => /^https?:\/\//i.test(s.trim());
+
+async function openLink(url: string, onToast: (m: string) => void) {
+  try {
+    if (hasBackend()) {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(url);
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  } catch (e) {
+    onToast(`Couldn't open link — ${String(e)}`);
+  }
+}
+
+async function copyPrBody(ctx: WtContext, onToast: (m: string) => void) {
+  try {
+    await navigator.clipboard.writeText(composeContextMd(ctx));
+    onToast("Context copied as PR body");
+  } catch (e) {
+    onToast(`Couldn't copy — ${String(e)}`);
+  }
+}
 
 export interface WtContext {
   title: string;
@@ -150,14 +175,22 @@ export function ContextEditor({
           )}
 
           <div className="ctx-links">
-            {ctx.links.map((l) => (
-              <span className="ctx-link" key={l.label} onClick={() => onToast("Opening " + l.label + "…")}>
-                <span className="ic">
-                  <LinkIcon size={11} />
+            {ctx.links.map((l) => {
+              const url = isUrl(l.label);
+              return (
+                <span
+                  className="ctx-link"
+                  key={l.label}
+                  style={url ? undefined : { cursor: "default" }}
+                  onClick={url ? () => openLink(l.label, onToast) : undefined}
+                >
+                  <span className="ic">
+                    <LinkIcon size={11} />
+                  </span>
+                  {l.label}
                 </span>
-                {l.label}
-              </span>
-            ))}
+              );
+            })}
             <span
               className="ctx-link add"
               onClick={() => {
@@ -179,7 +212,7 @@ export function ContextEditor({
               Seeds the agent · becomes the PR body
             </span>
             <span className="grow" />
-            <button className="btn-sm" onClick={() => onToast("Context copied as PR body")}>
+            <button className="btn-sm" onClick={() => copyPrBody(ctx, onToast)}>
               <Copy size={12} />
               Use as PR body
             </button>

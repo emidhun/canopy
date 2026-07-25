@@ -131,7 +131,7 @@ export default function App() {
           </section>
         )}
 
-        {!showSettings && sel?.wt && <AgentLane repo={sel.repo} wt={sel.wt} />}
+        {!showSettings && sel?.wt && <AgentLane key={sel.wt.wtKey} repo={sel.repo} wt={sel.wt} />}
       </div>
 
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}

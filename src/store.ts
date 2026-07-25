@@ -408,6 +408,15 @@ export function initSync(): () => void {
 
   track(on.worktreeOp((e) => appendOpLine(e.wtKey, e.state, e.detail)));
 
+  // agent lifecycle: the agent runs as its own PTY session (`${wtKey}::agent`),
+  // so its exit is the authoritative "agent stopped" signal.
+  track(
+    on.terminalExit((e) => {
+      const suffix = "::agent";
+      if (e.id.endsWith(suffix)) useStore.getState().setAgent(e.id.slice(0, -suffix.length), "off");
+    }),
+  );
+
   track(
     on.serviceStats((e) => {
       useStore.setState((st) => {

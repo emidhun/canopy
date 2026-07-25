@@ -28,7 +28,19 @@ const THEME = {
   brightBlack: "#7c7e86",
 };
 
-export default function TerminalPane({ termId, cwd, hidden }: { termId: string; cwd: string; hidden?: boolean }) {
+export default function TerminalPane({
+  termId,
+  cwd,
+  hidden,
+  command,
+}: {
+  termId: string;
+  cwd: string;
+  hidden?: boolean;
+  /** run this command instead of an interactive shell; the session ends (fires
+      terminal:exit) when it exits — used to track agent lifecycle */
+  command?: string;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -61,6 +73,14 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
     let disposed = false;
     let unlistenData: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
+    let hydrated = false;
+    // xterm re-answers query escape sequences (Device Attributes, cursor-position
+    // reports) it finds while replaying scrollback; those replies must NOT reach
+    // the PTY or the shell prompt echoes them as junk ("1;2c22;3R…"). Suppressed
+    // only while the snapshot write is parsing.
+    let suppressOut = false;
+    const pending: { seq: number; data: string }[] = [];
+    const writeChunk = (b64: string) => termRef.current?.write(decode(b64));
 
     // fit only when the host is actually laid out — fitting a zero-size or
     // display:none element leaves xterm's renderer without dimensions and throws
@@ -75,40 +95,44 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
     };
     requestAnimationFrame(safeFit);
 
-    // live PTY output → xterm. Subscribe before opening so nothing is missed for
-    // a brand-new session; for an existing one we rehydrate right after.
-    on.terminalData((e) => {
-      if (e.id === termId && termRef.current) termRef.current.write(decode(e.data));
-    }).then((u) => (disposed ? u() : (unlistenData = u)));
-
-    on.terminalExit((e) => {
-      if (e.id === termId && termRef.current) termRef.current.write("\r\n\x1b[38;5;244m[process exited]\x1b[0m\r\n");
-    }).then((u) => (disposed ? u() : (unlistenExit = u)));
-
-    // While replaying saved scrollback, xterm re-answers any query escape
-    // sequences (Device Attributes, cursor-position reports) embedded in the
-    // history. Those replies must NOT be forwarded to the PTY, or the shell
-    // prompt echoes them as typed junk ("1;2c22;3R…"). Gate onData until the
-    // rehydration write has finished parsing.
-    let hydrating = false;
-    ipc
-      .terminalOpen(termId, cwd, term.cols, term.rows)
-      .then(() => ipc.terminalGetBuffer(termId))
-      .then((buf) => {
-        if (!disposed && buf && termRef.current) {
-          hydrating = true;
-          termRef.current.write(decode(buf), () => {
-            hydrating = false;
-          });
-        }
-      })
-      .catch((err) => term.write(`\r\n\x1b[31mterminal error: ${String(err)}\x1b[0m\r\n`));
-
     // keystrokes (and terminal reports) → PTY. The PTY echoes; no local echo.
     const onDataDisp = term.onData((data) => {
-      if (hydrating) return; // suppress replies to replayed history
+      if (suppressOut) return;
       ipc.terminalWrite(termId, data).catch(() => {});
     });
+
+    // Register listeners BEFORE opening so no output is missed, then rehydrate
+    // against the snapshot cursor: replay the snapshot, then apply only queued
+    // live events past its seq — no double-render, no gap.
+    (async () => {
+      unlistenData = await on.terminalData((e) => {
+        if (e.id !== termId) return;
+        if (!hydrated) pending.push({ seq: e.seq, data: e.data });
+        else writeChunk(e.data);
+      });
+      unlistenExit = await on.terminalExit((e) => {
+        if (e.id === termId) termRef.current?.write("\r\n\x1b[38;5;244m[process exited]\x1b[0m\r\n");
+      });
+      if (disposed) return;
+
+      try {
+        await ipc.terminalOpen(termId, cwd, term.cols, term.rows, command);
+        const snap = await ipc.terminalGetBuffer(termId);
+        if (disposed || !termRef.current) return;
+        const baseline = snap?.seq ?? 0;
+        if (snap?.buffer) {
+          suppressOut = true;
+          termRef.current.write(decode(snap.buffer), () => {
+            suppressOut = false;
+          });
+        }
+        for (const p of pending) if (p.seq > baseline) writeChunk(p.data);
+        pending.length = 0;
+        hydrated = true;
+      } catch (err) {
+        termRef.current?.write(`\r\n\x1b[31mterminal error: ${String(err)}\x1b[0m\r\n`);
+      }
+    })();
 
     // keep the PTY sized to the widget
     const ro = new ResizeObserver(() => {
@@ -129,7 +153,7 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
       fitRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [termId, cwd]);
+  }, [termId, cwd, command]);
 
   // re-fit when the pane becomes visible (tab toggle) or the lane resizes
   useEffect(() => {

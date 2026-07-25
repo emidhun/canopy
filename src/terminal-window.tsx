@@ -4,6 +4,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import DetachedTerminal from "./app/DetachedTerminal";
 import "./styles/tokens.css";
+import "./styles/app.css";
 import "./styles/terminal.css";
 
 const params = new URLSearchParams(location.search);

@@ -6,6 +6,12 @@
 
 @import "@xterm/xterm/css/xterm.css";
 
+/* shared flex spacer used across the lane, context editor, focus rail, and the
+   detached-window header (the design's `.grow`). */
+.grow {
+  flex: 1;
+}
+
 .app.with-lane {
   display: flex;
   position: relative;
