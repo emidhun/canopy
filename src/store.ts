@@ -30,6 +30,9 @@ interface State {
   query: string;
   tabSvcKey: string | null;
   collapsed: boolean;
+  /** agent-lane run state per worktree (wtKey → state); survives worktree switch */
+  agents: Record<string, "off" | "running">;
+  setAgent: (wtKey: string, state: "off" | "running") => void;
 
   setQuery: (q: string) => void;
   select: (wtKey: string) => void;
@@ -180,6 +183,8 @@ export const useStore = create<State>((set, get) => {
     query: "",
     tabSvcKey: mock[0]?.worktrees[0]?.services[0]?.svcKey ?? null,
     collapsed: false,
+    agents: {},
+    setAgent: (wtKey, state) => set((st) => ({ agents: { ...st.agents, [wtKey]: state } })),
 
     setQuery: (query) => set({ query }),
     select: (wtKey) => set({ selKey: wtKey }),

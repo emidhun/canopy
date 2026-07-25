@@ -181,6 +181,7 @@ pub fn run() {
             commands::terminal_resize,
             commands::terminal_get_buffer,
             commands::terminal_close,
+            commands::resolve_agent_command,
             commands::service_start,
             commands::service_stop,
             commands::service_restart,

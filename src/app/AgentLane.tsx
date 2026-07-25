@@ -5,16 +5,31 @@
 import { useEffect, useRef, useState } from "react";
 import type { RepoNode, WorktreeNode } from "../types";
 import { useStore } from "../store";
-import { ChevLeft, ChevRight, Doc, Sparkle, Terminal as TerminalIcon } from "../icons";
+import { hasBackend, ipc } from "../ipc";
+import { ChevLeft, ChevRight, Doc, Spinner, Sparkle, Terminal as TerminalIcon, X } from "../icons";
 import TerminalPane from "./TerminalPane";
-import { ContextEditor, bodyPreview, isBlank, useWtContext } from "./WorktreeContext";
+import { ContextEditor, bodyPreview, composeContextMd, isBlank, useWtContext } from "./WorktreeContext";
 
 const COLLAPSE_KEY = "canopy.lane.collapsed";
 
 type Tab = "agent" | "shell";
 
+/** Write to a PTY that may have only just been opened (retry briefly). */
+async function writeWhenReady(id: string, data: string, tries = 6) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      await ipc.terminalWrite(id, data);
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+}
+
 export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNode }) {
   const showToast = useStore((s) => s.showToast);
+  const agentState = useStore((s) => s.agents[wt.wtKey] ?? "off");
+  const setAgent = useStore((s) => s.setAgent);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [tab, setTab] = useState<Tab>("agent");
   const [ctxOpen, setCtxOpen] = useState(false);
@@ -76,16 +91,43 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
     );
   }
 
-  const seedAgent = () => {
+  // Start the configured agent CLI inside the agent PTY (the terminal *is* the
+  // chat). The context, if any, is written to .canopy/context.md so the agent
+  // can read it, and we show a banner noting the seed.
+  const startAgent = async () => {
     setCtxOpen(false);
     setTab("agent");
-    showToast(`Agent — ${repo.name} · ${wt.branch}`);
+    if (!hasBackend()) {
+      setAgent(wt.wtKey, "running");
+      showToast(`Agent — ${repo.name} · ${wt.branch}`);
+      return;
+    }
+    try {
+      if (!isBlank(ctx)) {
+        await ipc.saveTextFile(`${wt.path}/.canopy/context.md`, composeContextMd(ctx)).catch(() => {});
+      }
+      const cmd = (await ipc.resolveAgentCommand(wt.wtKey)) || "claude";
+      await writeWhenReady(`${wt.wtKey}::agent`, `${cmd}\n`);
+      setAgent(wt.wtKey, "running");
+      showToast(`Agent started — ${repo.name} · ${wt.branch}`);
+    } catch (e) {
+      showToast(String(e));
+    }
+  };
+
+  const stopAgent = () => {
+    if (hasBackend()) ipc.terminalWrite(`${wt.wtKey}::agent`, "\x03").catch(() => {}); // Ctrl-C
+    setAgent(wt.wtKey, "off");
+    showToast("Agent stopped");
   };
 
   return (
     <aside className="lane">
       <div className="lane-head">
-        <span className="ag-pip busy" style={{ width: 26, height: 26, borderRadius: 8, background: "var(--accent-dim)" }}>
+        <span
+          className={"ag-pip" + (agentState === "running" ? " busy" : "")}
+          style={{ width: 26, height: 26, borderRadius: 8, background: "var(--accent-dim)", color: "var(--accent)" }}
+        >
           <Sparkle size={14} />
         </span>
         <div className="lh-t">
@@ -133,6 +175,17 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
         </button>
       </div>
 
+      {tab === "agent" && agentState === "running" && (
+        <div className="ag-banner">
+          <Sparkle size={13} />
+          <span className="nm">agent</span>
+          <span className="sep">·</span>
+          <span className="ctxref">
+            {isBlank(ctx) ? "running in this worktree" : `seeded with “${ctx.title || "context"}”`}
+          </span>
+        </div>
+      )}
+
       <div className="lane-body">
         <div className="term">
           {activated.current.has("agent") && (
@@ -149,11 +202,22 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       </div>
 
       <div className="lane-foot">
-        <button className="startagent" style={{ flex: 1, justifyContent: "center", height: 30 }} onClick={seedAgent}>
-          <Sparkle size={13} />
-          Start agent
-          <span className="ar">▸</span>
-        </button>
+        {agentState === "running" ? (
+          <span className="agent-live" style={{ flex: 1 }}>
+            <Spinner size={12} />
+            Agent working
+            <span className="grow" />
+            <button className="stopx" title="Stop agent" onClick={stopAgent}>
+              <X size={12} />
+            </button>
+          </span>
+        ) : (
+          <button className="startagent" style={{ flex: 1, justifyContent: "center", height: 30 }} onClick={startAgent}>
+            <Sparkle size={13} />
+            Start agent
+            <span className="ar">▸</span>
+          </button>
+        )}
       </div>
 
       {ctxOpen && (
@@ -161,7 +225,7 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           ctx={ctx}
           setCtx={setCtx}
           onClose={() => setCtxOpen(false)}
-          onSeed={seedAgent}
+          onSeed={startAgent}
           onToast={showToast}
         />
       )}

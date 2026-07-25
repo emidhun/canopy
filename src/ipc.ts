@@ -27,6 +27,8 @@ export interface RepoCfg {
   migrateDb: string;
   services: ServiceCfg[];
   customCommands: CustomCmd[];
+  /** agent-lane CLI (empty = built-in default) */
+  agentCommand: string;
 }
 
 export interface Settings {
@@ -107,6 +109,7 @@ export const ipc = {
   terminalResize: (id: string, cols: number, rows: number) => invoke<void>("terminal_resize", { id, cols, rows }),
   terminalGetBuffer: (id: string) => invoke<string | null>("terminal_get_buffer", { id }),
   terminalClose: (id: string) => invoke<void>("terminal_close", { id }),
+  resolveAgentCommand: (wtKey: string) => invoke<string>("resolve_agent_command", { wtKey }),
 
   serviceStart: (svcKey: string) => invoke<void>("service_start", { svcKey }),
   serviceStop: (svcKey: string) => invoke<void>("service_stop", { svcKey }),

@@ -66,6 +66,7 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, String> {
         migrate_db: String::new(),
         services: Vec::new(),
         custom_commands: Vec::new(),
+        agent_command: String::new(),
     };
 
     let updated = {
@@ -275,6 +276,31 @@ pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<St
 #[tauri::command]
 pub fn terminal_close(table: State<'_, TermTable>, id: String) {
     terminal::close(&table, &id);
+}
+
+/// The agent CLI to run for a worktree: the repo's configured `agentCommand`,
+/// or the built-in default when unset.
+#[tauri::command]
+pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> String {
+    const DEFAULT_AGENT: &str = "claude";
+    let repo_id = {
+        let tree = state.tree.read().unwrap();
+        tree.iter()
+            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
+            .map(|r| r.repo_id.clone())
+    };
+    let cmd = repo_id.and_then(|id| {
+        let settings = state.settings.read().unwrap();
+        settings
+            .repos
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.agent_command.trim().to_string())
+    });
+    match cmd {
+        Some(c) if !c.is_empty() => c,
+        _ => DEFAULT_AGENT.to_string(),
+    }
 }
 
 #[tauri::command]

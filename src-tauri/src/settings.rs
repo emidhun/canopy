@@ -58,6 +58,10 @@ pub struct RepoCfg {
     /// the worktree root on the pinned Node.
     #[serde(default)]
     pub custom_commands: Vec<CustomCmd>,
+    /// CLI the agent lane's "Start agent" runs in a worktree terminal (e.g.
+    /// `claude`, `aider`, `codex`). Empty = fall back to the built-in default.
+    #[serde(default)]
+    pub agent_command: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

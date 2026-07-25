@@ -41,6 +41,13 @@ export function useWtContext(wtKey: string): [WtContext, (c: WtContext) => void]
 
 export const isBlank = (c: WtContext) => !c.title.trim() && !c.body.trim() && c.links.length === 0;
 
+/** Render the context as the markdown seed written to `.canopy/context.md`. */
+export function composeContextMd(c: WtContext): string {
+  let md = `# ${c.title.trim() || "Untitled"}\n\n${c.body.trim()}\n`;
+  if (c.links.length) md += "\n## Links\n" + c.links.map((l) => `- ${l.label}`).join("\n") + "\n";
+  return md;
+}
+
 /** Plain-text one-liner of the markdown body, for the lane summary preview. */
 export function bodyPreview(body: string): string {
   return body
