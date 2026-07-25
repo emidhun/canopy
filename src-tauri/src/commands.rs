@@ -2,6 +2,7 @@ use crate::git;
 use crate::services::{self, LogLine, ProcTable};
 use crate::settings::{self, RepoCfg, Settings};
 use crate::state::{refresh_all_git_meta, refresh_git_meta, refresh_tree, AppState, RepoNode};
+use crate::terminal::{self, TermTable};
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -240,6 +241,40 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
         .get(&svc_key)
         .map(|b| b.iter().cloned().collect())
         .unwrap_or_default()
+}
+
+// ── embedded terminals (agent lane) ──
+
+#[tauri::command]
+pub fn terminal_open(
+    app: AppHandle,
+    table: State<'_, TermTable>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    terminal::open(&app, &table, &id, &cwd, cols, rows)
+}
+
+#[tauri::command]
+pub fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), String> {
+    terminal::write(&table, &id, &data)
+}
+
+#[tauri::command]
+pub fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    terminal::resize(&table, &id, cols, rows)
+}
+
+#[tauri::command]
+pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<String> {
+    terminal::get_buffer(&table, &id)
+}
+
+#[tauri::command]
+pub fn terminal_close(table: State<'_, TermTable>, id: String) {
+    terminal::close(&table, &id);
 }
 
 #[tauri::command]

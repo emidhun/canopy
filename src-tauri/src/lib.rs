@@ -7,12 +7,14 @@ mod setup;
 mod state;
 mod stats;
 mod suite;
+mod terminal;
 mod toolchain;
 mod tray;
 
 use services::ProcTable;
 use state::AppState;
 use tauri::Manager;
+use terminal::TermTable;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -35,6 +37,7 @@ pub fn run() {
                 settings::load_runtime(&handle),
             ));
             app.manage(ProcTable::default());
+            app.manage(TermTable::default());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
@@ -173,6 +176,11 @@ pub fn run() {
             commands::save_repo_config,
             commands::save_text_file,
             commands::get_logs,
+            commands::terminal_open,
+            commands::terminal_write,
+            commands::terminal_resize,
+            commands::terminal_get_buffer,
+            commands::terminal_close,
             commands::service_start,
             commands::service_stop,
             commands::service_restart,
@@ -204,6 +212,10 @@ pub fn run() {
         .run(|app, event| {
             // Cmd-Q / app exit: kill every spawned process group before dying
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // kill embedded terminal shells before their host process dies
+                if let Some(table) = app.try_state::<TermTable>() {
+                    terminal::close_all(&table);
+                }
                 let handle = app.clone();
                 tauri::async_runtime::block_on(async move {
                     services::stop_all(&handle).await;
