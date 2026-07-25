@@ -6,9 +6,32 @@ import { useEffect, useRef, useState } from "react";
 import type { RepoNode, WorktreeNode } from "../types";
 import { useStore } from "../store";
 import { hasBackend, ipc } from "../ipc";
-import { ChevLeft, ChevRight, Doc, ExpandH, Spinner, Sparkle, Terminal as TerminalIcon, X } from "../icons";
+import { ChevLeft, ChevRight, Doc, ExpandH, PopIn, PopOut, Spinner, Sparkle, Terminal as TerminalIcon, X } from "../icons";
 import TerminalPane from "./TerminalPane";
 import { ContextEditor, bodyPreview, composeContextMd, isBlank, useWtContext } from "./WorktreeContext";
+
+/** Deterministic window label for a detached terminal (matches the term-* capability). */
+const laneLabel = (id: string) => "term-" + id.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+function DetachedPlaceholder({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="term-ph">
+      <span className="ph-ic">
+        <PopOut size={19} />
+      </span>
+      <span className="ph-t">
+        Running in a detached window <PopOut size={12} />
+      </span>
+      <span className="ph-s">
+        The shell keeps running — output goes to the floating window. Close it or bring it back here any time.
+      </span>
+      <button className="btn-sm" onClick={onBack}>
+        <PopIn size={13} />
+        Bring back
+      </button>
+    </div>
+  );
+}
 
 const COLLAPSE_KEY = "canopy.lane.collapsed";
 const WIDTH_KEY = "canopy.lane.width";
@@ -50,6 +73,7 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   const [laneW, setLaneW] = useState(() => Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_LANE);
   const [resizing, setResizing] = useState(false);
   const [tight, setTight] = useState(() => window.innerWidth < TIGHT);
+  const [detached, setDetached] = useState<Set<string>>(new Set());
   const asideRef = useRef<HTMLElement>(null);
   // lazily mount a tab's terminal the first time it's shown, then keep it
   // mounted (hidden) so its PTY keeps running in the background.
@@ -217,6 +241,56 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
     showToast("Agent stopped");
   };
 
+  // Pop a terminal into its own OS window that attaches to the SAME PTY. The
+  // lane shows a placeholder while detached; closing the window (or "Bring
+  // back") re-docks it — the shell never stops.
+  const popOut = async (id: string) => {
+    if (!hasBackend()) {
+      showToast("Pop-out is available in the desktop app");
+      return;
+    }
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const label = laneLabel(id);
+    const existing = await WebviewWindow.getByLabel(label);
+    if (existing) {
+      existing.setFocus();
+      return;
+    }
+    const url = `terminal.html?id=${encodeURIComponent(id)}&cwd=${encodeURIComponent(wt.path)}&branch=${encodeURIComponent(wt.branch)}`;
+    const win = new WebviewWindow(label, {
+      url,
+      width: 560,
+      height: 360,
+      minWidth: 360,
+      minHeight: 220,
+      title: `Terminal — ${wt.branch}`,
+      decorations: false,
+      resizable: true,
+    });
+    win.once("tauri://created", () => setDetached((s) => new Set(s).add(id)));
+    win.once("tauri://error", () => showToast("Could not open terminal window"));
+    win.once("tauri://destroyed", () =>
+      setDetached((s) => {
+        const n = new Set(s);
+        n.delete(id);
+        return n;
+      }),
+    );
+  };
+
+  const bringBack = async (id: string) => {
+    if (hasBackend()) {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const w = await WebviewWindow.getByLabel(laneLabel(id));
+      await w?.close();
+    }
+    setDetached((s) => {
+      const n = new Set(s);
+      n.delete(id);
+      return n;
+    });
+  };
+
   return (
     <aside
       ref={asideRef}
@@ -244,6 +318,13 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           <span>{wt.branch}</span>
         </div>
         <span className="grow" />
+        <button
+          className="ib"
+          title="Open in a separate window"
+          onClick={() => popOut(tab === "agent" ? agentId : shellId)}
+        >
+          <PopOut size={14} />
+        </button>
         {!tight && (
           <button className="ib" title={mainRailed ? "Show worktree details" : "Focus the terminal"} onClick={toggleFocus}>
             <ExpandH size={15} />
@@ -311,12 +392,20 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
         <div className="term">
           {activated.current.has("agent") && (
             <div className={"term-body" + (tab === "agent" ? "" : " hidden")}>
-              <TerminalPane termId={agentId} cwd={wt.path} hidden={tab !== "agent"} />
+              {detached.has(agentId) ? (
+                <DetachedPlaceholder onBack={() => bringBack(agentId)} />
+              ) : (
+                <TerminalPane termId={agentId} cwd={wt.path} hidden={tab !== "agent"} />
+              )}
             </div>
           )}
           {activated.current.has("shell") && (
             <div className={"term-body" + (tab === "shell" ? "" : " hidden")}>
-              <TerminalPane termId={shellId} cwd={wt.path} hidden={tab !== "shell"} />
+              {detached.has(shellId) ? (
+                <DetachedPlaceholder onBack={() => bringBack(shellId)} />
+              ) : (
+                <TerminalPane termId={shellId} cwd={wt.path} hidden={tab !== "shell"} />
+              )}
             </div>
           )}
         </div>
