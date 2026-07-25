@@ -254,8 +254,9 @@ pub fn terminal_open(
     cwd: String,
     cols: u16,
     rows: u16,
+    command: Option<String>,
 ) -> Result<(), String> {
-    terminal::open(&app, &table, &id, &cwd, cols, rows)
+    terminal::open(&app, &table, &id, &cwd, cols, rows, command)
 }
 
 #[tauri::command]
@@ -269,7 +270,7 @@ pub fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows:
 }
 
 #[tauri::command]
-pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<String> {
+pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<terminal::BufferSnapshot> {
     terminal::get_buffer(&table, &id)
 }
 
@@ -936,10 +937,14 @@ pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, St
     })
 }
 
-/// Write text to a user-chosen path (from a native save dialog). Used by the
-/// Settings config Export — anchor downloads don't work in the webview.
+/// Write text to a path, creating parent directories as needed. Used by the
+/// Settings config Export and by the agent lane (writing `.canopy/context.md`,
+/// whose parent dir may not exist yet).
 #[tauri::command]
 pub fn save_text_file(path: String, contents: String) -> Result<(), String> {
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    }
     std::fs::write(&path, contents).map_err(|e| format!("write {path}: {e}"))
 }
 
