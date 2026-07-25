@@ -33,6 +33,9 @@ interface State {
   /** agent-lane run state per worktree (wtKey → state); survives worktree switch */
   agents: Record<string, "off" | "running">;
   setAgent: (wtKey: string, state: "off" | "running") => void;
+  /** focus mode: the middle pane drops to a rail so the terminal takes the window */
+  mainRailed: boolean;
+  setMainRailed: (v: boolean) => void;
 
   setQuery: (q: string) => void;
   select: (wtKey: string) => void;
@@ -185,6 +188,8 @@ export const useStore = create<State>((set, get) => {
     collapsed: false,
     agents: {},
     setAgent: (wtKey, state) => set((st) => ({ agents: { ...st.agents, [wtKey]: state } })),
+    mainRailed: false,
+    setMainRailed: (mainRailed) => set({ mainRailed }),
 
     setQuery: (query) => set({ query }),
     select: (wtKey) => set({ selKey: wtKey }),
