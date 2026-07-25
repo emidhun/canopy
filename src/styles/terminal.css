@@ -240,13 +240,17 @@
   min-height: 0;
   flex: 1;
   background: var(--panel-2);
+  position: relative;
 }
 .lane .term {
   background: transparent;
 }
+/* Tab panes are stacked absolutely and always sized — xterm can't initialize its
+   renderer in a display:none box, so we hide the inactive pane with visibility
+   (keeping its dimensions and its PTY alive) instead of removing it. */
 .term-body {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   padding: 6px 8px 8px;
 }
@@ -254,9 +258,10 @@
   width: 100%;
   height: 100%;
 }
-/* the shell keeps running behind the tab — hide its pane instead of unmounting */
 .term-body.hidden {
-  display: none;
+  visibility: hidden;
+  z-index: 0;
+  pointer-events: none;
 }
 
 /* ── agent output (structured transcript over the PTY) ── */

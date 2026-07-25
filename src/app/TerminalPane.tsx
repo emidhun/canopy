@@ -62,11 +62,18 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
     let unlistenData: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
 
-    try {
-      fit.fit();
-    } catch {
-      /* host not laid out yet */
-    }
+    // fit only when the host is actually laid out — fitting a zero-size or
+    // display:none element leaves xterm's renderer without dimensions and throws
+    // asynchronously on the next write.
+    const safeFit = () => {
+      if (!host.clientWidth || !host.clientHeight) return;
+      try {
+        fit.fit();
+      } catch {
+        /* ignore */
+      }
+    };
+    requestAnimationFrame(safeFit);
 
     // live PTY output → xterm. Subscribe before opening so nothing is missed for
     // a brand-new session; for an existing one we rehydrate right after.
@@ -93,13 +100,9 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
 
     // keep the PTY sized to the widget
     const ro = new ResizeObserver(() => {
-      if (hidden) return;
-      try {
-        fit.fit();
-        ipc.terminalResize(termId, term.cols, term.rows).catch(() => {});
-      } catch {
-        /* ignore */
-      }
+      if (hidden || !host.clientWidth || !host.clientHeight) return;
+      safeFit();
+      ipc.terminalResize(termId, term.cols, term.rows).catch(() => {});
     });
     ro.observe(host);
 
@@ -118,11 +121,13 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
 
   // re-fit when the pane becomes visible (tab toggle) or the lane resizes
   useEffect(() => {
-    if (hidden || !fitRef.current || !termRef.current) return;
+    if (hidden) return;
     const id = requestAnimationFrame(() => {
+      const host = hostRef.current;
+      if (!host || !fitRef.current || !termRef.current || !host.clientWidth || !host.clientHeight) return;
       try {
-        fitRef.current!.fit();
-        ipc.terminalResize(termId, termRef.current!.cols, termRef.current!.rows).catch(() => {});
+        fitRef.current.fit();
+        ipc.terminalResize(termId, termRef.current.cols, termRef.current.rows).catch(() => {});
       } catch {
         /* ignore */
       }
