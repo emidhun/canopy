@@ -1,6 +1,6 @@
 import { useStore } from "../store";
 import { isLive } from "../types";
-import { Fork, Plus, Search } from "../icons";
+import { Fork, Plus, Search, Sparkle } from "../icons";
 
 export default function Sidebar({ onAdd }: { onAdd: () => void }) {
   const tree = useStore((s) => s.tree);
@@ -8,6 +8,7 @@ export default function Sidebar({ onAdd }: { onAdd: () => void }) {
   const setQuery = useStore((s) => s.setQuery);
   const selKey = useStore((s) => s.selKey);
   const select = useStore((s) => s.select);
+  const agents = useStore((s) => s.agents);
 
   const q = query.toLowerCase();
   const total = tree.reduce((n, r) => n + r.worktrees.length, 0);
@@ -44,6 +45,7 @@ export default function Sidebar({ onAdd }: { onAdd: () => void }) {
                 const running = w.services.filter((s) => isLive(s.status)).length;
                 const dot = running === 0 ? "off" : running === tcount ? "on" : "part";
                 const statusText = running > 0 ? `${running} running` : "idle";
+                const agent = agents[w.wtKey] ?? "off";
                 return (
                   <button
                     key={w.wtKey}
@@ -55,6 +57,11 @@ export default function Sidebar({ onAdd }: { onAdd: () => void }) {
                       <div className="b">{w.branch}</div>
                       <div className="r">{statusText}</div>
                     </span>
+                    {agent === "running" && (
+                      <span className="ag-pip busy" title="Agent working">
+                        <Sparkle size={10} />
+                      </span>
+                    )}
                   </button>
                 );
               })}
