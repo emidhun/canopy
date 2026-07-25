@@ -116,15 +116,21 @@ export default function TerminalPane({
     // against the snapshot cursor: replay the snapshot, then apply only queued
     // live events past its seq — no double-render, no gap.
     (async () => {
-      unlistenData = await on.terminalData((e) => {
+      // if the effect is torn down before a listen() resolves (StrictMode),
+      // cleanup can't see the unlisten yet — unregister it right here instead,
+      // or the handler leaks and keeps appending after unmount.
+      const u1 = await on.terminalData((e) => {
         if (e.id !== termId) return;
         if (!hydrated) pending.push({ seq: e.seq, data: e.data });
         else writeChunk(e.data);
       });
-      unlistenExit = await on.terminalExit((e) => {
+      if (disposed) return u1();
+      unlistenData = u1;
+      const u2 = await on.terminalExit((e) => {
         if (e.id === termId) termRef.current?.write("\r\n\x1b[38;5;244m[process exited]\x1b[0m\r\n");
       });
-      if (disposed) return;
+      if (disposed) return u2();
+      unlistenExit = u2;
 
       try {
         await ipc.terminalOpen(termId, cwd, term.cols, term.rows, command);

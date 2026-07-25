@@ -429,8 +429,10 @@ export function initSync(): () => void {
   // so its exit is the authoritative "agent stopped" signal.
   track(
     on.terminalExit((e) => {
-      // a detached window closing (not the agent) shouldn't touch state
-      useStore.getState().setTermDetached(e.id, false);
+      // NB: don't clear the detached flag here — terminal:exit means the PTY
+      // process ended, not that its window closed (that's the tauri://destroyed
+      // handler). Clearing it would re-dock and spawn a new inline shell while
+      // the detached window is still open.
       const suffix = "::agent";
       if (!e.id.endsWith(suffix)) return;
       const wtKey = e.id.slice(0, -suffix.length);

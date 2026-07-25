@@ -10,8 +10,13 @@ import { ChevLeft, ChevRight, Doc, ExpandH, PopIn, PopOut, Spinner, Sparkle, Ter
 import TerminalPane from "./TerminalPane";
 import { ContextEditor, bodyPreview, composeContextMd, isBlank, useWtContext } from "./WorktreeContext";
 
-/** Deterministic window label for a detached terminal (matches the term-* capability). */
-const laneLabel = (id: string) => "term-" + id.replace(/[^a-zA-Z0-9_-]/g, "_");
+/** Deterministic, injective window label for a detached terminal (hex of the id's
+    UTF-8 bytes) — a lossy replace could collide two worktrees onto one window. */
+const laneLabel = (id: string) =>
+  "term-" +
+  Array.from(new TextEncoder().encode(id))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
 function DetachedPlaceholder({ onBack }: { onBack: () => void }) {
   return (
@@ -239,10 +244,9 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
     }
     try {
       if (!isBlank(ctx)) {
-        // keep Canopy's dir out of the user's git status, then write context
-        // (propagate failure — don't claim "seeded" if the write failed)
-        await ipc.saveTextFile(`${wt.path}/.canopy/.gitignore`, "*\n").catch(() => {});
-        await ipc.saveTextFile(`${wt.path}/.canopy/context.md`, composeContextMd(ctx));
+        // writes .canopy/context.md (+ a self-ignoring .gitignore it won't
+        // clobber); propagate failure — don't claim "seeded" if it failed
+        await ipc.writeWorktreeContext(wt.path, composeContextMd(ctx));
       }
       const cmd = (await ipc.resolveAgentCommand(wt.wtKey)) || "claude";
       setAgentCmd(cmd);
@@ -327,13 +331,18 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           <span>{wt.branch}</span>
         </div>
         <span className="grow" />
-        <button
-          className="ib"
-          title="Open in a separate window"
-          onClick={() => popOut(tab === "agent" ? agentId : shellId)}
-        >
-          <PopOut size={14} />
-        </button>
+        {/* only pop out a tab that actually has a session — popping the agent
+            tab while idle would open a plain shell under the ::agent id and a
+            later Start would falsely see the agent as already running. */}
+        {(tab === "shell" || agentState === "running") && (
+          <button
+            className="ib"
+            title="Open in a separate window"
+            onClick={() => popOut(tab === "agent" ? agentId : shellId)}
+          >
+            <PopOut size={14} />
+          </button>
+        )}
         {!tight && (
           <button className="ib" title={mainRailed ? "Show worktree details" : "Focus the terminal"} onClick={toggleFocus}>
             <ExpandH size={15} />

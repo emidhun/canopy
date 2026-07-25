@@ -109,6 +109,9 @@ export const ipc = {
   terminalResize: (id: string, cols: number, rows: number) => invoke<void>("terminal_resize", { id, cols, rows }),
   terminalGetBuffer: (id: string) => invoke<TerminalSnapshot | null>("terminal_get_buffer", { id }),
   terminalClose: (id: string) => invoke<void>("terminal_close", { id }),
+  /** write .canopy/context.md (creates the dir + a self-ignoring .gitignore, never clobbering it) */
+  writeWorktreeContext: (wtPath: string, contents: string) =>
+    invoke<void>("write_worktree_context", { wtPath, contents }),
   resolveAgentCommand: (wtKey: string) => invoke<string>("resolve_agent_command", { wtKey }),
 
   serviceStart: (svcKey: string) => invoke<void>("service_start", { svcKey }),
