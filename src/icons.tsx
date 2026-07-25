@@ -272,3 +272,76 @@ export const Cube = ({ size = 15 }: P) => (
     <path d="M12 12l8-4.5M12 12v9M12 12L4 7.5" />
   </svg>
 );
+
+// ── Agent lane ──
+export const PopOut = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M11 5h-4a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-4" />
+    <path d="M13 11l7 -7" />
+    <path d="M15 4h5v5" />
+  </svg>
+);
+
+export const PopIn = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M13 19h4a2 2 0 0 0 2 -2v-10a2 2 0 0 0 -2 -2h-10a2 2 0 0 0 -2 2v4" />
+    <path d="M11 13l-7 7" />
+    <path d="M9 20h-5v-5" />
+  </svg>
+);
+
+export const Sparkle = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.7)}>
+    <path d="M12 3l1.9 5.1l5.1 1.9l-5.1 1.9l-1.9 5.1l-1.9 -5.1l-5.1 -1.9l5.1 -1.9z" />
+    <path d="M18.5 16.5l.7 1.8l1.8 .7l-1.8 .7l-.7 1.8l-.7 -1.8l-1.8 -.7l1.8 -.7z" />
+  </svg>
+);
+
+export const Doc = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.7)}>
+    <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+    <path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" />
+    <path d="M9 12h6" />
+    <path d="M9 16h4" />
+  </svg>
+);
+
+export const Link = ({ size = 13 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M9 15l6 -6" />
+    <path d="M11 6l.5 -.5a3.5 3.5 0 0 1 5 5l-.5 .5" />
+    <path d="M13 18l-.5 .5a3.5 3.5 0 0 1 -5 -5l.5 -.5" />
+  </svg>
+);
+
+export const ChevRight = ({ size = 14 }: P) => (
+  <svg {...isvg(size)}>
+    <path d="M9 6l6 6l-6 6" />
+  </svg>
+);
+
+export const ChevLeft = ({ size = 14 }: P) => (
+  <svg {...isvg(size)}>
+    <path d="M15 6l-6 6l6 6" />
+  </svg>
+);
+
+export const ExpandH = ({ size = 15 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M4 8v-2a1 1 0 0 1 1 -1h2" />
+    <path d="M4 16v2a1 1 0 0 0 1 1h2" />
+    <path d="M20 8v-2a1 1 0 0 0 -1 -1h-2" />
+    <path d="M20 16v2a1 1 0 0 1 -1 1h-2" />
+    <path d="M9 12h6" />
+    <path d="M11 10l-2 2l2 2" />
+    <path d="M13 10l2 2l-2 2" />
+  </svg>
+);
+
+export const Info = ({ size = 13 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 8h.01" />
+    <path d="M11 12h1v4h1" />
+  </svg>
+);

@@ -7,12 +7,14 @@ mod setup;
 mod state;
 mod stats;
 mod suite;
+mod terminal;
 mod toolchain;
 mod tray;
 
 use services::ProcTable;
 use state::AppState;
 use tauri::Manager;
+use terminal::TermTable;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -35,11 +37,26 @@ pub fn run() {
                 settings::load_runtime(&handle),
             ));
             app.manage(ProcTable::default());
+            app.manage(TermTable::default());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
+            terminal::sweep_orphans(&handle);
 
             stats::spawn_stats_task(handle.clone());
+
+            // periodically sweep idle shell terminals (bounds long-run memory)
+            {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+                        if let Some(table) = handle.try_state::<TermTable>() {
+                            terminal::sweep_idle(&table);
+                        }
+                    }
+                });
+            }
 
             // initial scan + 60s background git refresh
             tauri::async_runtime::spawn(async move {
@@ -173,6 +190,13 @@ pub fn run() {
             commands::save_repo_config,
             commands::save_text_file,
             commands::get_logs,
+            commands::terminal_open,
+            commands::terminal_write,
+            commands::terminal_resize,
+            commands::terminal_get_buffer,
+            commands::terminal_close,
+            commands::write_worktree_context,
+            commands::resolve_agent_command,
             commands::service_start,
             commands::service_stop,
             commands::service_restart,
@@ -204,6 +228,10 @@ pub fn run() {
         .run(|app, event| {
             // Cmd-Q / app exit: kill every spawned process group before dying
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // kill embedded terminal shells before their host process dies
+                if let Some(table) = app.try_state::<TermTable>() {
+                    terminal::close_all(&table);
+                }
                 let handle = app.clone();
                 tauri::async_runtime::block_on(async move {
                     services::stop_all(&handle).await;

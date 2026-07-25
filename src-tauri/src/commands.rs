@@ -2,6 +2,7 @@ use crate::git;
 use crate::services::{self, LogLine, ProcTable};
 use crate::settings::{self, RepoCfg, Settings};
 use crate::state::{refresh_all_git_meta, refresh_git_meta, refresh_tree, AppState, RepoNode};
+use crate::terminal::{self, TermTable};
 use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
@@ -65,6 +66,7 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, String> {
         migrate_db: String::new(),
         services: Vec::new(),
         custom_commands: Vec::new(),
+        agent_command: String::new(),
     };
 
     let updated = {
@@ -240,6 +242,80 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
         .get(&svc_key)
         .map(|b| b.iter().cloned().collect())
         .unwrap_or_default()
+}
+
+// ── embedded terminals (agent lane) ──
+
+#[tauri::command]
+pub fn terminal_open(
+    app: AppHandle,
+    table: State<'_, TermTable>,
+    id: String,
+    cwd: String,
+    cols: u16,
+    rows: u16,
+    command: Option<String>,
+) -> Result<(), String> {
+    terminal::open(&app, &table, &id, &cwd, cols, rows, command)
+}
+
+#[tauri::command]
+pub fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), String> {
+    terminal::write(&table, &id, &data)
+}
+
+#[tauri::command]
+pub fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    terminal::resize(&table, &id, cols, rows)
+}
+
+#[tauri::command]
+pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<terminal::BufferSnapshot> {
+    terminal::get_buffer(&table, &id)
+}
+
+#[tauri::command]
+pub fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) {
+    terminal::close_and_persist(&app, &table, &id);
+}
+
+/// Ensure a worktree's `.canopy/` exists with a self-ignoring `.gitignore`, then
+/// write `context.md`. Never truncates an existing `.gitignore`.
+#[tauri::command]
+pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&wt_path).join(".canopy");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "*\n").map_err(|e| format!("write {}: {e}", ignore.display()))?;
+    }
+    let file = dir.join("context.md");
+    std::fs::write(&file, contents).map_err(|e| format!("write {}: {e}", file.display()))
+}
+
+/// The agent CLI to run for a worktree: the repo's configured `agentCommand`,
+/// or the built-in default when unset.
+#[tauri::command]
+pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> String {
+    const DEFAULT_AGENT: &str = "claude";
+    let repo_id = {
+        let tree = state.tree.read().unwrap();
+        tree.iter()
+            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
+            .map(|r| r.repo_id.clone())
+    };
+    let cmd = repo_id.and_then(|id| {
+        let settings = state.settings.read().unwrap();
+        settings
+            .repos
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.agent_command.trim().to_string())
+    });
+    match cmd {
+        Some(c) if !c.is_empty() => c,
+        _ => DEFAULT_AGENT.to_string(),
+    }
 }
 
 #[tauri::command]
@@ -639,6 +715,8 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
     for key in services::worktree_svc_keys(&app, &wt_key) {
         let _ = services::stop_service(&app, &key).await;
     }
+    // and close its embedded terminals, so no shell/agent lingers with no UI
+    terminal::close_worktree(&app, &app.state::<TermTable>(), &wt_key);
 
     // run teardown (e.g. drop the worktree's database) while the worktree still
     // exists. Best-effort: a teardown failure shouldn't block removal.
@@ -875,10 +953,14 @@ pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, St
     })
 }
 
-/// Write text to a user-chosen path (from a native save dialog). Used by the
-/// Settings config Export — anchor downloads don't work in the webview.
+/// Write text to a path, creating parent directories as needed. Used by the
+/// Settings config Export and by the agent lane (writing `.canopy/context.md`,
+/// whose parent dir may not exist yet).
 #[tauri::command]
 pub fn save_text_file(path: String, contents: String) -> Result<(), String> {
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    }
     std::fs::write(&path, contents).map_err(|e| format!("write {path}: {e}"))
 }
 

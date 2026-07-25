@@ -25,6 +25,9 @@
   --amber: #e6ad5f;
   --red: #e0533d;
   --red-dim: rgba(224, 83, 61, 0.12);
+  /* agent-lane status halos (design handoff names) */
+  --run-dim: var(--green-dim);
+  --warn-dim: rgba(230, 173, 95, 0.14);
 
   /* ── legacy aliases (Settings / modals / branch picker / popover) ── */
   --sidebar-bg: var(--sidebar);

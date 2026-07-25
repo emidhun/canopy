@@ -30,6 +30,16 @@ interface State {
   query: string;
   tabSvcKey: string | null;
   collapsed: boolean;
+  /** agent-lane run state per worktree (wtKey → state); survives worktree switch */
+  agents: Record<string, "off" | "running">;
+  setAgent: (wtKey: string, state: "off" | "running") => void;
+  /** terminal ids currently shown in a detached window — in the store so the
+      placeholder survives a lane remount (worktree switch) */
+  detachedTerms: Set<string>;
+  setTermDetached: (id: string, v: boolean) => void;
+  /** focus mode: the middle pane drops to a rail so the terminal takes the window */
+  mainRailed: boolean;
+  setMainRailed: (v: boolean) => void;
 
   setQuery: (q: string) => void;
   select: (wtKey: string) => void;
@@ -80,6 +90,8 @@ export function wtLabel(tree: RepoNode[], wtKey: string): string {
 const timers: Record<string, ReturnType<typeof setTimeout>> = {};
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 const startedAt: Record<string, number> = {}; // svcKey -> ms epoch
+const agentStartedAt: Record<string, number> = {}; // wtKey -> ms epoch (agent start)
+const QUICK_EXIT_MS = 2500; // agent gone this fast after start = it never really ran
 
 function appendLogs(svcKey: string, lines: LogLine[]) {
   useStore.setState((st) => {
@@ -180,6 +192,21 @@ export const useStore = create<State>((set, get) => {
     query: "",
     tabSvcKey: mock[0]?.worktrees[0]?.services[0]?.svcKey ?? null,
     collapsed: false,
+    agents: {},
+    setAgent: (wtKey, state) => {
+      if (state === "running") agentStartedAt[wtKey] = Date.now();
+      set((st) => ({ agents: { ...st.agents, [wtKey]: state } }));
+    },
+    detachedTerms: new Set(),
+    setTermDetached: (id, v) =>
+      set((st) => {
+        const next = new Set(st.detachedTerms);
+        if (v) next.add(id);
+        else next.delete(id);
+        return { detachedTerms: next };
+      }),
+    mainRailed: false,
+    setMainRailed: (mainRailed) => set({ mainRailed }),
 
     setQuery: (query) => set({ query }),
     select: (wtKey) => set({ selKey: wtKey }),
@@ -397,6 +424,28 @@ export function initSync(): () => void {
   track(on.serviceLog((e) => appendLogs(e.svcKey, e.lines)));
 
   track(on.worktreeOp((e) => appendOpLine(e.wtKey, e.state, e.detail)));
+
+  // agent lifecycle: the agent runs as its own PTY session (`${wtKey}::agent`),
+  // so its exit is the authoritative "agent stopped" signal.
+  track(
+    on.terminalExit((e) => {
+      // NB: don't clear the detached flag here — terminal:exit means the PTY
+      // process ended, not that its window closed (that's the tauri://destroyed
+      // handler). Clearing it would re-dock and spawn a new inline shell while
+      // the detached window is still open.
+      const suffix = "::agent";
+      if (!e.id.endsWith(suffix)) return;
+      const wtKey = e.id.slice(0, -suffix.length);
+      // "running" here means it wasn't a user-initiated stop (stop sets off first)
+      const wasRunning = useStore.getState().agents[wtKey] === "running";
+      useStore.getState().setAgent(wtKey, "off");
+      if (wasRunning) {
+        const started = agentStartedAt[wtKey];
+        if (started && Date.now() - started < QUICK_EXIT_MS)
+          useStore.getState().showToast("Agent exited immediately — check the agent command");
+      }
+    }),
+  );
 
   track(
     on.serviceStats((e) => {

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { initSync, useStore } from "../store";
 import { isLive } from "../types";
-import { Fork, Plus, Refresh, Settings } from "../icons";
+import { ChevRight, Fork, Logs, Plus, Refresh, Settings } from "../icons";
 import Sidebar from "./Sidebar";
 import WorktreeHeader from "./WorktreeHeader";
 import ServiceCard from "./ServiceCard";
 import DatabaseControl from "./DatabaseControl";
 import Console from "./Console";
+import AgentLane from "./AgentLane";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
@@ -17,6 +18,8 @@ export default function App() {
   const selKey = useStore((s) => s.selKey);
   const toast = useStore((s) => s.toast);
   const showToast = useStore((s) => s.showToast);
+  const mainRailed = useStore((s) => s.mainRailed);
+  const setMainRailed = useStore((s) => s.setMainRailed);
   const [, setTick] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showNewWt, setShowNewWt] = useState(false);
@@ -69,7 +72,7 @@ export default function App() {
         </button>
       </div>
 
-      <div className="app">
+      <div className={"app" + (!showSettings && sel?.wt ? " with-lane" : "")}>
         <Sidebar onAdd={() => setShowNewWt(true)} />
 
         {showSettings ? (
@@ -80,6 +83,26 @@ export default function App() {
               <Plus size={13} />
               Add your first repository
             </button>
+          </div>
+        ) : mainRailed ? (
+          <div className="main railed">
+            <div className="main-rail">
+              <button className="ib" title="Show worktree details" onClick={() => setMainRailed(false)}>
+                <ChevRight size={16} />
+              </button>
+              <span className="rdiv" />
+              {sel.wt.services
+                .filter((s) => isLive(s.status))
+                .map((s) => (
+                  <span className="rdot" key={s.svcKey} title={`${s.name} running`} />
+                ))}
+              <span className="rdiv" />
+              <button className="ib" title="Logs" onClick={() => setMainRailed(false)}>
+                <Logs size={15} />
+              </button>
+              <span className="grow" />
+              <span className="vtxt">{sel.wt.branch}</span>
+            </div>
           </div>
         ) : (
           <section className="main">
@@ -107,6 +130,8 @@ export default function App() {
             <Console wt={sel.wt} />
           </section>
         )}
+
+        {!showSettings && sel?.wt && <AgentLane key={sel.wt.wtKey} repo={sel.repo} wt={sel.wt} />}
       </div>
 
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}

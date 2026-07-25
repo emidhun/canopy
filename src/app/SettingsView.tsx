@@ -14,7 +14,7 @@ import {
   type Settings,
 } from "../ipc";
 import { useStore } from "../store";
-import { Braces, Cube, Database, Download, File, Fork, Plus, Server, Settings as Cog, Terminal, Upload } from "../icons";
+import { Braces, Cube, Database, Download, File, Fork, Plus, Server, Settings as Cog, Sparkle, Terminal, Upload } from "../icons";
 
 const KINDS = ["web", "server", "worker"];
 const FORMATS: { id: ProvisionFormat; label: string }[] = [
@@ -629,6 +629,17 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
                         value={repo.migrateDb || ""}
                         placeholder="npm run db:migrate (else .worktreemanager.json migrate)"
                         onChange={(e) => patchRepo({ migrateDb: e.target.value })}
+                      />
+                    </div>
+                    <div className="cfg-row">
+                      <label className="fld-label">
+                        <Sparkle size={12} /> Agent command
+                      </label>
+                      <input
+                        className="input mono"
+                        value={repo.agentCommand || ""}
+                        placeholder="claude (also: aider, codex, gemini…)"
+                        onChange={(e) => patchRepo({ agentCommand: e.target.value })}
                       />
                     </div>
                   </div>

@@ -16,6 +16,8 @@ export default defineConfig(async () => ({
         main: resolve(__dirname, "index.html"),
         // @ts-expect-error __dirname is a nodejs global
         popover: resolve(__dirname, "popover.html"),
+        // @ts-expect-error __dirname is a nodejs global
+        terminal: resolve(__dirname, "terminal.html"),
       },
     },
   },
