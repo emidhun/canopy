@@ -101,6 +101,13 @@ pub fn open(
         cmd.arg("-l");
     }
     if let Some(c) = command.as_deref().filter(|c| !c.trim().is_empty()) {
+        // A bare login shell on a PTY is interactive (so it sources .zshrc /
+        // .bashrc), but `-c` is NOT — user aliases/functions and rc-only PATH
+        // wouldn't resolve (e.g. an agent aliased in .zshrc). Force interactive
+        // for bash/zsh so the agent command runs like it would when typed.
+        if matches!(name, "zsh" | "bash") {
+            cmd.arg("-i");
+        }
         cmd.arg("-c");
         cmd.arg(c);
     }
