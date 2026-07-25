@@ -41,6 +41,7 @@ pub fn run() {
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
+            terminal::sweep_orphans(&handle);
 
             stats::spawn_stats_task(handle.clone());
 
@@ -194,6 +195,7 @@ pub fn run() {
             commands::terminal_resize,
             commands::terminal_get_buffer,
             commands::terminal_close,
+            commands::write_worktree_context,
             commands::resolve_agent_command,
             commands::service_start,
             commands::service_stop,

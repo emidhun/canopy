@@ -572,7 +572,7 @@ pub fn sweep_orphans(app: &AppHandle) {
 }
 
 /// Compare recorded spawn time against the process's actual start time (±5s).
-fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
+pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
     let out = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output();

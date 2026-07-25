@@ -12,10 +12,13 @@
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
+use crate::settings::TermOrphan;
+use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Per-session scrollback cap (bytes). Big enough for a screenful of history on
@@ -41,11 +44,18 @@ pub struct PtySession {
     seq: u64,
     /// last output or input time, for idle sweeping
     last_activity: Instant,
+    /// generation guard: a fast reopen under the same id bumps this so a stale
+    /// reader thread doesn't remove/exit the replacement session.
+    generation: u64,
+    /// child pgid (session leader) + spawn time, persisted for crash-orphan sweep
+    pgid: i32,
+    started_unix: u64,
 }
 
 #[derive(Default)]
 pub struct TermTable {
     pub sessions: Mutex<HashMap<String, PtySession>>,
+    next_gen: AtomicU64,
 }
 
 #[derive(Serialize, Clone)]
@@ -135,6 +145,11 @@ pub fn open(
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("reader clone failed: {e}"))?;
     let writer = pair.master.take_writer().map_err(|e| format!("writer failed: {e}"))?;
 
+    // the child is its own session leader (the pty setsid's it), so pid == pgid
+    let pgid = child.process_id().unwrap_or(0) as i32;
+    let started_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    let generation = table.next_gen.fetch_add(1, Ordering::Relaxed) + 1;
+
     sessions.insert(
         id.to_string(),
         PtySession {
@@ -144,9 +159,13 @@ pub fn open(
             scrollback: VecDeque::new(),
             seq: 0,
             last_activity: Instant::now(),
+            generation,
+            pgid,
+            started_unix,
         },
     );
     drop(sessions); // release before spawning the reader thread
+    persist_orphans(app); // record for the crash-orphan sweep
 
     // reader loop on a dedicated thread: PTY reads are blocking byte I/O.
     let app = app.clone();
@@ -178,11 +197,25 @@ pub fn open(
                 Err(_) => break,
             }
         }
-        // session ended: drop it and tell the UI
-        if let Some(table) = app.try_state::<TermTable>() {
-            table.sessions.lock().unwrap().remove(&id);
+        // session ended: drop it and tell the UI — but only if a newer session
+        // hasn't already replaced this id (fast reopen), else we'd delete the
+        // replacement and emit a false exit.
+        let removed = if let Some(table) = app.try_state::<TermTable>() {
+            let mut sessions = table.sessions.lock().unwrap();
+            match sessions.get(&id) {
+                Some(s) if s.generation == generation => {
+                    sessions.remove(&id);
+                    true
+                }
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if removed {
+            persist_orphans(&app);
+            let _ = app.emit("terminal:exit", &ExitEvent { id: &id });
         }
-        let _ = app.emit("terminal:exit", &ExitEvent { id: &id });
     });
 
     Ok(())
@@ -224,12 +257,80 @@ pub fn close(table: &TermTable, id: &str) {
     }
 }
 
+/// Close a session and refresh the persisted orphan list (command path).
+pub fn close_and_persist(app: &AppHandle, table: &TermTable, id: &str) {
+    close(table, id);
+    persist_orphans(app);
+}
+
+/// Close every terminal belonging to a worktree (called before it's removed, so
+/// no shell/agent lingers with no UI to stop it).
+pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
+    let prefix = format!("{wt_key}::");
+    let ids: Vec<String> = table.sessions.lock().unwrap().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+    for id in &ids {
+        close(table, id);
+    }
+    if !ids.is_empty() {
+        persist_orphans(app);
+    }
+}
+
 /// Kill every session (app quit).
 pub fn close_all(table: &TermTable) {
     let mut sessions = table.sessions.lock().unwrap();
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
     }
+}
+
+/// Snapshot live sessions' pgids into persisted runtime state, so a crash can be
+/// cleaned up on next launch (mirrors the service orphan sweep).
+fn persist_orphans(app: &AppHandle) {
+    let table = app.state::<TermTable>();
+    let orphans: Vec<TermOrphan> = table
+        .sessions
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, s)| TermOrphan { id: id.clone(), pgid: s.pgid, spawn_time_secs: s.started_unix })
+        .collect();
+    let state = app.state::<AppState>();
+    let runtime = {
+        let mut rt = state.runtime.write().unwrap();
+        rt.terminal_orphans = orphans;
+        rt.clone()
+    };
+    let _ = crate::settings::save_runtime(app, &runtime);
+}
+
+/// Startup: kill terminal process groups left over from a crashed previous run
+/// (only when the group leader still exists and its start time matches).
+pub fn sweep_orphans(app: &AppHandle) {
+    let orphans = {
+        let state = app.state::<AppState>();
+        let rt = state.runtime.read().unwrap();
+        rt.terminal_orphans.clone()
+    };
+    for o in &orphans {
+        if o.pgid <= 1 {
+            continue;
+        }
+        let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
+        if alive && crate::services::proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
+            eprintln!("[wtm] sweeping terminal orphan pgid {} ({})", o.pgid, o.id);
+            unsafe {
+                libc::killpg(o.pgid, libc::SIGTERM);
+            }
+        }
+    }
+    let state = app.state::<AppState>();
+    let runtime = {
+        let mut rt = state.runtime.write().unwrap();
+        rt.terminal_orphans.clear();
+        rt.clone()
+    };
+    let _ = crate::settings::save_runtime(app, &runtime);
 }
 
 /// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the

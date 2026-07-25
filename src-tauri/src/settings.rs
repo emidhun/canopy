@@ -99,12 +99,23 @@ pub struct RuntimeState {
     pub port_overrides: HashMap<String, u32>,
     /// pgids of spawned services, swept on startup after a crash
     pub orphans: Vec<OrphanProc>,
+    /// pgids of embedded terminal sessions, swept on startup after a crash
+    #[serde(default)]
+    pub terminal_orphans: Vec<TermOrphan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OrphanProc {
     pub svc_key: String,
+    pub pgid: i32,
+    pub spawn_time_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TermOrphan {
+    pub id: String,
     pub pgid: i32,
     pub spawn_time_secs: u64,
 }

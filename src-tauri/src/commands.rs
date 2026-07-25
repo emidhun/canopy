@@ -275,8 +275,22 @@ pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<te
 }
 
 #[tauri::command]
-pub fn terminal_close(table: State<'_, TermTable>, id: String) {
-    terminal::close(&table, &id);
+pub fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) {
+    terminal::close_and_persist(&app, &table, &id);
+}
+
+/// Ensure a worktree's `.canopy/` exists with a self-ignoring `.gitignore`, then
+/// write `context.md`. Never truncates an existing `.gitignore`.
+#[tauri::command]
+pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&wt_path).join(".canopy");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "*\n").map_err(|e| format!("write {}: {e}", ignore.display()))?;
+    }
+    let file = dir.join("context.md");
+    std::fs::write(&file, contents).map_err(|e| format!("write {}: {e}", file.display()))
 }
 
 /// The agent CLI to run for a worktree: the repo's configured `agentCommand`,
@@ -701,6 +715,8 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
     for key in services::worktree_svc_keys(&app, &wt_key) {
         let _ = services::stop_service(&app, &key).await;
     }
+    // and close its embedded terminals, so no shell/agent lingers with no UI
+    terminal::close_worktree(&app, &app.state::<TermTable>(), &wt_key);
 
     // run teardown (e.g. drop the worktree's database) while the worktree still
     // exists. Best-effort: a teardown failure shouldn't block removal.
