@@ -7,6 +7,7 @@ import type { RepoNode, WorktreeNode } from "../types";
 import { useStore } from "../store";
 import { ChevLeft, ChevRight, Doc, Sparkle, Terminal as TerminalIcon } from "../icons";
 import TerminalPane from "./TerminalPane";
+import { ContextEditor, bodyPreview, isBlank, useWtContext } from "./WorktreeContext";
 
 const COLLAPSE_KEY = "canopy.lane.collapsed";
 
@@ -16,6 +17,8 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   const showToast = useStore((s) => s.showToast);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [tab, setTab] = useState<Tab>("agent");
+  const [ctxOpen, setCtxOpen] = useState(false);
+  const [ctx, setCtx] = useWtContext(wt.wtKey);
   // lazily mount a tab's terminal the first time it's shown, then keep it
   // mounted (hidden) so its PTY keeps running in the background.
   const activated = useRef<Set<Tab>>(new Set(["agent"]));
@@ -57,7 +60,14 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           >
             <TerminalIcon size={15} />
           </button>
-          <button className="ib" title="Context" onClick={() => setCollapsed(false)}>
+          <button
+            className="ib"
+            title="Context"
+            onClick={() => {
+              setCollapsed(false);
+              setCtxOpen(true);
+            }}
+          >
             <Doc size={15} />
           </button>
           <span className="vtxt">Agent</span>
@@ -65,6 +75,12 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       </aside>
     );
   }
+
+  const seedAgent = () => {
+    setCtxOpen(false);
+    setTab("agent");
+    showToast(`Agent — ${repo.name} · ${wt.branch}`);
+  };
 
   return (
     <aside className="lane">
@@ -87,18 +103,23 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           <Doc size={11} />
           Context
           <span className="grow" />
-          <button
-            className="ib"
-            style={{ height: 22, fontSize: 11, padding: "0 7px" }}
-            onClick={() => showToast("Context editor — coming next")}
-          >
+          <button className="ib" style={{ height: 22, fontSize: 11, padding: "0 7px" }} onClick={() => setCtxOpen(true)}>
             Edit
           </button>
         </div>
-        <div className="lc-title" style={{ color: "var(--faint)" }}>
-          What is this worktree for?
-        </div>
-        <div className="lc-body">Set a task or PR description to seed the agent and pre-fill the PR body.</div>
+        {isBlank(ctx) ? (
+          <>
+            <div className="lc-title" style={{ color: "var(--faint)" }}>
+              What is this worktree for?
+            </div>
+            <div className="lc-body">Set a task or PR description to seed the agent and pre-fill the PR body.</div>
+          </>
+        ) : (
+          <>
+            <div className="lc-title">{ctx.title || "Untitled"}</div>
+            <div className="lc-body">{bodyPreview(ctx.body) || `${ctx.links.length} link(s)`}</div>
+          </>
+        )}
       </div>
 
       <div className="lane-seg">
@@ -128,19 +149,22 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       </div>
 
       <div className="lane-foot">
-        <button
-          className="startagent"
-          style={{ flex: 1, justifyContent: "center", height: 30 }}
-          onClick={() => {
-            setTab("agent");
-            showToast(`Agent — ${repo.name} · ${wt.branch}`);
-          }}
-        >
+        <button className="startagent" style={{ flex: 1, justifyContent: "center", height: 30 }} onClick={seedAgent}>
           <Sparkle size={13} />
           Start agent
           <span className="ar">▸</span>
         </button>
       </div>
+
+      {ctxOpen && (
+        <ContextEditor
+          ctx={ctx}
+          setCtx={setCtx}
+          onClose={() => setCtxOpen(false)}
+          onSeed={seedAgent}
+          onToast={showToast}
+        />
+      )}
     </aside>
   );
 }
