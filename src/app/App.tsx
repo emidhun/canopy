@@ -7,6 +7,7 @@ import WorktreeHeader from "./WorktreeHeader";
 import ServiceCard from "./ServiceCard";
 import DatabaseControl from "./DatabaseControl";
 import Console from "./Console";
+import AgentLane from "./AgentLane";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
@@ -69,7 +70,7 @@ export default function App() {
         </button>
       </div>
 
-      <div className="app">
+      <div className={"app" + (!showSettings && sel?.wt ? " with-lane" : "")}>
         <Sidebar onAdd={() => setShowNewWt(true)} />
 
         {showSettings ? (
@@ -107,6 +108,8 @@ export default function App() {
             <Console wt={sel.wt} />
           </section>
         )}
+
+        {!showSettings && sel?.wt && <AgentLane repo={sel.repo} wt={sel.wt} />}
       </div>
 
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
