@@ -73,6 +73,10 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   const setAgent = useStore((s) => s.setAgent);
   const mainRailed = useStore((s) => s.mainRailed);
   const setMainRailed = useStore((s) => s.setMainRailed);
+  // detached tracking lives in the store so it survives this lane remounting on
+  // worktree switch (the window stays open; the placeholder must persist).
+  const detached = useStore((s) => s.detachedTerms);
+  const setTermDetached = useStore((s) => s.setTermDetached);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [tab, setTab] = useState<Tab>("agent");
   const [ctxOpen, setCtxOpen] = useState(false);
@@ -80,7 +84,6 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   const [laneW, setLaneW] = useState(() => Number(localStorage.getItem(WIDTH_KEY)) || DEFAULT_LANE);
   const [resizing, setResizing] = useState(false);
   const [tight, setTight] = useState(() => window.innerWidth < TIGHT);
-  const [detached, setDetached] = useState<Set<string>>(new Set());
   // resolved agent CLI, set on the first Start; only needed to *create* the
   // agent PTY — remounts while it's already running attach without it.
   const [agentCmd, setAgentCmd] = useState<string | null>(null);
@@ -236,7 +239,9 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
     }
     try {
       if (!isBlank(ctx)) {
-        // propagate failure — don't claim "seeded" if the write failed
+        // keep Canopy's dir out of the user's git status, then write context
+        // (propagate failure — don't claim "seeded" if the write failed)
+        await ipc.saveTextFile(`${wt.path}/.canopy/.gitignore`, "*\n").catch(() => {});
         await ipc.saveTextFile(`${wt.path}/.canopy/context.md`, composeContextMd(ctx));
       }
       const cmd = (await ipc.resolveAgentCommand(wt.wtKey)) || "claude";
@@ -281,15 +286,9 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       decorations: false,
       resizable: true,
     });
-    win.once("tauri://created", () => setDetached((s) => new Set(s).add(id)));
+    win.once("tauri://created", () => setTermDetached(id, true));
     win.once("tauri://error", () => showToast("Could not open terminal window"));
-    win.once("tauri://destroyed", () =>
-      setDetached((s) => {
-        const n = new Set(s);
-        n.delete(id);
-        return n;
-      }),
-    );
+    win.once("tauri://destroyed", () => setTermDetached(id, false));
   };
 
   const bringBack = async (id: string) => {
@@ -298,11 +297,7 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       const w = await WebviewWindow.getByLabel(laneLabel(id));
       await w?.close();
     }
-    setDetached((s) => {
-      const n = new Set(s);
-      n.delete(id);
-      return n;
-    });
+    setTermDetached(id, false);
   };
 
   return (
