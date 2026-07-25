@@ -98,6 +98,16 @@ export const ipc = {
   saveTextFile: (path: string, contents: string) => invoke<void>("save_text_file", { path, contents }),
 
   getLogs: (svcKey: string) => invoke<LogLine[]>("get_logs", { svcKey }),
+
+  // embedded terminals (agent lane). `id` is opaque (e.g. `${wtKey}::shell`);
+  // `data` on read events is base64 of the raw PTY bytes.
+  terminalOpen: (id: string, cwd: string, cols: number, rows: number) =>
+    invoke<void>("terminal_open", { id, cwd, cols, rows }),
+  terminalWrite: (id: string, data: string) => invoke<void>("terminal_write", { id, data }),
+  terminalResize: (id: string, cols: number, rows: number) => invoke<void>("terminal_resize", { id, cols, rows }),
+  terminalGetBuffer: (id: string) => invoke<string | null>("terminal_get_buffer", { id }),
+  terminalClose: (id: string) => invoke<void>("terminal_close", { id }),
+
   serviceStart: (svcKey: string) => invoke<void>("service_start", { svcKey }),
   serviceStop: (svcKey: string) => invoke<void>("service_stop", { svcKey }),
   serviceRestart: (svcKey: string) => invoke<void>("service_restart", { svcKey }),
@@ -157,6 +167,14 @@ export interface OpEvent {
   state: "progress" | "done" | "error";
   detail: string;
 }
+export interface TerminalDataEvent {
+  id: string;
+  /** base64 of raw PTY bytes */
+  data: string;
+}
+export interface TerminalExitEvent {
+  id: string;
+}
 
 export const on = {
   treeChanged: (cb: (tree: RepoNode[]) => void): Promise<UnlistenFn> =>
@@ -173,6 +191,10 @@ export const on = {
     listen<ResetEvent>("reset:status", (e) => cb(e.payload)),
   worktreeOp: (cb: (e: OpEvent) => void): Promise<UnlistenFn> =>
     listen<OpEvent>("worktree:op", (e) => cb(e.payload)),
+  terminalData: (cb: (e: TerminalDataEvent) => void): Promise<UnlistenFn> =>
+    listen<TerminalDataEvent>("terminal:data", (e) => cb(e.payload)),
+  terminalExit: (cb: (e: TerminalExitEvent) => void): Promise<UnlistenFn> =>
+    listen<TerminalExitEvent>("terminal:exit", (e) => cb(e.payload)),
 };
 
 /** True when running inside the Tauri webview (false in a plain browser tab). */
