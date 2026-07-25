@@ -85,16 +85,28 @@ export default function TerminalPane({ termId, cwd, hidden }: { termId: string; 
       if (e.id === termId && termRef.current) termRef.current.write("\r\n\x1b[38;5;244m[process exited]\x1b[0m\r\n");
     }).then((u) => (disposed ? u() : (unlistenExit = u)));
 
+    // While replaying saved scrollback, xterm re-answers any query escape
+    // sequences (Device Attributes, cursor-position reports) embedded in the
+    // history. Those replies must NOT be forwarded to the PTY, or the shell
+    // prompt echoes them as typed junk ("1;2c22;3R…"). Gate onData until the
+    // rehydration write has finished parsing.
+    let hydrating = false;
     ipc
       .terminalOpen(termId, cwd, term.cols, term.rows)
       .then(() => ipc.terminalGetBuffer(termId))
       .then((buf) => {
-        if (!disposed && buf && termRef.current) termRef.current.write(decode(buf));
+        if (!disposed && buf && termRef.current) {
+          hydrating = true;
+          termRef.current.write(decode(buf), () => {
+            hydrating = false;
+          });
+        }
       })
       .catch((err) => term.write(`\r\n\x1b[31mterminal error: ${String(err)}\x1b[0m\r\n`));
 
-    // keystrokes → PTY (the PTY echoes; no local echo)
+    // keystrokes (and terminal reports) → PTY. The PTY echoes; no local echo.
     const onDataDisp = term.onData((data) => {
+      if (hydrating) return; // suppress replies to replayed history
       ipc.terminalWrite(termId, data).catch(() => {});
     });
 
