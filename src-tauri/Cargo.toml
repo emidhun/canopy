@@ -28,8 +28,8 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 sysinfo = "0.39.3"
 # embedded per-worktree terminals: a real PTY per session (the agent lane runs
 # the coding-agent CLI inside one). portable-pty is cross-platform (helps Linux).
-portable-pty = "0.8"
-base64 = "0.22"
+portable-pty = "0.9"
+base64 = "0.23"
 
 # macOS-only: the tray popover is a non-activating NSPanel. Other platforms fall
 # back to a plain borderless window (see src/tray.rs).
