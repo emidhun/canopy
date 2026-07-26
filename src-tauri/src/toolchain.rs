@@ -53,13 +53,22 @@ fn bin_for_version(version: &str) -> Option<String> {
     ];
     #[cfg(target_os = "windows")]
     {
-        // nvm-windows drops node.exe directly under %APPDATA%\nvm\vX (no bin/);
-        // fnm and Volta keep their own layouts under %LOCALAPPDATA%.
+        // nvm-windows drops node.exe directly under %APPDATA%\nvm\vX (no bin/).
         if let Ok(appdata) = std::env::var("APPDATA") {
             candidates.push(format!("{appdata}\\nvm\\v{version}"));
         }
+        // fnm's default data dir on Windows is %APPDATA%\fnm (roaming); also honor
+        // an explicit FNM_DIR and the older %LOCALAPPDATA%\fnm layout.
+        let fnm_bases = [
+            std::env::var("FNM_DIR").ok(),
+            std::env::var("APPDATA").ok().map(|p| format!("{p}\\fnm")),
+            std::env::var("LOCALAPPDATA").ok().map(|p| format!("{p}\\fnm")),
+        ];
+        for base in fnm_bases.into_iter().flatten() {
+            candidates.push(format!("{base}\\node-versions\\v{version}\\installation"));
+        }
+        // Volta
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            candidates.push(format!("{local}\\fnm\\node-versions\\v{version}\\installation"));
             candidates.push(format!("{local}\\Volta\\tools\\image\\node\\{version}"));
         }
     }

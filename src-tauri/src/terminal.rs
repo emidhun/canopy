@@ -121,6 +121,9 @@ pub fn open(
     let shell = crate::toolchain::user_shell();
     let mut cmd = CommandBuilder::new(&shell);
     let name = std::path::Path::new(&shell).file_name().and_then(|s| s.to_str()).unwrap_or("");
+    // on Windows the shell is `bash.exe`; normalize so the family checks below
+    // (login flag, and the `-i` interactive flag) match as they do on Unix
+    let name = name.strip_suffix(".exe").unwrap_or(name);
     if !matches!(name, "sh" | "dash") {
         cmd.arg("-l");
     }
@@ -138,8 +141,15 @@ pub fn open(
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     if let Some(bin) = crate::toolchain::pinned_node_bin(cwd) {
-        let path = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{bin}:{path}"));
+        // prepend to PATH using the OS separator (';' on Windows, ':' elsewhere)
+        // and native path form — this is the process env bash.exe inherits, not a
+        // bash-internal PATH string.
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let mut dirs = vec![std::path::PathBuf::from(&bin)];
+        dirs.extend(std::env::split_paths(&existing));
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            cmd.env("PATH", joined);
+        }
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| format!("spawn failed: {e}"))?;

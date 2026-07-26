@@ -175,12 +175,16 @@ mod imp {
         if Thread32First(snap, &mut entry).is_ok() {
             loop {
                 if entry.th32OwnerProcessID == pid {
+                    // a CREATE_SUSPENDED process has exactly one thread (the
+                    // primary) at this point — resume it, and only count success
+                    // if ResumeThread didn't report failure (u32::MAX). Otherwise
+                    // the process would stay frozen while marked "running".
                     if let Ok(hthread) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
-                        ResumeThread(hthread);
+                        let prev = ResumeThread(hthread);
                         let _ = CloseHandle(hthread);
-                        resumed = true;
-                        break;
+                        resumed = prev != u32::MAX;
                     }
+                    break;
                 }
                 if Thread32Next(snap, &mut entry).is_err() {
                     break;
@@ -195,15 +199,18 @@ mod imp {
         }
     }
 
+    // Exit the job with code 0 so the service waiter treats a user-requested stop
+    // as `Stopped`, not `Error` (a non-zero code routes to SvcStatus::Error in
+    // services.rs — mirroring how a SIGTERM'd Unix process reports no exit code).
     pub fn terminate_group(g: &ProcGroup) {
         unsafe {
-            let _ = TerminateJobObject(g.job.0, 1);
+            let _ = TerminateJobObject(g.job.0, 0);
         }
     }
 
     pub fn kill_group(g: &ProcGroup) {
         unsafe {
-            let _ = TerminateJobObject(g.job.0, 1);
+            let _ = TerminateJobObject(g.job.0, 0);
         }
     }
 
