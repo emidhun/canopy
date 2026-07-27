@@ -192,6 +192,24 @@
   color: var(--faint);
   margin-top: 1px;
 }
+.wt .wt-rm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  padding: 4px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+.wt:hover .wt-rm {
+  opacity: 1;
+}
+.wt .wt-rm:hover {
+  background: var(--btn-hover);
+  color: var(--text);
+}
 .sb-foot {
   padding: 8px;
   border-top: 1px solid var(--border-soft);

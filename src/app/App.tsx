@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { initSync, useStore } from "../store";
-import { isLive } from "../types";
+import { isLive, WorktreeNode } from "../types";
 import { ChevRight, Fork, Logs, Plus, Refresh, Settings } from "../icons";
 import Sidebar from "./Sidebar";
 import WorktreeHeader from "./WorktreeHeader";
@@ -23,7 +23,7 @@ export default function App() {
   const [, setTick] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showNewWt, setShowNewWt] = useState(false);
-  const [removeWt, setRemoveWt] = useState(false);
+  const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
 
@@ -73,7 +73,7 @@ export default function App() {
       </div>
 
       <div className={"app" + (!showSettings && sel?.wt ? " with-lane" : "")}>
-        <Sidebar onAdd={() => setShowNewWt(true)} />
+        <Sidebar onAdd={() => setShowNewWt(true)} onRemove={(wt) => setRemoveWtFor(wt)} />
 
         {showSettings ? (
           <SettingsView onClose={() => setShowSettings(false)} />
@@ -109,7 +109,7 @@ export default function App() {
             <WorktreeHeader
               repo={sel.repo}
               wt={sel.wt}
-              onRemove={() => setRemoveWt(true)}
+              onRemove={() => setRemoveWtFor(sel.wt)}
               onOpenSettings={() => setShowSettings(true)}
             />
             <div className="block">
@@ -135,7 +135,7 @@ export default function App() {
       </div>
 
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
-      {removeWt && sel?.wt && <RemoveWorktreeModal wt={sel.wt} onClose={() => setRemoveWt(false)} />}
+      {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
       {onboardingActive && (
         <Onboarding
           onClose={() => {

@@ -1,8 +1,8 @@
 import { useStore } from "../store";
-import { isLive } from "../types";
-import { Fork, Plus, Search, Sparkle } from "../icons";
+import { isLive, WorktreeNode } from "../types";
+import { Fork, Plus, Search, Sparkle, Trash } from "../icons";
 
-export default function Sidebar({ onAdd }: { onAdd: () => void }) {
+export default function Sidebar({ onAdd, onRemove }: { onAdd: () => void; onRemove?: (wt: WorktreeNode) => void }) {
   const tree = useStore((s) => s.tree);
   const query = useStore((s) => s.query);
   const setQuery = useStore((s) => s.setQuery);
@@ -60,6 +60,18 @@ export default function Sidebar({ onAdd }: { onAdd: () => void }) {
                     {agent === "running" && (
                       <span className="ag-pip busy" title="Agent working">
                         <Sparkle size={10} />
+                      </span>
+                    )}
+                    {!w.isMain && onRemove && (
+                      <span
+                        className="wt-rm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRemove(w);
+                        }}
+                        title="Remove worktree"
+                      >
+                        <Trash size={14} />
                       </span>
                     )}
                   </button>
