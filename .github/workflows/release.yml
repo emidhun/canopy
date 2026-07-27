@@ -1,6 +1,6 @@
 # Release — build installers on a version tag (v0.4.0 → draft GitHub release).
-# macOS: .app + .dmg (arm64). Linux: .deb / .AppImage / .rpm (untested port —
-# artifacts are published so early adopters can try them).
+# macOS: .app + .dmg (arm64). Linux: .deb / .AppImage / .rpm. Windows: NSIS .exe
+# (untested ports — artifacts are published so early adopters can try them).
 name: release
 
 on:
@@ -21,6 +21,8 @@ jobs:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
           - platform: ubuntu-latest
+            args: ""
+          - platform: windows-latest
             args: ""
     runs-on: ${{ matrix.platform }}
     steps:

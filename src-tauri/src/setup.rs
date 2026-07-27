@@ -434,8 +434,17 @@ fn upsert_yaml_str(existing: &str, pairs: &[(String, String)]) -> String {
 
 /// A provision path must stay inside its root: relative, no `..` components.
 fn check_contained(p: &str, what: &str) -> Result<(), String> {
+    use std::path::Component;
     let path = Path::new(p);
-    if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    // On Windows a leading-`/` path (`/etc/hosts`) is *rooted* but not *absolute*
+    // (no drive), yet `join` still resolves it onto the current drive and escapes
+    // the root — so reject `has_root()` and drive prefixes (`C:\`, `C:foo`) too.
+    let escapes = path.is_absolute()
+        || path.has_root()
+        || path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)));
+    if escapes {
         return Err(format!("provision {what} '{p}' must be a relative path without '..'"));
     }
     Ok(())

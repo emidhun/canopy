@@ -29,22 +29,29 @@
    **universal (Intel) build**, **split SettingsView into per-tab modules**.
 
 ## Cross-platform (Linux / Windows) support
-Released builds are macOS **arm64**. The Linux port is underway — the code compiles in CI and the
-macOS-only pieces are cfg-gated — but it has not yet been validated on a real Linux desktop.
+Released builds are macOS **arm64**. The Linux **and Windows** ports are code-complete and compile in
+CI (dedicated `linux` + `windows` jobs, plus NSIS/deb/AppImage/rpm in the release matrix), with the
+macOS-only pieces cfg-gated — but neither has been validated on a real desktop yet.
 
 | Area | Status |
 |---|---|
 | Tray popover | ✅ cfg-gated: NSPanel on macOS, plain window + tray **menu** fallback elsewhere (appindicator delivers no click events) |
-| Shell | ✅ user's `$SHELL` everywhere (zsh/bash/fish; `sh` fallback) |
-| Open editor / file manager / terminal | ✅ per-platform (`open` / `xdg-open` + terminal-emulator detection / `explorer`) |
-| Process control | ✅ POSIX process groups work on Linux; ❌ Windows needs Job Objects / `taskkill /T` |
-| Postgres binaries | ❌ Linux distro paths (`/usr/lib/postgresql/<maj>/bin` etc.) not probed yet — only Postgres.app + PATH |
-| Window chrome | ⚠️ `titleBarStyle: Overlay` is macOS-only; Linux gets stock decorations — needs a look |
-| Packaging | ⚠️ bundle targets include deb/AppImage/rpm but artifacts are unbuilt/untested; signing story per-OS |
-| Real-desktop validation | ❌ tray, popover positioning, transparency under GNOME/KDE compositors |
+| Shell | ✅ user's `$SHELL` everywhere (zsh/bash/fish; `sh` fallback); Windows runs commands through **Git Bash** (`bash -lc`), keeping the POSIX model (`&&`, pipes, `export`) intact |
+| Open editor / file manager / terminal | ✅ per-platform (`open` / `xdg-open` + terminal-emulator detection / `explorer` / `cmd start`) |
+| Process control | ✅ POSIX process groups on macOS/Linux (`killpg`); ✅ Windows **Job Objects** (`KILL_ON_JOB_CLOSE` → OS reaps the tree on crash, so no orphan sweep needed) — see `src-tauri/src/proc.rs` |
+| Postgres binaries | ✅ Windows `C:\Program Files\PostgreSQL\<maj>\bin` probed (Git-Bash PATH form); ❌ Linux distro paths (`/usr/lib/postgresql/<maj>/bin` etc.) still not probed — only Postgres.app + PATH |
+| Pinned Node | ✅ nvm-windows / fnm / Volta layouts probed alongside asdf/nvm/fnm |
+| Window chrome | ⚠️ `titleBarStyle: Overlay` is macOS-only (traffic-light inset now gated to the `mac` class); Linux/Windows get stock decorations — needs a look |
+| Packaging | ⚠️ bundle targets include deb/AppImage/rpm/NSIS but artifacts are unbuilt/untested; signing story per-OS |
+| Real-desktop validation | ❌ tray, popover positioning, DPI, transparency on Windows and under GNOME/KDE compositors |
 
-**Effort:** Linux is *moderate* (pg-path detection + validation pass). Windows is *substantial* —
-the POSIX process-group/signal model that kills whole service trees has no direct equivalent.
+**Effort:** Linux is *moderate* (pg-path detection + validation pass). Windows is now *code-complete*
+(Job Objects replace the POSIX process-group/signal model), pending real-desktop validation.
+
+**Known Windows limitations (follow-ups):** service stop is a hard `TerminateJobObject` (no graceful
+CTRL_BREAK — a GUI app has no console); a PTY shell's background grandchildren may linger (portable-pty
+doesn't expose the child HANDLE to job-wrap); the hidden main window stays in the taskbar (no
+Accessory-mode equivalent); native (not custom) titlebar; no code-signing.
 
 ## v2+ (out of v1 scope)
 - AI-agent workflows: run multiple coding agents in parallel, each in its own isolated, running

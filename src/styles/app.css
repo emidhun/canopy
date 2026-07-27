@@ -19,9 +19,14 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 0 8px 0 80px; /* left clears the native macOS traffic lights (Overlay) */
+  padding: 0 8px; /* non-macOS: native titlebar, no traffic-light inset */
   background: var(--titlebar);
   border-bottom: 1px solid var(--border-soft);
+}
+/* macOS uses titleBarStyle: Overlay — inset the left so the toolbar clears the
+   native traffic lights (the `mac` class is set on <html> at startup). */
+.mac .topbar {
+  padding-left: 80px;
 }
 .topbar .tb-brand {
   display: flex;

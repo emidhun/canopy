@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod git;
+mod proc;
 mod services;
 mod settings;
 mod setup;
@@ -75,6 +76,8 @@ pub fn run() {
             }
 
             // headless smoke test of the process layer: WTM_SELFTEST=<svcKey>
+            // (Unix-only: it pokes pgids with killpg to verify the group died)
+            #[cfg(unix)]
             if let Ok(key) = std::env::var("WTM_SELFTEST") {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -87,7 +90,7 @@ pub fn run() {
                             let (running, pgid) = {
                                 let table = handle.state::<ProcTable>();
                                 let procs = table.procs.lock().unwrap();
-                                (procs.contains_key(&key), procs.get(&key).map(|p| p.pgid))
+                                (procs.contains_key(&key), procs.get(&key).map(|p| crate::proc::group_key(&p.group) as i32))
                             };
                             let log_len = {
                                 let table = handle.state::<ProcTable>();

@@ -1,4 +1,4 @@
-use crate::settings::{OrphanProc, ServiceCfg};
+use crate::settings::ServiceCfg;
 use crate::state::{AppState, SvcStatus};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -32,24 +32,15 @@ fn chrono_time() -> String {
     // HH:MM:SS local time without pulling in chrono
     let now = std::time::SystemTime::now();
     let secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let offset = local_utc_offset_secs();
+    let offset = crate::proc::local_utc_offset_secs();
     let local = (secs as i64 + offset).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", local / 3600, (local % 3600) / 60, local % 60)
 }
 
-fn local_utc_offset_secs() -> i64 {
-    // localtime_r-based offset; cheap and correct for display purposes
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm.tm_gmtoff as i64
-    }
-}
-
 pub struct ProcEntry {
     pub pid: u32,
-    pub pgid: i32,
+    /// process-group / job handle used to tear down the whole child tree
+    pub group: crate::proc::ProcGroup,
     pub started_at: Instant,
     pub started_unix: u64,
     /// generation guard: stop() bumps this so a stale waiter doesn't clobber state
@@ -121,7 +112,12 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
     let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: vec![line] });
 }
 
+/// Persist live service pgids so a crash can be swept on next launch. Unix-only:
+/// on Windows the Job Object's KILL_ON_JOB_CLOSE makes the OS reap the tree when
+/// Canopy dies, so there is nothing to persist or sweep.
+#[cfg(unix)]
 fn persist_orphans(app: &AppHandle) {
+    use crate::settings::OrphanProc;
     let table = app.state::<ProcTable>();
     let orphans: Vec<OrphanProc> = table
         .procs
@@ -130,7 +126,7 @@ fn persist_orphans(app: &AppHandle) {
         .iter()
         .map(|(k, p)| OrphanProc {
             svc_key: k.clone(),
-            pgid: p.pgid,
+            pgid: crate::proc::group_key(&p.group) as i32,
             spawn_time_secs: p.started_unix,
         })
         .collect();
@@ -142,6 +138,9 @@ fn persist_orphans(app: &AppHandle) {
     };
     let _ = crate::settings::save_runtime(app, &runtime);
 }
+
+#[cfg(windows)]
+fn persist_orphans(_app: &AppHandle) {}
 
 /// Resolve a service's config + worktree env (PORT etc.) from settings.
 fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, HashMap<String, String>), String> {
@@ -217,8 +216,10 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .kill_on_drop(false);
+    // isolate the child (+ its whole tree) in its own process group / job so we
+    // can tear it all down on stop (see proc.rs)
+    crate::proc::prepare_group_command(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| {
         set_status(app, key, SvcStatus::Error, None, None);
@@ -227,7 +228,17 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     })?;
 
     let pid = child.id().unwrap_or(0);
-    let pgid = pid as i32; // process_group(0) => pgid == child pid
+    // establish the group (Windows: assigns the suspended child to a Job and
+    // resumes it). On failure the child would linger — kill it and bail.
+    let group = match crate::proc::attach_group(pid) {
+        Ok(g) => g,
+        Err(e) => {
+            let _ = child.kill().await;
+            set_status(app, key, SvcStatus::Error, None, None);
+            push_log(app, key, LogLine::now("err", format!("group setup failed: {e}")));
+            return Err(format!("group setup failed: {e}"));
+        }
+    };
     let started_unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     let generation = {
@@ -235,7 +246,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
         let generation = table.next_gen();
         table.procs.lock().unwrap().insert(
             key.to_string(),
-            ProcEntry { pid, pgid, started_at: Instant::now(), started_unix, generation },
+            ProcEntry { pid, group, started_at: Instant::now(), started_unix, generation },
         );
         generation
     };
@@ -366,33 +377,32 @@ fn classify_line(text: &str, from_stderr: bool) -> &'static str {
 }
 
 pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
-    let pgid = {
+    // graceful terminate under the lock (we need the group handle); capture the
+    // generation so a restart during the grace window isn't hard-killed by us.
+    let generation = {
         let table = app.state::<ProcTable>();
         let procs = table.procs.lock().unwrap();
         match procs.get(key) {
-            Some(p) => p.pgid,
+            Some(p) => {
+                crate::proc::terminate_group(&p.group);
+                p.generation
+            }
             None => return Ok(()), // not running
         }
     };
 
     set_status(app, key, SvcStatus::Stopping, None, None);
-    unsafe {
-        libc::killpg(pgid, libc::SIGTERM);
-    }
 
-    // grace period, then SIGKILL if the group is still alive
+    // grace period, then hard kill if the *same* process is still tracked
     let app2 = app.clone();
     let key2 = key.to_string();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STOP_GRACE).await;
-        let still_tracked = {
-            let table = app2.state::<ProcTable>();
-            let procs = table.procs.lock().unwrap();
-            procs.get(&key2).map(|p| p.pgid) == Some(pgid)
-        };
-        if still_tracked {
-            unsafe {
-                libc::killpg(pgid, libc::SIGKILL);
+        let table = app2.state::<ProcTable>();
+        let procs = table.procs.lock().unwrap();
+        if let Some(p) = procs.get(&key2) {
+            if p.generation == generation {
+                crate::proc::kill_group(&p.group);
             }
         }
     });
@@ -543,7 +553,9 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
 
 /// Startup sweep: kill process groups left over from a crash. Only kills when
 /// the group leader still exists and its start time matches what we recorded
-/// (avoids killing a recycled PID).
+/// (avoids killing a recycled PID). Unix-only — on Windows KILL_ON_JOB_CLOSE
+/// makes the OS reap the tree when Canopy dies, so there are no orphans to sweep.
+#[cfg(unix)]
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
@@ -571,7 +583,12 @@ pub fn sweep_orphans(app: &AppHandle) {
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+#[cfg(windows)]
+pub fn sweep_orphans(_app: &AppHandle) {}
+
 /// Compare recorded spawn time against the process's actual start time (±5s).
+/// Unix-only (uses `ps`); only the Unix crash sweep calls it.
+#[cfg(unix)]
 pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
     let out = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])

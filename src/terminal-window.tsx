@@ -3,9 +3,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import DetachedTerminal from "./app/DetachedTerminal";
+import { applyPlatformClass } from "./platform";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/terminal.css";
+
+applyPlatformClass();
 
 const params = new URLSearchParams(location.search);
 const termId = params.get("id") ?? "";

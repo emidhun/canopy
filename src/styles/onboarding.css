@@ -22,9 +22,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 12px 0 80px; /* clears the native traffic lights */
+  padding: 0 12px; /* non-macOS: native titlebar, no traffic-light inset */
   background: var(--titlebar);
   border-bottom: 1px solid var(--border-soft);
+}
+/* macOS traffic-light inset (see app.css) */
+.mac .ob-root .ob-tb {
+  padding-left: 80px;
 }
 .ob-root .ob-tb-title {
   display: flex;
