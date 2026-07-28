@@ -9,6 +9,7 @@ import {
   ipc,
   type ProvisionEntry,
   type ProvisionFormat,
+  type AgentCfg,
   type RepoCfg,
   type ServiceCfg,
   type Settings,
@@ -30,6 +31,28 @@ const uid = (p: string) => `${p}-${++_uid}`;
 
 function emptyService(): ServiceCfg {
   return { id: "", name: "", kind: "server", command: "", cwd: "", basePort: null, env: {} };
+}
+
+let agentSeq = 0;
+function emptyAgent(): AgentCfg {
+  // ids only need to be stable and unique within the repo — they key React rows
+  // and let the lane remember which profile a running tab came from.
+  return { id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true };
+}
+
+/** One-click starting points; the command is still fully editable afterwards. */
+const PRESET_AGENTS = [
+  { name: "Claude", command: "claude" },
+  { name: "Codex", command: "codex" },
+  { name: "Gemini", command: "gemini" },
+];
+
+/** Fold a pre-multi-agent `agentCommand` into the agents list so the editor has
+    exactly one representation to work with. The legacy field is left in place
+    for older builds reading the same settings file. */
+function migrateAgents(r: RepoCfg): RepoCfg {
+  if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
+  return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
 }
 
 /* ── client-side provision model (adds stable ids for React keys) ── */
@@ -211,11 +234,12 @@ function FileCard({ card, patch, remove }: { card: FileCardT; patch: (c: FileCar
   );
 }
 
-type TabId = "general" | "services" | "commands" | "files" | "setup";
+type TabId = "general" | "services" | "agents" | "commands" | "files" | "setup";
 
 export default function SettingsView({ onClose }: { onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const tree = useStore((s) => s.tree);
+  const bumpSettings = useStore((s) => s.bumpSettings);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState<string>("app"); // "app" or repo.id
@@ -238,7 +262,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     ipc
       .getSettings()
       .then((s) => {
-        setSettings(s);
+        setSettings({ ...s, repos: s.repos.map(migrateAgents) });
         if (s.repos[0]) setSelected(s.repos[0].id);
         s.repos.forEach((r) => {
           ipc
@@ -304,6 +328,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         ...r,
         services: r.services.filter((s) => s.id.trim() && s.command.trim()),
         customCommands: (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim()),
+        agents: (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim()),
       })),
     };
     setSaving(true);
@@ -329,6 +354,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           return; // keep the view open so nothing is silently lost
         }
       }
+      bumpSettings(); // the agent lane re-reads its launcher list off this
       showToast("Settings saved");
       onClose();
     } catch (e) {
@@ -403,6 +429,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const TABS: { id: TabId; label: string; ic: typeof Cog; count?: number; isNew?: boolean }[] = [
     { id: "general", label: "General", ic: Cog },
     { id: "services", label: "Services", ic: Server, count: repo?.services.length },
+    { id: "agents", label: "Agents", ic: Sparkle, count: repo?.agents?.length, isNew: true },
     { id: "commands", label: "Commands", ic: Terminal, count: repo?.customCommands?.length },
     { id: "files", label: "Files", ic: File, count: cards.length, isNew: true },
     { id: "setup", label: "Setup", ic: Cube, count: setup.length },
@@ -633,16 +660,87 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
                     </div>
                     <div className="cfg-row">
                       <label className="fld-label">
-                        <Sparkle size={12} /> Agent command
+                        <Sparkle size={12} /> Coding agents
                       </label>
-                      <input
-                        className="input mono"
-                        value={repo.agentCommand || ""}
-                        placeholder="claude (also: aider, codex, gemini…)"
-                        onChange={(e) => patchRepo({ agentCommand: e.target.value })}
-                      />
+                      <span className="cfg-xref">
+                        {repo.agents?.length
+                          ? `${repo.agents.length} configured — ${repo.agents.map((a) => a.name || "unnamed").join(", ")}`
+                          : "None configured yet — the lane falls back to claude."}
+                        <button className="btn sm ghost" onClick={() => setTab("agents")}>
+                          <Sparkle size={13} /> Manage agents
+                        </button>
+                      </span>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {tab === "agents" && (
+                <div className="rd-pane">
+                  <div className="pane-title">
+                    <div>
+                      <h3>
+                        Coding agents <span className="newpill">NEW</span>
+                      </h3>
+                      <p>
+                        Launchers in the agent lane's <b>+</b> menu — run as many at once as you like, each in its own tab. Commands run in the
+                        worktree with <span className="mono">$CANOPY_CONTEXT_FILE</span> exported.
+                      </p>
+                    </div>
+                    <div className="pane-actions">
+                      {PRESET_AGENTS.map((p) => (
+                        <button
+                          key={p.name}
+                          className="btn sm ghost"
+                          title={`Add ${p.name} (${p.command})`}
+                          onClick={() => patchRepo({ agents: [...(repo.agents || []), { ...emptyAgent(), ...p }] })}
+                        >
+                          <Plus size={13} />
+                          {p.name}
+                        </button>
+                      ))}
+                      <button className="btn sm primary" onClick={() => patchRepo({ agents: [...(repo.agents || []), emptyAgent()] })}>
+                        <Plus size={13} />
+                        Add agent
+                      </button>
+                    </div>
+                  </div>
+                  {(repo.agents || []).length === 0 ? (
+                    <div className="empty">
+                      <span>
+                        No agents configured — the lane falls back to <code>claude</code>. Add one above, or e.g. <code>Codex</code> ={" "}
+                        <code>codex</code>.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="set-svc-table">
+                      {(repo.agents || []).map((a, ai) => {
+                        const cur = repo.agents || [];
+                        const upd = (p: Partial<AgentCfg>) => patchRepo({ agents: cur.map((x, i) => (i === ai ? { ...x, ...p } : x)) });
+                        return (
+                          <div className="agent-row" key={a.id || ai}>
+                            <span className="ag-ic">
+                              <Sparkle size={13} />
+                            </span>
+                            <input className="input" value={a.name} placeholder="Claude" onChange={(e) => upd({ name: e.target.value })} />
+                            <input
+                              className="input mono"
+                              value={a.command}
+                              placeholder="claude --permission-mode acceptEdits"
+                              onChange={(e) => upd({ command: e.target.value })}
+                            />
+                            <label className="set-check compact" title="Pass the worktree handoff (task, PR, issue, ports, database) as the CLI's first prompt argument">
+                              <input type="checkbox" checked={a.promptOnLaunch !== false} onChange={(e) => upd({ promptOnLaunch: e.target.checked })} />
+                              Send prompt
+                            </label>
+                            <button className="del" title="Remove agent" onClick={() => patchRepo({ agents: cur.filter((_, i) => i !== ai) })}>
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
