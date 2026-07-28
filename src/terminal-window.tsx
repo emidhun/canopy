@@ -11,11 +11,13 @@ const params = new URLSearchParams(location.search);
 const termId = params.get("id") ?? "";
 const cwd = params.get("cwd") ?? "";
 const branch = params.get("branch") ?? "";
+const title = params.get("title") || "Terminal";
+const command = params.get("cmd") || undefined;
 
 document.body.style.background = "var(--panel-2)";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <DetachedTerminal termId={termId} cwd={cwd} branch={branch} />
+    <DetachedTerminal termId={termId} cwd={cwd} branch={branch} title={title} command={command} />
   </React.StrictMode>,
 );

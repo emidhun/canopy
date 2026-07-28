@@ -6,10 +6,27 @@
 // running — switching worktrees or toggling the Agent/Shell tab keeps the shell
 // (and any agent in it) alive; we rehydrate from the backend buffer on return.
 import { useEffect, useRef } from "react";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { hasBackend, ipc, on } from "../ipc";
+
+/** Open a URL in the user's browser (never in the app's own webview). */
+async function openExternal(url: string) {
+  if (!hasBackend()) {
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+}
+
+// File paths as build tools and agents print them: `src/app/Foo.tsx:12:3`,
+// `./x/y.ts`, `/abs/path.rs`. Requires a slash and an extension so ordinary
+// prose ("2:30", "v1.2") isn't turned into a link. The optional :line:col tail
+// is captured so it can be stripped before the path is resolved.
+const FILE_RE = /(?:^|[\s"'`([<])((?:\.{0,2}\/)?(?:[\w.@~+-]+\/)+[\w.@+-]+\.\w{1,8})((?::\d+){0,2})/g;
 
 /** base64 (raw PTY bytes) → Uint8Array for xterm.write */
 function decode(b64: string): Uint8Array {
@@ -25,8 +42,25 @@ const THEME = {
   cursor: "#5cc7cd", // --accent
   cursorAccent: "#191a1d",
   selectionBackground: "rgba(92,199,205,.25)",
+  // Keep the terminal's ANSI colors explicit. Supplying only black/brightBlack
+  // lets renderer/platform defaults vary, which made colored CLI output appear
+  // monochrome after the lane theme was introduced.
   black: "#191a1d",
+  red: "#f07178",
+  green: "#7bd88f",
+  yellow: "#f5c76b",
+  blue: "#82aaff",
+  magenta: "#c792ea",
+  cyan: "#5cc7cd",
+  white: "#cfd1d6",
   brightBlack: "#7c7e86",
+  brightRed: "#ff8f91",
+  brightGreen: "#a6e3a1",
+  brightYellow: "#ffd580",
+  brightBlue: "#9cc3ff",
+  brightMagenta: "#e0b7ff",
+  brightCyan: "#8ae7eb",
+  brightWhite: "#f4f5f7",
 };
 
 export default function TerminalPane({
@@ -70,6 +104,44 @@ export default function TerminalPane({
     term.open(host);
     termRef.current = term;
     fitRef.current = fit;
+
+    // http(s) links → the user's browser, never this webview.
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        event?.preventDefault();
+        openExternal(uri).catch((e) => term.write(`\r\n\x1b[31mcouldn't open link: ${String(e)}\x1b[0m\r\n`));
+      }),
+    );
+
+    // File paths → the configured editor. The backend resolves them against the
+    // worktree root and refuses anything that escapes it, so a path printed by
+    // some arbitrary process can't be used to open a file elsewhere on disk.
+    const fileLinks = term.registerLinkProvider({
+      provideLinks(y, cb) {
+        const line: IBufferLine | undefined = term.buffer.active.getLine(y - 1);
+        if (!line) return cb(undefined);
+        const text = line.translateToString(true);
+        const links: ILink[] = [];
+        for (const m of text.matchAll(FILE_RE)) {
+          const path = m[1];
+          // m.index points at the leading delimiter (if any), not the path
+          const start = (m.index ?? 0) + m[0].length - path.length - m[2].length;
+          links.push({
+            // xterm columns are 1-based and ranges are inclusive
+            range: { start: { x: start + 1, y }, end: { x: start + path.length + m[2].length, y } },
+            text: path + m[2],
+            activate: (event) => {
+              event?.preventDefault();
+              // the :line:col tail is dropped — the editor command takes a path
+              ipc.openFileInEditor(cwd, path).catch((e) => {
+                term.write(`\r\n\x1b[31mcouldn't open ${path}: ${String(e)}\x1b[0m\r\n`);
+              });
+            },
+          });
+        }
+        cb(links.length ? links : undefined);
+      },
+    });
 
     // GPU rendering — far faster under heavy output. Fall back to the DOM
     // renderer if WebGL is unavailable or its context is lost.
@@ -163,6 +235,7 @@ export default function TerminalPane({
       disposed = true;
       unlistenData?.();
       unlistenExit?.();
+      fileLinks.dispose();
       onDataDisp.dispose();
       ro.disconnect();
       term.dispose();
