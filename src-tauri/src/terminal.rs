@@ -86,6 +86,15 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+/// The kind of a session id — `"agent"` or `"shell"`. A worktree holds any
+/// number of each, so ids carry an instance suffix (`…::agent#3`); the wtKey is
+/// a filesystem path and never contains `::`, so the last segment is the kind.
+/// Ids from before multi-session (`…::agent`) parse the same way.
+fn kind_of(id: &str) -> &str {
+    let last = id.rsplit("::").next().unwrap_or("");
+    last.split('#').next().unwrap_or("")
+}
+
 /// Open (or no-op if already open) a terminal session `id` in `cwd`. With no
 /// `command` it runs an interactive login shell; with one it runs that command
 /// under a login shell (so the session ends — firing `terminal:exit` — when the
@@ -132,6 +141,12 @@ pub fn open(
     }
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
+    // Every agent profile can read the same durable handoff even when it opts
+    // out of positional prompts because its CLI has a different interface.
+    if kind_of(id) == "agent" {
+        cmd.env("CANOPY_CONTEXT_FILE", std::path::Path::new(cwd).join(".canopy/context.md"));
+        cmd.env("CANOPY_WORKTREE", cwd);
+    }
     if let Some(bin) = crate::toolchain::pinned_node_bin(cwd) {
         let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("PATH", format!("{bin}:{path}"));
@@ -333,6 +348,21 @@ pub fn sweep_orphans(app: &AppHandle) {
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::kind_of;
+
+    #[test]
+    fn kind_of_reads_multi_session_ids() {
+        assert_eq!(kind_of("/Users/me/wt/feature#1::agent#3"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/feature#1::shell#12"), "shell");
+        // ids written before multi-session carried no instance suffix
+        assert_eq!(kind_of("/Users/me/wt/feature::agent"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/feature::shell"), "shell");
+        assert_eq!(kind_of("nonsense"), "nonsense");
+    }
+}
+
 /// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
 /// child makes its reader hit EOF, which removes the session and emits
 /// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
@@ -340,7 +370,7 @@ pub fn sweep_orphans(app: &AppHandle) {
 pub fn sweep_idle(table: &TermTable) {
     let mut sessions = table.sessions.lock().unwrap();
     for (id, sess) in sessions.iter_mut() {
-        if id.ends_with("::shell") && sess.last_activity.elapsed() > IDLE_LIMIT {
+        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
             let _ = sess.child.kill();
         }
     }
