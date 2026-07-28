@@ -324,12 +324,20 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     if (!settings) return;
     const cleaned: Settings = {
       ...settings,
-      repos: settings.repos.map((r) => ({
-        ...r,
-        services: r.services.filter((s) => s.id.trim() && s.command.trim()),
-        customCommands: (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim()),
-        agents: (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim()),
-      })),
+      repos: settings.repos.map((r) => {
+        const agents = (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim());
+        return {
+          ...r,
+          services: r.services.filter((s) => s.id.trim() && s.command.trim()),
+          customCommands: (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim()),
+          agents,
+          // Keep the legacy field in step with the list it was migrated into.
+          // Left stale, deleting the migrated profile would leave the old command
+          // behind, and the lane — which falls back to it when the list is empty —
+          // would keep launching an agent the settings UI no longer shows.
+          agentCommand: agents[0]?.command ?? "",
+        };
+      }),
     };
     setSaving(true);
     try {

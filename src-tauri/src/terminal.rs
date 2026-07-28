@@ -52,9 +52,24 @@ pub struct PtySession {
     started_unix: u64,
 }
 
+/// The final scrollback of a session whose process has exited, kept so the UI
+/// can still show what it printed. The PTY, child and reader are all gone by
+/// then — this is just bytes.
+struct ExitedBuffer {
+    scrollback: Vec<u8>,
+    seq: u64,
+    at: Instant,
+}
+
+/// How many exited sessions keep their output. Past this the oldest is dropped,
+/// so a long session of starting and stopping agents can't grow without bound.
+const EXITED_CAP: usize = 24;
+
 #[derive(Default)]
 pub struct TermTable {
     pub sessions: Mutex<HashMap<String, PtySession>>,
+    /// scrollback of exited sessions, by id (see `ExitedBuffer`)
+    exited: Mutex<HashMap<String, ExitedBuffer>>,
     next_gen: AtomicU64,
 }
 
@@ -115,6 +130,9 @@ pub fn open(
     if sessions.contains_key(id) {
         return Ok(()); // already running — idempotent attach
     }
+    // A restart reuses the id; the previous run's retained output would
+    // otherwise be replayed as though the new process had printed it.
+    table.exited.lock().unwrap().remove(id);
 
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -195,19 +213,29 @@ pub fn open(
                     // append to scrollback and advance the cursor atomically, so
                     // the emitted seq always matches a chunk boundary.
                     let mut seq = 0;
+                    let mut ours = false;
                     if let Some(table) = app.try_state::<TermTable>() {
                         if let Some(sess) = table.sessions.lock().unwrap().get_mut(&id) {
-                            sess.scrollback.extend(chunk.iter().copied());
-                            let overflow = sess.scrollback.len().saturating_sub(SCROLLBACK_CAP);
-                            if overflow > 0 {
-                                sess.scrollback.drain(0..overflow);
+                            // Same generation guard the exit path uses: a restart
+                            // reopens this id, and bytes this (now stale) reader
+                            // drains afterwards must not be appended to — or
+                            // emitted as — the replacement session's output.
+                            if sess.generation == generation {
+                                sess.scrollback.extend(chunk.iter().copied());
+                                let overflow = sess.scrollback.len().saturating_sub(SCROLLBACK_CAP);
+                                if overflow > 0 {
+                                    sess.scrollback.drain(0..overflow);
+                                }
+                                sess.seq += n as u64;
+                                sess.last_activity = Instant::now();
+                                seq = sess.seq;
+                                ours = true;
                             }
-                            sess.seq += n as u64;
-                            sess.last_activity = Instant::now();
-                            seq = sess.seq;
                         }
                     }
-                    let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                    if ours {
+                        let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                    }
                 }
                 Err(_) => break,
             }
@@ -219,7 +247,20 @@ pub fn open(
             let mut sessions = table.sessions.lock().unwrap();
             match sessions.get(&id) {
                 Some(s) if s.generation == generation => {
-                    sessions.remove(&id);
+                    // Keep what it printed: the UI shows an exited tab read-only
+                    // until it's closed or restarted, and without this the output
+                    // would die with the session the moment the process ended.
+                    let sess = sessions.remove(&id).unwrap();
+                    let mut exited = table.exited.lock().unwrap();
+                    if exited.len() >= EXITED_CAP {
+                        if let Some(oldest) = exited.iter().min_by_key(|(_, b)| b.at).map(|(k, _)| k.clone()) {
+                            exited.remove(&oldest);
+                        }
+                    }
+                    exited.insert(
+                        id.clone(),
+                        ExitedBuffer { scrollback: sess.scrollback.into_iter().collect(), seq: sess.seq, at: Instant::now() },
+                    );
                     true
                 }
                 _ => false,
@@ -256,20 +297,29 @@ pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), S
 }
 
 /// Scrollback snapshot + its end cursor, for a re-mounting window to rehydrate.
-/// `None` when the session doesn't exist (never opened, or exited).
+/// Falls back to the retained buffer of an exited session, so a tab that ended
+/// while its worktree wasn't selected can still be read. `None` only when the id
+/// was never opened (or has since been closed).
 pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
-    let sessions = table.sessions.lock().unwrap();
-    sessions.get(id).map(|s| {
+    if let Some(s) = table.sessions.lock().unwrap().get(id) {
         let bytes: Vec<u8> = s.scrollback.iter().copied().collect();
-        BufferSnapshot { buffer: b64(&bytes), seq: s.seq }
-    })
+        return Some(BufferSnapshot { buffer: b64(&bytes), seq: s.seq });
+    }
+    table
+        .exited
+        .lock()
+        .unwrap()
+        .get(id)
+        .map(|b| BufferSnapshot { buffer: b64(&b.scrollback), seq: b.seq })
 }
 
-/// Kill and drop a session.
+/// Kill and drop a session, including any retained output — closing a tab is the
+/// point at which the user is done with it.
 pub fn close(table: &TermTable, id: &str) {
     if let Some(mut sess) = table.sessions.lock().unwrap().remove(id) {
         let _ = sess.child.kill();
     }
+    table.exited.lock().unwrap().remove(id);
 }
 
 /// Close a session and refresh the persisted orphan list (command path).
@@ -286,6 +336,7 @@ pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
     for id in &ids {
         close(table, id);
     }
+    table.exited.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
     if !ids.is_empty() {
         persist_orphans(app);
     }
@@ -297,6 +348,7 @@ pub fn close_all(table: &TermTable) {
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
     }
+    table.exited.lock().unwrap().clear();
 }
 
 /// Snapshot live sessions' pgids into persisted runtime state, so a crash can be

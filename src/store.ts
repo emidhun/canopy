@@ -309,6 +309,17 @@ export const useStore = create<State>((set, get) => {
     },
     restartSession: (id) => {
       sessionStartedAt[id] = Date.now();
+      // A detached tab renders a placeholder inline and its window won't remount
+      // on a `gen` bump, so nothing would actually create the PTY — the tab would
+      // just claim to be running. Re-dock first; the pane then mounts and starts it.
+      if (get().detachedTerms.has(id)) {
+        closeDetachedWindow(id);
+        set((st) => {
+          const detachedTerms = new Set(st.detachedTerms);
+          detachedTerms.delete(id);
+          return { detachedTerms };
+        });
+      }
       set((st) => ({
         sessions: {
           ...st.sessions,

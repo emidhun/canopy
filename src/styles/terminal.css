@@ -222,20 +222,17 @@
 .lt-scroll::-webkit-scrollbar {
   display: none;
 }
+/* the chip is a wrapper: the tab itself and its close action are sibling
+   buttons, since a button can't legally nest inside another button */
 .lt {
   flex: 0 0 auto;
-  max-width: 150px;
+  max-width: 160px;
   height: 28px;
-  padding: 0 5px 0 9px;
+  padding: 0 5px 0 0;
   border-radius: 8px;
   color: var(--faint);
-  font-family: var(--sans);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   transition: background 0.1s, color 0.1s;
   user-select: none;
 }
@@ -249,6 +246,25 @@
 }
 .lt.ended {
   opacity: 0.55;
+}
+.lt .lt-main {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 4px 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: 600 12px var(--sans);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lt .lt-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .lt .lt-n {
   overflow: hidden;
@@ -266,28 +282,38 @@
   background: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-dim);
 }
-/* the close affordance replaces the status dot on hover — same footprint, so
-   tab widths never jump under the pointer */
 .lt .lt-x {
   display: none;
   flex: none;
-  width: 16px;
-  height: 16px;
-  margin-left: -3px;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
   border-radius: 5px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
   align-items: center;
   justify-content: center;
-  color: var(--faint);
 }
-.lt:hover .lt-x {
+/* the close button replaces the status dot on hover — same footprint, so tab
+   widths never jump under the pointer. Keyboard focus reveals it too, or it
+   would be unreachable without a mouse. */
+.lt:hover .lt-x,
+.lt:focus-within .lt-x {
   display: inline-flex;
 }
-.lt:hover .lt-d {
+.lt:hover .lt-d,
+.lt:focus-within .lt-d {
   display: none;
 }
 .lt .lt-x:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text);
+}
+.lt .lt-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .lt-add {
   position: relative;
@@ -400,6 +426,35 @@
   visibility: hidden;
   z-index: 0;
   pointer-events: none;
+}
+
+/* ── ended session: retained output, read-only, above a restart/close bar ── */
+.term-ended {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.term-ended .te-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px 8px;
+  color: var(--faint);
+  font: 600 11.5px var(--sans);
+}
+.term-ended .te-bar .te-t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term-ended .te-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  opacity: 0.75; /* reads as history, not a live session */
 }
 
 /* ── agent output (structured transcript over the PTY) ── */

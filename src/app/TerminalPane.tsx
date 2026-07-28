@@ -69,6 +69,7 @@ export default function TerminalPane({
   cwd,
   hidden,
   command,
+  readOnly,
 }: {
   termId: string;
   cwd: string;
@@ -76,6 +77,10 @@ export default function TerminalPane({
   /** run this command instead of an interactive shell; the session ends (fires
       terminal:exit) when it exits — used to track agent lifecycle */
   command?: string;
+  /** Show a finished session's retained output without opening a PTY. Opening
+      one here would re-run `command`, which is exactly what the user didn't
+      ask for; input is swallowed since there's nothing to write to. */
+  readOnly?: boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -183,7 +188,7 @@ export default function TerminalPane({
 
     // keystrokes (and terminal reports) → PTY. The PTY echoes; no local echo.
     const onDataDisp = term.onData((data) => {
-      if (suppressOut) return;
+      if (suppressOut || readOnly) return;
       ipc.terminalWrite(termId, data).catch(() => {});
     });
 
@@ -208,7 +213,9 @@ export default function TerminalPane({
       unlistenExit = u2;
 
       try {
-        await ipc.terminalOpen(termId, cwd, term.cols, term.rows, command);
+        // read-only replays a finished session's retained buffer; opening would
+        // spawn a process the user didn't ask to restart
+        if (!readOnly) await ipc.terminalOpen(termId, cwd, term.cols, term.rows, command);
         const snap = await ipc.terminalGetBuffer(termId);
         if (disposed || !termRef.current) return;
         const baseline = snap?.seq ?? 0;
@@ -230,7 +237,7 @@ export default function TerminalPane({
     const ro = new ResizeObserver(() => {
       if (hidden || !host.clientWidth || !host.clientHeight) return;
       safeFit();
-      ipc.terminalResize(termId, term.cols, term.rows).catch(() => {});
+      if (!readOnly) ipc.terminalResize(termId, term.cols, term.rows).catch(() => {});
     });
     ro.observe(host);
 
@@ -246,7 +253,7 @@ export default function TerminalPane({
       fitRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [termId, cwd, command]);
+  }, [termId, cwd, command, readOnly]);
 
   // re-fit when the pane becomes visible (tab toggle) or the lane resizes
   useEffect(() => {

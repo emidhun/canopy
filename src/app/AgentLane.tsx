@@ -30,27 +30,41 @@ function DetachedPlaceholder({ onBack }: { onBack: () => void }) {
   );
 }
 
-/** Shown for a tab whose PTY has exited and whose output this lane instance
-    never rendered (e.g. it exited, then the worktree was switched away and
-    back). Mounting a terminal here would silently re-run the command. */
-function EndedPlaceholder({ session, onRestart, onClose }: { session: LaneSession; onRestart: () => void; onClose: () => void }) {
+/** A tab whose process has exited: its output stays readable (the backend keeps
+    the final scrollback), shown read-only above a bar offering restart/close.
+    The pane must never *open* a session here — that would re-run the command
+    without the user asking. */
+function EndedSession({
+  session,
+  cwd,
+  hidden,
+  onRestart,
+  onClose,
+}: {
+  session: LaneSession;
+  cwd: string;
+  hidden: boolean;
+  onRestart: () => void;
+  onClose: () => void;
+}) {
   return (
-    <div className="term-ph">
-      <span className="ph-ic">
-        {session.kind === "agent" ? <Sparkle size={19} /> : <TerminalIcon size={19} />}
-      </span>
-      <span className="ph-t">{session.title} ended</span>
-      <span className="ph-s">The session's process exited. Restart it in place, or close the tab.</span>
-      <span style={{ display: "flex", gap: 8 }}>
+    <div className="term-ended">
+      <div className="te-bar">
+        {session.kind === "agent" ? <Sparkle size={12} /> : <TerminalIcon size={12} />}
+        <span className="te-t">{session.title} ended</span>
+        <span className="grow" />
         <button className="btn-sm" onClick={onRestart}>
-          <Play size={13} />
+          <Play size={12} />
           Restart
         </button>
         <button className="btn-sm" onClick={onClose}>
-          <X size={13} />
-          Close tab
+          <X size={12} />
+          Close
         </button>
-      </span>
+      </div>
+      <div className="te-body">
+        <TerminalPane key={session.gen} termId={session.id} cwd={cwd} hidden={hidden} readOnly />
+      </div>
     </div>
   );
 }
@@ -145,16 +159,6 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
 
   const active = sessions.find((s) => s.id === activeId) ?? sessions[0] ?? null;
   const liveAgents = sessions.filter((s) => s.kind === "agent" && s.running).length;
-
-  // Ids whose terminal this lane instance has actually rendered. An exited tab
-  // outside this set gets the "ended" placeholder instead of a TerminalPane —
-  // mounting one would re-open the PTY and re-run the command. Recorded in an
-  // effect rather than during render (render must stay side-effect free); the
-  // `s.running` check below covers the frame before this runs.
-  const rendered = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    for (const s of sessions) if (s.running) rendered.current.add(s.id);
-  }, [sessions]);
 
   useEffect(() => {
     if (!hasBackend()) return;
@@ -300,10 +304,34 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
   /** "Claude", then "Claude 2", … — tab labels stay tellable apart at a glance.
       Reads live store state, not this render's snapshot, so two launches in the
       same tick can't both claim the unsuffixed name. */
+  /** Arrow keys move between tabs; Home/End jump to the ends. Selection follows
+      focus, which is the expected behaviour for a tablist of live terminals. */
+  const onTabKey = (e: React.KeyboardEvent, id: string) => {
+    const keys = ["ArrowRight", "ArrowLeft", "Home", "End"];
+    if (!keys.includes(e.key)) return;
+    const i = sessions.findIndex((s) => s.id === id);
+    if (i < 0) return;
+    e.preventDefault();
+    const to =
+      e.key === "Home"
+        ? 0
+        : e.key === "End"
+          ? sessions.length - 1
+          : (i + (e.key === "ArrowRight" ? 1 : -1) + sessions.length) % sessions.length;
+    const next = sessions[to];
+    if (!next) return;
+    setActiveTerm(wt.wtKey, next.id);
+    requestAnimationFrame(() => tabsRef.current?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(next.id)}"]`)?.focus());
+  };
+
   const uniqueTitle = (base: string) => {
     const live = useStore.getState().sessions[wt.wtKey] ?? NO_SESSIONS;
-    const taken = live.filter((s) => s.title === base || s.title.startsWith(`${base} `)).length;
-    return taken === 0 ? base : `${base} ${taken + 1}`;
+    // probe for the first free suffix rather than counting matches: closing
+    // "Claude 2" while "Claude 3" is open would otherwise hand out a second
+    // "Claude 3", leaving two tabs indistinguishable.
+    const taken = new Set(live.map((s) => s.title));
+    if (!taken.has(base)) return base;
+    for (let n = 2; ; n++) if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
   };
 
   // Start a coding agent as its OWN PTY session (the terminal *is* the chat).
@@ -515,30 +543,34 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
           would just be an empty bar — it appears with the first tab. */}
       {sessions.length > 0 && (
       <div className="lane-tabs">
-        <div className="lt-scroll" ref={tabsRef}>
+        <div className="lt-scroll" ref={tabsRef} role="tablist" aria-label="Terminal sessions">
           {sessions.map((s) => (
             <span
               key={s.id}
               className={"lt" + (s.id === active?.id ? " on" : "") + (s.running ? "" : " ended")}
-              title={`${s.title}${s.running ? "" : " — ended"}`}
-              onClick={() => setActiveTerm(wt.wtKey, s.id)}
               onAuxClick={(e) => {
                 if (e.button === 1) closeSession(s.id); // middle-click closes, as in an editor
               }}
             >
-              {s.kind === "agent" ? <Sparkle size={11} /> : <TerminalIcon size={11} />}
-              <span className="lt-n">{s.title}</span>
-              <span className={"lt-d" + (s.running ? " live" : "")} />
-              <span
-                className="lt-x"
-                title="Close tab"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeSession(s.id);
-                }}
+              {/* roving tabindex: only the selected tab is in the tab order, and
+                  arrows move between them — the standard tablist pattern */}
+              <button
+                className="lt-main"
+                role="tab"
+                data-tab={s.id}
+                aria-selected={s.id === active?.id}
+                tabIndex={s.id === active?.id ? 0 : -1}
+                title={`${s.title}${s.running ? "" : " — ended"}`}
+                onClick={() => setActiveTerm(wt.wtKey, s.id)}
+                onKeyDown={(e) => onTabKey(e, s.id)}
               >
+                {s.kind === "agent" ? <Sparkle size={11} /> : <TerminalIcon size={11} />}
+                <span className="lt-n">{s.title}</span>
+                <span className={"lt-d" + (s.running ? " live" : "")} />
+              </button>
+              <button className="lt-x" title="Close tab" aria-label={`Close ${s.title}`} onClick={() => closeSession(s.id)}>
                 <X size={11} />
-              </span>
+              </button>
             </span>
           ))}
         </div>
@@ -576,15 +608,29 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
             sessions.map((s) => {
               const on = s.id === active?.id;
               return (
-                <div className={"term-body" + (on ? "" : " hidden")} key={s.id}>
+                <div
+                  className={"term-body" + (on ? "" : " hidden")}
+                  key={s.id}
+                  role="tabpanel"
+                  aria-label={s.title}
+                  // NB: not the `hidden` attribute — that is display:none, which
+                  // leaves xterm's renderer without dimensions (see terminal.css)
+                  aria-hidden={!on}
+                >
                   {detached.has(s.id) ? (
                     <DetachedPlaceholder onBack={() => bringBack(s.id)} />
-                  ) : s.running || rendered.current.has(s.id) ? (
+                  ) : s.running ? (
                     // `gen` in the key forces a full remount on restart, which is
                     // what re-creates the PTY under the same id.
                     <TerminalPane key={s.gen} termId={s.id} cwd={wt.path} hidden={!on} command={s.command} />
                   ) : (
-                    <EndedPlaceholder session={s} onRestart={() => restartSession(s.id)} onClose={() => closeSession(s.id)} />
+                    <EndedSession
+                      session={s}
+                      cwd={wt.path}
+                      hidden={!on}
+                      onRestart={() => restartSession(s.id)}
+                      onClose={() => closeSession(s.id)}
+                    />
                   )}
                 </div>
               );
