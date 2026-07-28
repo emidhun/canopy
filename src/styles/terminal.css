@@ -66,7 +66,12 @@
 
 /* ── the lane ── */
 .lane {
-  flex: 0 1 auto;
+  /* The dragged width is authoritative — hence `flex: none`, not `0 1 auto`.
+     With flex-shrink enabled, `.main`'s intrinsic content width shrinks the lane
+     below the width state says it has, and the grip stops tracking the pointer.
+     `.main` (flex:1, min-width) absorbs the slack instead; the max-width rules
+     below are the real ceiling. */
+  flex: none;
   width: 372px;
   border-left: 1px solid var(--border-soft);
   background: var(--sidebar);
@@ -192,19 +197,37 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.lane-seg {
+/* ── session tab strip ──────────────────────────────────────────────────────
+   One tab per live PTY (agents and shells side by side). The strip scrolls
+   horizontally rather than wrapping, so the terminal below never shifts height
+   as tabs are opened. */
+.lane-tabs {
   flex: none;
   display: flex;
-  gap: 3px;
-  padding: 9px 11px;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 8px 7px 11px;
   border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
 }
-.lane-seg button {
+.lt-scroll {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 1px;
+}
+.lt-scroll::-webkit-scrollbar {
+  display: none;
+}
+.lt {
+  flex: 0 0 auto;
+  max-width: 150px;
   height: 28px;
+  padding: 0 5px 0 9px;
   border-radius: 8px;
-  border: 0;
-  background: none;
   color: var(--faint);
   font-family: var(--sans);
   font-size: 12px;
@@ -212,17 +235,125 @@
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 7px;
+  gap: 6px;
   transition: background 0.1s, color 0.1s;
+  user-select: none;
 }
-.lane-seg button:hover {
+.lt:hover {
   background: rgba(255, 255, 255, 0.05);
   color: var(--dim);
 }
-.lane-seg button.on {
+.lt.on {
   background: var(--btn);
   color: var(--text);
+}
+.lt.ended {
+  opacity: 0.55;
+}
+.lt .lt-n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lt .lt-d {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.lt .lt-d.live {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+/* the close affordance replaces the status dot on hover — same footprint, so
+   tab widths never jump under the pointer */
+.lt .lt-x {
+  display: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: -3px;
+  border-radius: 5px;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+}
+.lt:hover .lt-x {
+  display: inline-flex;
+}
+.lt:hover .lt-d {
+  display: none;
+}
+.lt .lt-x:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+.lt-add {
+  position: relative;
+  flex: none;
+}
+.lt-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 168px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+.lt-menu-h {
+  padding: 5px 8px 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.lt-menu button {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--dim);
+  font: 600 12px var(--sans);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lt-menu button:hover {
+  background: var(--btn);
+  color: var(--text);
+}
+.lt-menu-sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border-soft);
+}
+.lane-rail .ib {
+  position: relative;
+}
+.rail-n {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #0d1113;
+  font: 700 9px var(--sans);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .lane-body {
   flex: 1;
@@ -263,6 +394,7 @@
 .xterm-host {
   width: 100%;
   height: 100%;
+  color-scheme: dark;
 }
 .term-body.hidden {
   visibility: hidden;
@@ -374,6 +506,16 @@
 .ag-pip.busy svg {
   animation: spin 1.5s linear infinite;
 }
+/* several agents in one worktree: the pip widens to carry the count */
+.ag-pip .ag-n {
+  font: 700 9px var(--sans);
+  margin-left: 2px;
+}
+.ag-pip:has(.ag-n) {
+  width: auto;
+  padding: 0 4px;
+  grid-auto-flow: column;
+}
 .ag-pip.wait {
   animation: pulse 1.6s ease-in-out infinite;
 }
@@ -451,6 +593,34 @@
 .ctx-title-in::placeholder {
   color: var(--faint);
 }
+.ctx-references {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px 8px;
+  padding: 5px 14px 11px;
+}
+.ctx-references label {
+  align-self: start;
+  padding-top: 7px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+}
+.ctx-references input,
+.ctx-references textarea {
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--dim);
+  font: 11.5px var(--sans);
+  padding: 6px 8px;
+  outline: none;
+}
+.ctx-references textarea { min-height: 45px; resize: vertical; }
+.ctx-references textarea { grid-column: 2; }
+.ctx-references input:focus,
+.ctx-references textarea:focus { border-color: var(--accent); }
 .ctx-md {
   width: 100%;
   min-height: 104px;
@@ -540,6 +710,16 @@
   border-top: 1px solid var(--border-soft);
   background: rgba(0, 0, 0, 0.14);
 }
+.ctx-runtime {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px 11px;
+  color: var(--faint);
+  font: 10.5px var(--mono);
+}
+.ctx-runtime b { width: 100%; font: 700 9.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; }
+.ctx-runtime span { padding: 3px 5px; border-radius: 4px; background: var(--panel-2); }
 .ctx-foot .hint {
   font-size: 11px;
   color: var(--faint);
@@ -607,6 +787,14 @@
 }
 .term-ph > * {
   flex: none;
+}
+/* the idle lane offers one launcher per configured agent — they wrap so a repo
+   with several agents doesn't push the shell button out of view */
+.term-ph .ph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: center;
 }
 .term-ph .ph-ic {
   width: 40px;
