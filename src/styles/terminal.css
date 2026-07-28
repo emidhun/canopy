@@ -349,7 +349,7 @@
   padding: 0 3px;
   border-radius: 7px;
   background: var(--accent);
-  color: #0d1113;
+  color: var(--on-accent);
   font: 700 9px var(--sans);
   display: inline-flex;
   align-items: center;

@@ -356,6 +356,9 @@ mod tests {
     fn kind_of_reads_multi_session_ids() {
         assert_eq!(kind_of("/Users/me/wt/feature#1::agent#3"), "agent");
         assert_eq!(kind_of("/Users/me/wt/feature#1::shell#12"), "shell");
+        // ids carry a per-launch nonce so a webview reload can't reuse one
+        assert_eq!(kind_of("/Users/me/wt/x::agent#mfz1a2b-4"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/x::shell#mfz1a2b-11"), "shell");
         // ids written before multi-session carried no instance suffix
         assert_eq!(kind_of("/Users/me/wt/feature::agent"), "agent");
         assert_eq!(kind_of("/Users/me/wt/feature::shell"), "shell");

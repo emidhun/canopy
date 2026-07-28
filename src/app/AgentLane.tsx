@@ -4,19 +4,11 @@
 // store; switching tabs, or switching worktrees, keeps them all alive.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RepoNode, WorktreeNode } from "../types";
-import { nextTermId, useStore, type LaneSession } from "../store";
+import { laneLabel, nextTermId, useStore, type LaneSession } from "../store";
 import { hasBackend, ipc, type AgentCfg } from "../ipc";
 import { ChevLeft, ChevRight, Doc, ExpandH, Play, Plus, PopIn, PopOut, Spinner, Sparkle, Terminal as TerminalIcon, X } from "../icons";
 import TerminalPane from "./TerminalPane";
 import { ContextEditor, bodyPreview, composeAgentPrompt, composeContextMd, isBlank, runtimeFor, useWtContext } from "./WorktreeContext";
-
-/** Deterministic, injective window label for a detached terminal (hex of the id's
-    UTF-8 bytes) — a lossy replace could collide two worktrees onto one window. */
-const laneLabel = (id: string) =>
-  "term-" +
-  Array.from(new TextEncoder().encode(id))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 
 function DetachedPlaceholder({ onBack }: { onBack: () => void }) {
   return (
@@ -156,9 +148,13 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
 
   // Ids whose terminal this lane instance has actually rendered. An exited tab
   // outside this set gets the "ended" placeholder instead of a TerminalPane —
-  // mounting one would re-open the PTY and re-run the command.
+  // mounting one would re-open the PTY and re-run the command. Recorded in an
+  // effect rather than during render (render must stay side-effect free); the
+  // `s.running` check below covers the frame before this runs.
   const rendered = useRef<Set<string>>(new Set());
-  for (const s of sessions) if (s.running) rendered.current.add(s.id);
+  useEffect(() => {
+    for (const s of sessions) if (s.running) rendered.current.add(s.id);
+  }, [sessions]);
 
   useEffect(() => {
     if (!hasBackend()) return;

@@ -36,6 +36,8 @@
   --dim: var(--muted);
   --accent: var(--teal);
   --accent-dim: var(--teal-dim);
+  /* ink for text/icons sitting *on* an accent fill (badges, pills) */
+  --on-accent: #0d1113;
   --run: var(--green);
   --stop: var(--red);
   --warn: var(--amber);

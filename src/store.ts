@@ -42,14 +42,38 @@ export interface LaneSession {
 }
 
 /** Per-worktree id counter. Ids are never reused, so a closed tab's in-flight
-    backend events can't be mistaken for a new session under the same id. */
+    backend events can't be mistaken for a new session under the same id.
+    The counter is module state, so it restarts at 1 if the webview reloads —
+    but the PTYs it already named live in Rust and survive that. `terminal_open`
+    is idempotent, so without the per-launch nonce a "new" tab could silently
+    attach to a previous run's process instead of launching its own command. */
+const LAUNCH = Date.now().toString(36);
 const termSeq: Record<string, number> = {};
 export function nextTermId(wtKey: string, kind: LaneKind): string {
   const n = (termSeq[wtKey] = (termSeq[wtKey] ?? 0) + 1);
-  return `${wtKey}::${kind}#${n}`;
+  return `${wtKey}::${kind}#${LAUNCH}-${n}`;
 }
 /** wtKey of a session id (a wtKey is a filesystem path — it has no `::`). */
 const wtOf = (termId: string) => termId.slice(0, termId.lastIndexOf("::"));
+
+/** Deterministic, injective window label for a detached terminal (hex of the id's
+    UTF-8 bytes) — a lossy replace could collide two worktrees onto one window. */
+export const laneLabel = (id: string) =>
+  "term-" +
+  Array.from(new TextEncoder().encode(id))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+/** Close the detached window showing `id`, if one is open. */
+async function closeDetachedWindow(id: string) {
+  if (!hasBackend()) return;
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    await (await WebviewWindow.getByLabel(laneLabel(id)))?.close();
+  } catch {
+    /* the window is already gone — nothing to close */
+  }
+}
 
 interface State {
   tree: RepoNode[];
@@ -251,6 +275,11 @@ export const useStore = create<State>((set, get) => {
       // kill the PTY unconditionally: an "exited" tab may only *look* dead (the
       // command finished but a re-opened session could still hold the id).
       if (hasBackend()) ipc.terminalClose(id).catch(() => {});
+      // A popped-out tab has to take its window with it. Leaving it open strands
+      // a window attached to a PTY that no longer exists, and the stale
+      // detachedTerms entry would make a later session under this id render as
+      // detached from the moment it starts.
+      if (get().detachedTerms.has(id)) closeDetachedWindow(id);
       delete sessionStartedAt[id];
       set((st) => {
         const prev = st.sessions[wtKey] ?? [];
@@ -259,9 +288,12 @@ export const useStore = create<State>((set, get) => {
         const active = st.activeTerm[wtKey];
         // focus the neighbour that visually takes the closed tab's place
         const refocus = active !== id ? active : (next[at] ?? next[at - 1])?.id ?? null;
+        const detachedTerms = new Set(st.detachedTerms);
+        detachedTerms.delete(id);
         return {
           sessions: { ...st.sessions, [wtKey]: next },
           activeTerm: { ...st.activeTerm, [wtKey]: refocus },
+          detachedTerms,
         };
       });
     },
