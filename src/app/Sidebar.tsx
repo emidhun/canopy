@@ -8,7 +8,7 @@ export default function Sidebar({ onAdd, onRemove }: { onAdd: () => void; onRemo
   const setQuery = useStore((s) => s.setQuery);
   const selKey = useStore((s) => s.selKey);
   const select = useStore((s) => s.select);
-  const agents = useStore((s) => s.agents);
+  const sessions = useStore((s) => s.sessions);
 
   const q = query.toLowerCase();
   const total = tree.reduce((n, r) => n + r.worktrees.length, 0);
@@ -45,7 +45,7 @@ export default function Sidebar({ onAdd, onRemove }: { onAdd: () => void; onRemo
                 const running = w.services.filter((s) => isLive(s.status)).length;
                 const dot = running === 0 ? "off" : running === tcount ? "on" : "part";
                 const statusText = running > 0 ? `${running} running` : "idle";
-                const agent = agents[w.wtKey] ?? "off";
+                const liveAgents = (sessions[w.wtKey] ?? []).filter((s) => s.kind === "agent" && s.running).length;
                 return (
                   <button
                     key={w.wtKey}
@@ -57,9 +57,10 @@ export default function Sidebar({ onAdd, onRemove }: { onAdd: () => void; onRemo
                       <div className="b">{w.branch}</div>
                       <div className="r">{statusText}</div>
                     </span>
-                    {agent === "running" && (
-                      <span className="ag-pip busy" title="Agent working">
+                    {liveAgents > 0 && (
+                      <span className="ag-pip busy" title={`${liveAgents} agent${liveAgents > 1 ? "s" : ""} working`}>
                         <Sparkle size={10} />
+                        {liveAgents > 1 && <b className="ag-n">{liveAgents}</b>}
                       </span>
                     )}
                     {!w.isMain && onRemove && (

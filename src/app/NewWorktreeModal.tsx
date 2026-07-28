@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { hasBackend, ipc } from "../ipc";
 import { useStore } from "../store";
+import { seedWtContext } from "./WorktreeContext";
 import { Fork, Refresh, Search, Spinner } from "../icons";
 
 interface OpEvent {
@@ -114,6 +115,10 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const [fetching, setFetching] = useState(false);
   const [progress, setProgress] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [pr, setPr] = useState("");
+  const [prDescription, setPrDescription] = useState("");
+  const [issue, setIssue] = useState("");
+  const [issueDescription, setIssueDescription] = useState("");
 
   const localItems: BranchItem[] = branches.local.map((b) => ({ name: b, kind: "local" as const }));
   const remoteItems: BranchItem[] = branches.remote.map((b) => ({ name: b, kind: "remote" as const }));
@@ -187,6 +192,9 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
         return;
       }
       const wtPath = await ipc.createWorktree({ repoId: repo, ...payload });
+      // The runtime details (ports/database) are derived from the authoritative
+      // tree after creation; seed the human handoff now, keyed by the new path.
+      seedWtContext(wtPath, { title: payload.branch, pr, prDescription, issue, issueDescription });
       showToast(`Worktree ready — ${payload.branch}`);
       select(wtPath);
       onClose();
@@ -273,6 +281,16 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
               placeholder="search branches and tags…"
             />
           )}
+
+          <details className="handoff-fields">
+            <summary>Agent handoff <span>optional PR / issue context</span></summary>
+            <label className="set-label">Pull request</label>
+            <input className="set-input" value={pr} placeholder="https://github.com/org/repo/pull/123" onChange={(e) => setPr(e.target.value)} disabled={busy} />
+            <textarea className="set-input handoff-desc" value={prDescription} placeholder="What the PR changes or needs reviewed" onChange={(e) => setPrDescription(e.target.value)} disabled={busy} />
+            <label className="set-label">Issue</label>
+            <input className="set-input" value={issue} placeholder="https://github.com/org/repo/issues/123" onChange={(e) => setIssue(e.target.value)} disabled={busy} />
+            <textarea className="set-input handoff-desc" value={issueDescription} placeholder="Problem, acceptance criteria, and constraints" onChange={(e) => setIssueDescription(e.target.value)} disabled={busy} />
+          </details>
 
           {busy && (
             <div className="modal-progress">
