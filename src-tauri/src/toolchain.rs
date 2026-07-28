@@ -198,9 +198,34 @@ pub fn shell_argv(cmdline: &str) -> (String, Vec<String>) {
     (shell, args)
 }
 
+/// Wrap `s` as a single POSIX shell word. Inside single quotes every byte is
+/// literal, so the only case needing care is `'` itself: close the quote, emit
+/// an escaped quote, reopen — `'\''`. (Applying the *double*-quote idiom here,
+/// `'\"'\"'`, silently mangles any path containing an apostrophe.)
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::shell_argv;
+    use super::{sh_quote, shell_argv};
+
+    #[test]
+    fn sh_quote_round_trips_through_the_shell() {
+        assert_eq!(sh_quote("/tmp/plain.txt"), "'/tmp/plain.txt'");
+        assert_eq!(sh_quote("/tmp/it's.txt"), r"'/tmp/it'\''s.txt'");
+        // spaces, globs and command substitution stay inert
+        assert_eq!(sh_quote("/a b/$(rm -rf ~)/*.rs"), "'/a b/$(rm -rf ~)/*.rs'");
+        // and the shell actually parses it back to the original
+        for raw in ["/tmp/it's.txt", "/a b/c.rs", "/x/$(echo hi).ts", "/q/\"dq\".ts"] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf %s {}", sh_quote(raw)))
+                .output()
+                .expect("sh");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), raw, "round-trip failed for {raw}");
+        }
+    }
 
     #[test]
     fn shell_argv_passes_login_and_command_separately() {

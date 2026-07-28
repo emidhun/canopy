@@ -207,6 +207,7 @@ pub fn run() {
             commands::worktree_stop_all,
             commands::reset_db,
             commands::open_in_editor,
+            commands::open_file_in_editor,
             commands::reveal_in_finder,
             commands::open_terminal,
             commands::open_port,

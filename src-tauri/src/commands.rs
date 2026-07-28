@@ -67,6 +67,7 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, String> {
         services: Vec::new(),
         custom_commands: Vec::new(),
         agent_command: String::new(),
+        agents: Vec::new(),
     };
 
     let updated = {
@@ -429,7 +430,34 @@ pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), String
         s.editor.command.clone()
     };
     let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
-    let (shell, shargs) = crate::toolchain::shell_argv(&format!("{editor} '{wt_key}'"));
+    let (shell, shargs) = crate::toolchain::shell_argv(&format!("{editor} {}", crate::toolchain::sh_quote(&wt_key)));
+    tokio::process::Command::new(shell)
+        .args(&shargs)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Open a worktree-contained file in the selected editor. Relative paths are
+/// resolved from the worktree root; canonicalization rejects traversal and
+/// symlinks that leave it before any shell command is launched.
+#[tauri::command]
+pub async fn open_file_in_editor(app: AppHandle, wt_key: String, path: String) -> Result<(), String> {
+    let root = std::fs::canonicalize(&wt_key).map_err(|e| format!("worktree path: {e}"))?;
+    let requested = std::path::PathBuf::from(&path);
+    let candidate = if requested.is_absolute() { requested } else { root.join(requested) };
+    let file = std::fs::canonicalize(&candidate).map_err(|e| format!("file path: {e}"))?;
+    if !file.starts_with(&root) {
+        return Err("File must be inside the selected worktree".into());
+    }
+    let editor = {
+        let state = app.state::<AppState>();
+        let s = state.settings.read().unwrap();
+        s.editor.command.clone()
+    };
+    let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
+    let file = crate::toolchain::sh_quote(&file.to_string_lossy());
+    let (shell, shargs) = crate::toolchain::shell_argv(&format!("{editor} {file}"));
     tokio::process::Command::new(shell)
         .args(&shargs)
         .spawn()

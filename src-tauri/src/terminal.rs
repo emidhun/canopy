@@ -57,9 +57,24 @@ pub struct PtySession {
     started_unix: u64,
 }
 
+/// The final scrollback of a session whose process has exited, kept so the UI
+/// can still show what it printed. The PTY, child and reader are all gone by
+/// then — this is just bytes.
+struct ExitedBuffer {
+    scrollback: Vec<u8>,
+    seq: u64,
+    at: Instant,
+}
+
+/// How many exited sessions keep their output. Past this the oldest is dropped,
+/// so a long session of starting and stopping agents can't grow without bound.
+const EXITED_CAP: usize = 24;
+
 #[derive(Default)]
 pub struct TermTable {
     pub sessions: Mutex<HashMap<String, PtySession>>,
+    /// scrollback of exited sessions, by id (see `ExitedBuffer`)
+    exited: Mutex<HashMap<String, ExitedBuffer>>,
     next_gen: AtomicU64,
 }
 
@@ -91,6 +106,15 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
+/// The kind of a session id — `"agent"` or `"shell"`. A worktree holds any
+/// number of each, so ids carry an instance suffix (`…::agent#3`); the wtKey is
+/// a filesystem path and never contains `::`, so the last segment is the kind.
+/// Ids from before multi-session (`…::agent`) parse the same way.
+fn kind_of(id: &str) -> &str {
+    let last = id.rsplit("::").next().unwrap_or("");
+    last.split('#').next().unwrap_or("")
+}
+
 /// Open (or no-op if already open) a terminal session `id` in `cwd`. With no
 /// `command` it runs an interactive login shell; with one it runs that command
 /// under a login shell (so the session ends — firing `terminal:exit` — when the
@@ -111,6 +135,9 @@ pub fn open(
     if sessions.contains_key(id) {
         return Ok(()); // already running — idempotent attach
     }
+    // A restart reuses the id; the previous run's retained output would
+    // otherwise be replayed as though the new process had printed it.
+    table.exited.lock().unwrap().remove(id);
 
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -140,6 +167,12 @@ pub fn open(
     }
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
+    // Every agent profile can read the same durable handoff even when it opts
+    // out of positional prompts because its CLI has a different interface.
+    if kind_of(id) == "agent" {
+        cmd.env("CANOPY_CONTEXT_FILE", std::path::Path::new(cwd).join(".canopy/context.md"));
+        cmd.env("CANOPY_WORKTREE", cwd);
+    }
     if let Some(bin) = crate::toolchain::pinned_node_bin(cwd) {
         // prepend to PATH using the OS separator (';' on Windows, ':' elsewhere)
         // and native path form — this is the process env bash.exe inherits, not a
@@ -195,19 +228,29 @@ pub fn open(
                     // append to scrollback and advance the cursor atomically, so
                     // the emitted seq always matches a chunk boundary.
                     let mut seq = 0;
+                    let mut ours = false;
                     if let Some(table) = app.try_state::<TermTable>() {
                         if let Some(sess) = table.sessions.lock().unwrap().get_mut(&id) {
-                            sess.scrollback.extend(chunk.iter().copied());
-                            let overflow = sess.scrollback.len().saturating_sub(SCROLLBACK_CAP);
-                            if overflow > 0 {
-                                sess.scrollback.drain(0..overflow);
+                            // Same generation guard the exit path uses: a restart
+                            // reopens this id, and bytes this (now stale) reader
+                            // drains afterwards must not be appended to — or
+                            // emitted as — the replacement session's output.
+                            if sess.generation == generation {
+                                sess.scrollback.extend(chunk.iter().copied());
+                                let overflow = sess.scrollback.len().saturating_sub(SCROLLBACK_CAP);
+                                if overflow > 0 {
+                                    sess.scrollback.drain(0..overflow);
+                                }
+                                sess.seq += n as u64;
+                                sess.last_activity = Instant::now();
+                                seq = sess.seq;
+                                ours = true;
                             }
-                            sess.seq += n as u64;
-                            sess.last_activity = Instant::now();
-                            seq = sess.seq;
                         }
                     }
-                    let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                    if ours {
+                        let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                    }
                 }
                 Err(_) => break,
             }
@@ -219,7 +262,20 @@ pub fn open(
             let mut sessions = table.sessions.lock().unwrap();
             match sessions.get(&id) {
                 Some(s) if s.generation == generation => {
-                    sessions.remove(&id);
+                    // Keep what it printed: the UI shows an exited tab read-only
+                    // until it's closed or restarted, and without this the output
+                    // would die with the session the moment the process ended.
+                    let sess = sessions.remove(&id).unwrap();
+                    let mut exited = table.exited.lock().unwrap();
+                    if exited.len() >= EXITED_CAP {
+                        if let Some(oldest) = exited.iter().min_by_key(|(_, b)| b.at).map(|(k, _)| k.clone()) {
+                            exited.remove(&oldest);
+                        }
+                    }
+                    exited.insert(
+                        id.clone(),
+                        ExitedBuffer { scrollback: sess.scrollback.into_iter().collect(), seq: sess.seq, at: Instant::now() },
+                    );
                     true
                 }
                 _ => false,
@@ -256,20 +312,29 @@ pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), S
 }
 
 /// Scrollback snapshot + its end cursor, for a re-mounting window to rehydrate.
-/// `None` when the session doesn't exist (never opened, or exited).
+/// Falls back to the retained buffer of an exited session, so a tab that ended
+/// while its worktree wasn't selected can still be read. `None` only when the id
+/// was never opened (or has since been closed).
 pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
-    let sessions = table.sessions.lock().unwrap();
-    sessions.get(id).map(|s| {
+    if let Some(s) = table.sessions.lock().unwrap().get(id) {
         let bytes: Vec<u8> = s.scrollback.iter().copied().collect();
-        BufferSnapshot { buffer: b64(&bytes), seq: s.seq }
-    })
+        return Some(BufferSnapshot { buffer: b64(&bytes), seq: s.seq });
+    }
+    table
+        .exited
+        .lock()
+        .unwrap()
+        .get(id)
+        .map(|b| BufferSnapshot { buffer: b64(&b.scrollback), seq: b.seq })
 }
 
-/// Kill and drop a session.
+/// Kill and drop a session, including any retained output — closing a tab is the
+/// point at which the user is done with it.
 pub fn close(table: &TermTable, id: &str) {
     if let Some(mut sess) = table.sessions.lock().unwrap().remove(id) {
         let _ = sess.child.kill();
     }
+    table.exited.lock().unwrap().remove(id);
 }
 
 /// Close a session and refresh the persisted orphan list (command path).
@@ -286,6 +351,7 @@ pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
     for id in &ids {
         close(table, id);
     }
+    table.exited.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
     if !ids.is_empty() {
         persist_orphans(app);
     }
@@ -297,6 +363,7 @@ pub fn close_all(table: &TermTable) {
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
     }
+    table.exited.lock().unwrap().clear();
 }
 
 /// Snapshot live sessions' pgids into persisted runtime state, so a crash can be
@@ -359,6 +426,24 @@ pub fn sweep_orphans(app: &AppHandle) {
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::kind_of;
+
+    #[test]
+    fn kind_of_reads_multi_session_ids() {
+        assert_eq!(kind_of("/Users/me/wt/feature#1::agent#3"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/feature#1::shell#12"), "shell");
+        // ids carry a per-launch nonce so a webview reload can't reuse one
+        assert_eq!(kind_of("/Users/me/wt/x::agent#mfz1a2b-4"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/x::shell#mfz1a2b-11"), "shell");
+        // ids written before multi-session carried no instance suffix
+        assert_eq!(kind_of("/Users/me/wt/feature::agent"), "agent");
+        assert_eq!(kind_of("/Users/me/wt/feature::shell"), "shell");
+        assert_eq!(kind_of("nonsense"), "nonsense");
+    }
+}
+
 /// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
 /// child makes its reader hit EOF, which removes the session and emits
 /// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
@@ -366,7 +451,7 @@ pub fn sweep_orphans(app: &AppHandle) {
 pub fn sweep_idle(table: &TermTable) {
     let mut sessions = table.sessions.lock().unwrap();
     for (id, sess) in sessions.iter_mut() {
-        if id.ends_with("::shell") && sess.last_activity.elapsed() > IDLE_LIMIT {
+        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
             let _ = sess.child.kill();
         }
     }

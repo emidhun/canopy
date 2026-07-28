@@ -18,6 +18,16 @@ export interface CustomCmd {
   command: string;
 }
 
+/** A coding-agent launcher available for one repository. The command is run
+ * inside the selected worktree; when enabled, Canopy appends its structured
+ * handoff as the command's first prompt argument. */
+export interface AgentCfg {
+  id: string;
+  name: string;
+  command: string;
+  promptOnLaunch: boolean;
+}
+
 export interface RepoCfg {
   id: string;
   name: string;
@@ -29,6 +39,8 @@ export interface RepoCfg {
   customCommands: CustomCmd[];
   /** agent-lane CLI (empty = built-in default) */
   agentCommand: string;
+  /** selectable coding-agent launchers; `agentCommand` remains as legacy data */
+  agents: AgentCfg[];
 }
 
 export interface Settings {
@@ -122,6 +134,7 @@ export const ipc = {
   resetDb: (wtKey: string) => invoke<void>("reset_db", { wtKey }),
 
   openInEditor: (wtKey: string) => invoke<void>("open_in_editor", { wtKey }),
+  openFileInEditor: (wtKey: string, path: string) => invoke<void>("open_file_in_editor", { wtKey, path }),
   revealInFinder: (wtKey: string) => invoke<void>("reveal_in_finder", { wtKey }),
   openTerminal: (wtKey: string) => invoke<void>("open_terminal", { wtKey }),
   openPort: (port: number) => invoke<void>("open_port", { port }),

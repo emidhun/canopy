@@ -3,8 +3,9 @@
 // wtKey). Whether this should instead live as a committed `.canopy/context.md`
 // that travels with the branch is an open product question — see the handoff.
 import { Fragment, useEffect, useState, type ReactNode } from "react";
-import { Chevron, Copy, Doc, Info, Link as LinkIcon, Plus, Sparkle } from "../icons";
-import { hasBackend } from "../ipc";
+import { Chevron, Copy, Doc, File, Info, Link as LinkIcon, Plus, Sparkle } from "../icons";
+import { hasBackend, ipc } from "../ipc";
+import type { RepoNode, WorktreeNode } from "../types";
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim());
 
@@ -34,9 +35,32 @@ export interface WtContext {
   title: string;
   body: string;
   links: { label: string; kind: string }[];
+  files: string[];
+  pr: string;
+  prDescription: string;
+  issue: string;
+  issueDescription: string;
 }
 
-const EMPTY: WtContext = { title: "", body: "", links: [] };
+const EMPTY: WtContext = { title: "", body: "", links: [], files: [], pr: "", prDescription: "", issue: "", issueDescription: "" };
+
+export interface WorktreeRuntime {
+  repo: string;
+  branch: string;
+  path: string;
+  dbName: string | null;
+  ports: { name: string; port: number }[];
+}
+
+export function runtimeFor(repo: RepoNode, wt: WorktreeNode): WorktreeRuntime {
+  return {
+    repo: repo.name,
+    branch: wt.branch,
+    path: wt.path,
+    dbName: wt.dbName,
+    ports: wt.services.flatMap((s) => (s.port == null ? [] : [{ name: s.name, port: s.port }])),
+  };
+}
 
 function load(key: string): WtContext {
   try {
@@ -64,13 +88,39 @@ export function useWtContext(wtKey: string): [WtContext, (c: WtContext) => void]
   return [ctx, update];
 }
 
-export const isBlank = (c: WtContext) => !c.title.trim() && !c.body.trim() && c.links.length === 0;
+/** Seed a newly-created worktree before it is first opened in the lane. */
+export function seedWtContext(wtKey: string, partial: Partial<WtContext>) {
+  const next = { ...EMPTY, ...partial };
+  try {
+    localStorage.setItem(`canopy.ctx.${wtKey}`, JSON.stringify(next));
+  } catch {
+    /* local storage is an enhancement, not a creation dependency */
+  }
+}
+
+export const isBlank = (c: WtContext) =>
+  !c.title.trim() && !c.body.trim() && !c.pr.trim() && !c.prDescription.trim() && !c.issue.trim() && !c.issueDescription.trim() && c.links.length === 0 && c.files.length === 0;
 
 /** Render the context as the markdown seed written to `.canopy/context.md`. */
-export function composeContextMd(c: WtContext): string {
+export function composeContextMd(c: WtContext, runtime?: WorktreeRuntime): string {
   let md = `# ${c.title.trim() || "Untitled"}\n\n${c.body.trim()}\n`;
+  if (c.pr.trim() || c.prDescription.trim()) md += `\n## Pull request\n${c.pr.trim() ? `${c.pr.trim()}\n` : ""}${c.prDescription.trim()}\n`;
+  if (c.issue.trim() || c.issueDescription.trim()) md += `\n## Issue\n${c.issue.trim() ? `${c.issue.trim()}\n` : ""}${c.issueDescription.trim()}\n`;
+  if (runtime) {
+    md += `\n## Worktree\n- Repository: ${runtime.repo}\n- Branch: ${runtime.branch}\n- Path: ${runtime.path}\n`;
+    md += `- Database: ${runtime.dbName || "not configured"}\n`;
+    md += runtime.ports.length ? `- Ports: ${runtime.ports.map((p) => `${p.name} :${p.port}`).join(", ")}\n` : "- Ports: none configured\n";
+  }
+  if (c.files.length) md += "\n## Files\n" + c.files.map((f) => `- ${f}`).join("\n") + "\n";
   if (c.links.length) md += "\n## Links\n" + c.links.map((l) => `- ${l.label}`).join("\n") + "\n";
   return md;
+}
+
+/** The compact message passed to an agent at launch; the complete handoff is
+ * on disk so agents that support rich prompts can read it without truncation. */
+export function composeAgentPrompt(c: WtContext, runtime: WorktreeRuntime): string {
+  const focus = c.title.trim() || c.issueDescription.trim() || c.prDescription.trim() || c.body.trim() || "the assigned worktree task";
+  return `Work on ${focus}. Read the complete Canopy handoff at ${runtime.path}/.canopy/context.md before making changes. Worktree: ${runtime.repo}/${runtime.branch}; database: ${runtime.dbName || "not configured"}; ports: ${runtime.ports.map((p) => `${p.name}:${p.port}`).join(", ") || "none"}.`;
 }
 
 /** Plain-text one-liner of the markdown body, for the lane summary preview. */
@@ -119,17 +169,31 @@ export function mdRender(src: string): ReactNode[] {
 export function ContextEditor({
   ctx,
   setCtx,
+  runtime,
+  wtKey,
   onClose,
   onSeed,
   onToast,
 }: {
   ctx: WtContext;
   setCtx: (c: WtContext) => void;
+  runtime: WorktreeRuntime;
+  wtKey: string;
   onClose: () => void;
   onSeed: () => void;
   onToast: (m: string) => void;
 }) {
   const [tab, setTab] = useState<"write" | "prev">("write");
+  const resourceClick = (kind: "link" | "file", value: string, e: React.MouseEvent) => {
+    if (!e.metaKey && !e.ctrlKey) return;
+    e.preventDefault();
+    if (kind === "link") {
+      if (isUrl(value)) openLink(value, onToast);
+      else onToast("That resource is not a browser link");
+    } else if (hasBackend()) {
+      ipc.openFileInEditor(wtKey, value).catch((err) => onToast(`Couldn't open file — ${String(err)}`));
+    } else onToast("Opening files needs the desktop app");
+  };
   return (
     <div className="ctx-scrim" onMouseDown={onClose}>
       <div className="ctx-modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -162,6 +226,15 @@ export function ContextEditor({
             onChange={(e) => setCtx({ ...ctx, title: e.target.value })}
           />
 
+          <div className="ctx-references">
+            <label>Pull request</label>
+            <input value={ctx.pr} placeholder="https://github.com/org/repo/pull/123" onChange={(e) => setCtx({ ...ctx, pr: e.target.value })} />
+            <textarea value={ctx.prDescription} placeholder="What the PR changes / what to verify" onChange={(e) => setCtx({ ...ctx, prDescription: e.target.value })} />
+            <label>Issue</label>
+            <input value={ctx.issue} placeholder="https://github.com/org/repo/issues/123" onChange={(e) => setCtx({ ...ctx, issue: e.target.value })} />
+            <textarea value={ctx.issueDescription} placeholder="Problem, acceptance criteria, and constraints" onChange={(e) => setCtx({ ...ctx, issueDescription: e.target.value })} />
+          </div>
+
           {tab === "write" ? (
             <textarea
               className="ctx-md"
@@ -175,14 +248,20 @@ export function ContextEditor({
           )}
 
           <div className="ctx-links">
+            {ctx.pr.trim() && <span className="ctx-link" title="Cmd/Ctrl-click to open in browser" onClick={(e) => resourceClick("link", ctx.pr, e)}><LinkIcon size={11} /> PR</span>}
+            {ctx.issue.trim() && <span className="ctx-link" title="Cmd/Ctrl-click to open in browser" onClick={(e) => resourceClick("link", ctx.issue, e)}><LinkIcon size={11} /> Issue</span>}
+            {ctx.files.map((file) => (
+              <span className="ctx-link" key={file} title="Cmd/Ctrl-click to open in your selected editor" onClick={(e) => resourceClick("file", file, e)}>
+                <File size={11} />{file}
+              </span>
+            ))}
             {ctx.links.map((l) => {
-              const url = isUrl(l.label);
               return (
                 <span
                   className="ctx-link"
                   key={l.label}
-                  style={url ? undefined : { cursor: "default" }}
-                  onClick={url ? () => openLink(l.label, onToast) : undefined}
+                  title="Cmd/Ctrl-click to open in browser"
+                  onClick={(e) => resourceClick("link", l.label, e)}
                 >
                   <span className="ic">
                     <LinkIcon size={11} />
@@ -204,6 +283,19 @@ export function ContextEditor({
               <Plus size={11} />
               Add link
             </span>
+            <span className="ctx-link add" onClick={() => {
+              const file = window.prompt("Relative path inside this worktree");
+              if (file?.trim()) setCtx({ ...ctx, files: [...ctx.files, file.trim()] });
+            }}>
+              <Plus size={11} /> Add file
+            </span>
+          </div>
+
+          <div className="ctx-runtime">
+            <b>Worktree environment</b>
+            <span>{runtime.branch}</span>
+            <span>{runtime.dbName || "no database"}</span>
+            {runtime.ports.map((p) => <span key={p.name}>{p.name} :{p.port}</span>)}
           </div>
 
           <div className="ctx-foot">

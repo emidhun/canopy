@@ -5,7 +5,22 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Fork, PopIn, Terminal as TerminalIcon } from "../icons";
 import TerminalPane from "./TerminalPane";
 
-export default function DetachedTerminal({ termId, cwd, branch }: { termId: string; cwd: string; branch: string }) {
+export default function DetachedTerminal({
+  termId,
+  cwd,
+  branch,
+  title = "Terminal",
+  command,
+}: {
+  termId: string;
+  cwd: string;
+  branch: string;
+  /** the lane tab's label, so several detached windows stay tellable apart */
+  title?: string;
+  /** the agent command, used only if this window creates the PTY (attaching to
+      an existing session ignores it — `terminal_open` is idempotent) */
+  command?: string;
+}) {
   const back = () => getCurrentWindow().close();
   return (
     <div className="detwin-body">
@@ -14,7 +29,7 @@ export default function DetachedTerminal({ termId, cwd, branch }: { termId: stri
           <span className="fork">
             <TerminalIcon size={13} />
           </span>
-          Terminal
+          {title}
           <span className="br">— {branch}</span>
         </span>
         <span className="grow" data-tauri-drag-region />
@@ -24,7 +39,7 @@ export default function DetachedTerminal({ termId, cwd, branch }: { termId: stri
       </div>
       <div className="term" style={{ flex: 1, minHeight: 0 }}>
         <div className="term-body">
-          <TerminalPane termId={termId} cwd={cwd} />
+          <TerminalPane termId={termId} cwd={cwd} command={command} />
         </div>
       </div>
       <div className="lane-foot" style={{ justifyContent: "flex-end" }}>

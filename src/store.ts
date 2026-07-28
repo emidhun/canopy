@@ -17,6 +17,64 @@ export interface OpLog {
   running: boolean;
 }
 
+/* ── agent-lane sessions ──────────────────────────────────────────────────────
+   A worktree can hold any number of concurrent agent and shell tabs. Each one
+   is a PTY in Rust keyed by `id`; this list is the UI's view of them. It lives
+   in the store (not the lane) so it survives the lane remounting on worktree
+   switch — the PTYs keep running either way. */
+export type LaneKind = "agent" | "shell";
+
+export interface LaneSession {
+  /** backend PTY id — `${wtKey}::agent#3`, `${wtKey}::shell#1` */
+  id: string;
+  wtKey: string;
+  kind: LaneKind;
+  /** tab label: the agent profile's name, or "Shell" / "Shell 2" */
+  title: string;
+  /** repo agent-profile id this was launched from (agent tabs only) */
+  agentId?: string;
+  /** command the PTY was created with; undefined = interactive login shell */
+  command?: string;
+  /** false once the PTY exits — the tab stays so its output can be read/restarted */
+  running: boolean;
+  /** bumped on restart so the pane remounts and creates a fresh PTY */
+  gen: number;
+}
+
+/** Per-worktree id counter. Ids are never reused, so a closed tab's in-flight
+    backend events can't be mistaken for a new session under the same id.
+    The counter is module state, so it restarts at 1 if the webview reloads —
+    but the PTYs it already named live in Rust and survive that. `terminal_open`
+    is idempotent, so without the per-launch nonce a "new" tab could silently
+    attach to a previous run's process instead of launching its own command. */
+const LAUNCH = Date.now().toString(36);
+const termSeq: Record<string, number> = {};
+export function nextTermId(wtKey: string, kind: LaneKind): string {
+  const n = (termSeq[wtKey] = (termSeq[wtKey] ?? 0) + 1);
+  return `${wtKey}::${kind}#${LAUNCH}-${n}`;
+}
+/** wtKey of a session id (a wtKey is a filesystem path — it has no `::`). */
+const wtOf = (termId: string) => termId.slice(0, termId.lastIndexOf("::"));
+
+/** Deterministic, injective window label for a detached terminal (hex of the id's
+    UTF-8 bytes) — a lossy replace could collide two worktrees onto one window. */
+export const laneLabel = (id: string) =>
+  "term-" +
+  Array.from(new TextEncoder().encode(id))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+/** Close the detached window showing `id`, if one is open. */
+async function closeDetachedWindow(id: string) {
+  if (!hasBackend()) return;
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    await (await WebviewWindow.getByLabel(laneLabel(id)))?.close();
+  } catch {
+    /* the window is already gone — nothing to close */
+  }
+}
+
 interface State {
   tree: RepoNode[];
   logs: Record<string, LogLine[]>;
@@ -30,13 +88,24 @@ interface State {
   query: string;
   tabSvcKey: string | null;
   collapsed: boolean;
-  /** agent-lane run state per worktree (wtKey → state); survives worktree switch */
-  agents: Record<string, "off" | "running">;
-  setAgent: (wtKey: string, state: "off" | "running") => void;
+  /** agent-lane tabs per worktree (wtKey → sessions); survives worktree switch */
+  sessions: Record<string, LaneSession[]>;
+  /** focused tab per worktree (wtKey → session id) */
+  activeTerm: Record<string, string | null>;
+  openSession: (s: Omit<LaneSession, "running" | "gen">) => void;
+  closeSession: (id: string) => void;
+  /** kill the process but keep the tab (its output stays readable) */
+  stopSession: (id: string) => void;
+  restartSession: (id: string) => void;
+  setActiveTerm: (wtKey: string, id: string) => void;
   /** terminal ids currently shown in a detached window — in the store so the
       placeholder survives a lane remount (worktree switch) */
   detachedTerms: Set<string>;
   setTermDetached: (id: string, v: boolean) => void;
+  /** bumped whenever settings are saved, so views holding a cached copy (the
+      agent lane's launcher list) know to re-read them */
+  settingsRev: number;
+  bumpSettings: () => void;
   /** focus mode: the middle pane drops to a rail so the terminal takes the window */
   mainRailed: boolean;
   setMainRailed: (v: boolean) => void;
@@ -90,7 +159,7 @@ export function wtLabel(tree: RepoNode[], wtKey: string): string {
 const timers: Record<string, ReturnType<typeof setTimeout>> = {};
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 const startedAt: Record<string, number> = {}; // svcKey -> ms epoch
-const agentStartedAt: Record<string, number> = {}; // wtKey -> ms epoch (agent start)
+const sessionStartedAt: Record<string, number> = {}; // term id -> ms epoch (session start)
 const QUICK_EXIT_MS = 2500; // agent gone this fast after start = it never really ran
 
 function appendLogs(svcKey: string, lines: LogLine[]) {
@@ -192,11 +261,73 @@ export const useStore = create<State>((set, get) => {
     query: "",
     tabSvcKey: mock[0]?.worktrees[0]?.services[0]?.svcKey ?? null,
     collapsed: false,
-    agents: {},
-    setAgent: (wtKey, state) => {
-      if (state === "running") agentStartedAt[wtKey] = Date.now();
-      set((st) => ({ agents: { ...st.agents, [wtKey]: state } }));
+    sessions: {},
+    activeTerm: {},
+    openSession: (s) => {
+      sessionStartedAt[s.id] = Date.now();
+      set((st) => ({
+        sessions: { ...st.sessions, [s.wtKey]: [...(st.sessions[s.wtKey] ?? []), { ...s, running: true, gen: 0 }] },
+        activeTerm: { ...st.activeTerm, [s.wtKey]: s.id },
+      }));
     },
+    closeSession: (id) => {
+      const wtKey = wtOf(id);
+      // kill the PTY unconditionally: an "exited" tab may only *look* dead (the
+      // command finished but a re-opened session could still hold the id).
+      if (hasBackend()) ipc.terminalClose(id).catch(() => {});
+      // A popped-out tab has to take its window with it. Leaving it open strands
+      // a window attached to a PTY that no longer exists, and the stale
+      // detachedTerms entry would make a later session under this id render as
+      // detached from the moment it starts.
+      if (get().detachedTerms.has(id)) closeDetachedWindow(id);
+      delete sessionStartedAt[id];
+      set((st) => {
+        const prev = st.sessions[wtKey] ?? [];
+        const at = prev.findIndex((s) => s.id === id);
+        const next = prev.filter((s) => s.id !== id);
+        const active = st.activeTerm[wtKey];
+        // focus the neighbour that visually takes the closed tab's place
+        const refocus = active !== id ? active : (next[at] ?? next[at - 1])?.id ?? null;
+        const detachedTerms = new Set(st.detachedTerms);
+        detachedTerms.delete(id);
+        return {
+          sessions: { ...st.sessions, [wtKey]: next },
+          activeTerm: { ...st.activeTerm, [wtKey]: refocus },
+          detachedTerms,
+        };
+      });
+    },
+    stopSession: (id) => {
+      // mark first: terminal:exit then knows this was deliberate and stays quiet
+      set((st) => ({
+        sessions: {
+          ...st.sessions,
+          [wtOf(id)]: (st.sessions[wtOf(id)] ?? []).map((s) => (s.id === id ? { ...s, running: false } : s)),
+        },
+      }));
+      if (hasBackend()) ipc.terminalClose(id).catch(() => {});
+    },
+    restartSession: (id) => {
+      sessionStartedAt[id] = Date.now();
+      // A detached tab renders a placeholder inline and its window won't remount
+      // on a `gen` bump, so nothing would actually create the PTY — the tab would
+      // just claim to be running. Re-dock first; the pane then mounts and starts it.
+      if (get().detachedTerms.has(id)) {
+        closeDetachedWindow(id);
+        set((st) => {
+          const detachedTerms = new Set(st.detachedTerms);
+          detachedTerms.delete(id);
+          return { detachedTerms };
+        });
+      }
+      set((st) => ({
+        sessions: {
+          ...st.sessions,
+          [wtOf(id)]: (st.sessions[wtOf(id)] ?? []).map((s) => (s.id === id ? { ...s, running: true, gen: s.gen + 1 } : s)),
+        },
+      }));
+    },
+    setActiveTerm: (wtKey, id) => set((st) => ({ activeTerm: { ...st.activeTerm, [wtKey]: id } })),
     detachedTerms: new Set(),
     setTermDetached: (id, v) =>
       set((st) => {
@@ -205,6 +336,8 @@ export const useStore = create<State>((set, get) => {
         else next.delete(id);
         return { detachedTerms: next };
       }),
+    settingsRev: 0,
+    bumpSettings: () => set((st) => ({ settingsRev: st.settingsRev + 1 })),
     mainRailed: false,
     setMainRailed: (mainRailed) => set({ mainRailed }),
 
@@ -425,25 +558,28 @@ export function initSync(): () => void {
 
   track(on.worktreeOp((e) => appendOpLine(e.wtKey, e.state, e.detail)));
 
-  // agent lifecycle: the agent runs as its own PTY session (`${wtKey}::agent`),
-  // so its exit is the authoritative "agent stopped" signal.
+  // session lifecycle: every lane tab is its own PTY, so its exit is the
+  // authoritative "this tab stopped" signal. The tab is kept (marked not
+  // running) so its output stays readable and it can be restarted in place.
   track(
     on.terminalExit((e) => {
       // NB: don't clear the detached flag here — terminal:exit means the PTY
       // process ended, not that its window closed (that's the tauri://destroyed
       // handler). Clearing it would re-dock and spawn a new inline shell while
       // the detached window is still open.
-      const suffix = "::agent";
-      if (!e.id.endsWith(suffix)) return;
-      const wtKey = e.id.slice(0, -suffix.length);
-      // "running" here means it wasn't a user-initiated stop (stop sets off first)
-      const wasRunning = useStore.getState().agents[wtKey] === "running";
-      useStore.getState().setAgent(wtKey, "off");
-      if (wasRunning) {
-        const started = agentStartedAt[wtKey];
+      const wtKey = wtOf(e.id);
+      const sess = useStore.getState().sessions[wtKey]?.find((s) => s.id === e.id);
+      if (!sess) return;
+      // still "running" here means it wasn't a user-initiated stop (which marks
+      // the tab first), so a near-instant exit is worth surfacing.
+      if (sess.running && sess.kind === "agent") {
+        const started = sessionStartedAt[e.id];
         if (started && Date.now() - started < QUICK_EXIT_MS)
-          useStore.getState().showToast("Agent exited immediately — check the agent command");
+          useStore.getState().showToast(`${sess.title} exited immediately — check the agent command`);
       }
+      useStore.setState((st) => ({
+        sessions: { ...st.sessions, [wtKey]: (st.sessions[wtKey] ?? []).map((s) => (s.id === e.id ? { ...s, running: false } : s)) },
+      }));
     }),
   );
 

@@ -62,6 +62,20 @@ pub struct RepoCfg {
     /// `claude`, `aider`, `codex`). Empty = fall back to the built-in default.
     #[serde(default)]
     pub agent_command: String,
+    /// Selectable agent launchers for the worktree agent lane. Kept alongside
+    /// `agent_command` so existing settings files upgrade without data loss.
+    #[serde(default)]
+    pub agents: Vec<AgentCfg>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentCfg {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    /// Append Canopy's initial handoff as the first CLI prompt argument.
+    pub prompt_on_launch: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
