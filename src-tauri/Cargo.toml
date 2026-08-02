@@ -27,8 +27,8 @@ fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
 sysinfo = "0.39.3"
 # embedded per-worktree terminals: a real PTY per session (the agent lane runs
 # the coding-agent CLI inside one). portable-pty is cross-platform (helps Linux).
-portable-pty = "0.8"
-base64 = "0.22"
+portable-pty = "0.9"
+base64 = "0.23"
 
 # POSIX process control (process groups, killpg, localtime_r). On Windows the
 # equivalent lives in the `windows` crate below (Job Objects). See src/proc.rs.
@@ -39,7 +39,7 @@ libc = "0.2"
 # each spawned service tree is wrapped in a Job Object (KILL_ON_JOB_CLOSE) and
 # torn down with TerminateJobObject. See src/proc.rs.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_JobObjects",
