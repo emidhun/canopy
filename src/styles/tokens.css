@@ -66,6 +66,19 @@
   --row-hover: rgba(255, 255, 255, 0.045);
   --focus-ring: rgba(92, 199, 205, 0.4);
 
+  /* Tinted edges and fills. The screens write these as raw rgba because the
+     accent needs alphas the *-dim tokens don't carry: a border reads at ~.3,
+     a hover fill at ~.26, while *-dim (.12–.16) is the resting wash. */
+  --teal-border: rgba(92, 199, 205, 0.34);
+  --teal-fill-hi: rgba(92, 199, 205, 0.26);
+  --red-border: rgba(224, 83, 61, 0.3);
+  --amber-halo: rgba(230, 173, 95, 0.16);
+  /* washes on floating surfaces, which sit lighter than --hover on the app */
+  --wash-pop: rgba(255, 255, 255, 0.05);
+  --wash-pop-soft: rgba(255, 255, 255, 0.03);
+  --wash-row-faint: rgba(255, 255, 255, 0.028); /* table + log hover */
+  --wash-sunken: rgba(0, 0, 0, 0.16); /* modal + palette footers */
+
   /* ── legacy aliases kept so shipped screens stay coherent ── */
   --sidebar-bg: var(--sidebar);
   --titlebar-bg: var(--titlebar);
@@ -112,6 +125,7 @@
      (modals, popovers, menus, toasts) and for interactive CONTROLS (buttons,
      inputs, chips). Layout regions are flat, separated by 1px hairlines.
      A bordered box inside a bordered box is always a bug. */
+  /* The index scale, as shipped. */
   --sp-1: 2px;
   --sp-2: 5px;
   --sp-3: 7px;
@@ -120,6 +134,24 @@
   --sp-6: 14px;
   --sp-7: 18px;
   --sp-8: 24px;
+
+  /* Dense steps the index scale doesn't cover.
+
+     Counting every padding/gap/margin in the redesign screen: 8px appears 36
+     times and 6px 27 times — more often than 7px (26) or 9px (21), both of
+     which ARE on the scale. So the sparse scale never described the UI it
+     ships with; these are not exceptions, they are its two busiest steps.
+
+     They are named by role rather than interleaved as --sp-3.5 etc. because
+     the component layer ships verbatim against --sp-1…8, and renumbering
+     would silently repoint every one of those. */
+  --sp-hair: 1px; /* hairline offsets, dot-to-dot gaps */
+  --sp-micro: 3px; /* icon-to-glyph, quick-action gaps */
+  --sp-xs: 4px; /* tight stacks, chip internals */
+  --sp-tight: 6px; /* label-to-affordance, list inline padding */
+  --sp-row: 8px; /* THE default: row padding and row gap */
+  --sp-pop: 10px; /* floating-surface inline padding */
+  --sp-pop-lg: 11px; /* popover item inline padding */
 
   /* fixed chrome heights — the app's vertical rhythm */
   --h-topbar: 36px;
@@ -130,9 +162,36 @@
   --h-row: 26px;
   --h-control: 28px;
   --h-control-sm: 22px;
+  --h-control-xs: 24px; /* topbar controls, service chips, crumb */
   --h-input: 32px;
+  --h-logtool: 30px; /* log filter toolbar */
+  --h-session: 20px; /* session chip in a pane's tab strip */
+  --h-quickact: 19px; /* sidebar row hover action */
+  --h-gitchip: 18px; /* ↑n ↓n ● in the worktree bar */
+  --h-statusact: 17px; /* status-bar button */
+  --h-ib-tab: 21px; /* icon button inside a pane tab strip */
+  --h-ib-tool: 22px; /* icon button inside a toolbar */
+
+  /* status dots — 6px reads only because of the halo; 5px is the inline
+     variant used inside rows and tables where a halo would crowd. */
+  --dot: 6px;
+  --dot-sm: 5px;
 
   --w-sidebar: 238px;
+  --w-sidebar-narrow: 210px; /* below the 1180px breakpoint */
+
+  /* floating-surface widths */
+  --w-palette: 592px;
+  --w-pullpop: 346px;
+  --w-attnpop: 306px;
+  --w-levelpop: 158px;
+  --w-popover: 230px;
+
+  /* window chrome constants (not design choices — the OS and the screen set
+     these): the macOS traffic-light inset, and how far ⌘K hangs from the top */
+  --inset-traffic-lights: 80px;
+  --drop-palette: 96px;
+  --inset-attnpop: 82px; /* clears the topbar's refresh + settings buttons */
   --min-main: 460px; /* main pane floor — without it the pane absorbs every
                         deficit and silently clips its own content */
 
@@ -144,6 +203,11 @@
   --r-xl: 9px;
   --r-2xl: 12px;
   --r-win: 11px;
+  /* off-scale radii the screens use: a 2px selection bar, a 3px affordance
+     inside a chip, and the pull popover at 10px (between --r-xl and --r-2xl) */
+  --r-indicator: 2px;
+  --r-tiny: 3px;
+  --r-pop: 10px;
 
   --border-w: 1px;
 
@@ -151,8 +215,10 @@
   --shadow-pop: 0 22px 54px -12px rgba(0, 0, 0, 0.65);
   --shadow-modal: 0 34px 90px -14px rgba(0, 0, 0, 0.7);
   --shadow-toast: 0 14px 34px rgba(0, 0, 0, 0.5);
+  --shadow-menu: 0 14px 34px -10px rgba(0, 0, 0, 0.6); /* small anchored menus */
   --shadow-drawer: -18px 0 44px -14px rgba(0, 0, 0, 0.55);
   --scrim: rgba(9, 10, 12, 0.58);
+  --scrim-light: rgba(9, 10, 12, 0.55); /* the palette veil, a touch thinner */
   --scrim-blur: 3px;
 
   /* status halo — a dot's ring, sized to read at 6px */

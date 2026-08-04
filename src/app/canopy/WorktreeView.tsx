@@ -104,7 +104,7 @@ export default function WorktreeView({
               <More size={15} />
             </button>
             {menu && (
-              <div className="cx-pop" style={{ top: 28, right: 0, minWidth: 216 }}>
+              <div className="cx-pop cxs-moremenu">
                 <button className="cx-pop__item" onClick={runSetup}>
                   <span className="cx-pop__ic">
                     <Cube size={13} />

@@ -269,8 +269,7 @@ function Pane({
 
         {kind !== "logs" && active && (
           <button
-            className="cx-ib"
-            style={{ height: 21, minWidth: 21 }}
+            className="cx-ib cx-ib--tab"
             title="Open in a separate window"
             onClick={() => popOut(active.id)}
           >
@@ -292,7 +291,6 @@ function Pane({
           </span>
           <button
             className={nextClass("primary")}
-            style={{ marginTop: 3 }}
             onClick={() => (kind === "agent" ? launch.startAgent() : launch.startShell())}
           >
             {kind === "agent" ? <Sparkle size={12} /> : <TerminalIcon size={12} />}
@@ -334,9 +332,9 @@ function Pane({
           })}
 
           {active && !active.running && !detached.has(active.id) && (
-            <div className="cxs-fixbar" style={{ borderColor: "var(--divider)", background: "var(--surface-app)" }}>
-              <span className="tx" style={{ color: "var(--text-secondary)" }}>
-                <b style={{ color: "var(--text-primary)" }}>{active.title}</b> ended. Its output is kept above.
+            <div className="cxs-fixbar cxs-endedbar">
+              <span className="tx">
+                <b>{active.title}</b> ended. Its output is kept above.
               </span>
               <button className="cx-btn cx-btn--sm cx-btn--fix" onClick={() => restartSession(active.id)}>
                 <Play size={10} />

@@ -120,7 +120,7 @@ export default function LogsPane({
           This worktree has no services configured, so there is nothing running and nothing to log.
         </span>
         {na && (
-          <button className={nextClass(na.kind)} onClick={onNext} style={{ marginTop: 3 }}>
+          <button className={nextClass(na.kind)} onClick={onNext}>
             {Icon && <Icon size={12} />}
             {na.label}
             {na.key && <span className="cx-k">{na.key}</span>}
@@ -163,9 +163,8 @@ export default function LogsPane({
           Follow
         </button>
         <button
-          className="cx-ib"
+          className="cx-ib cx-ib--tool"
           title="Clear"
-          style={{ height: 22, minWidth: 22 }}
           onClick={() => wt.services.forEach((s) => clearLogs(s.svcKey))}
         >
           <X size={12} />

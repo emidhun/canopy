@@ -81,7 +81,7 @@ export default function Overview({
               <i key={s.svcKey} className={s.status === "error" ? "bad" : isLive(s.status) ? "on" : ""} />
             ))}
           </span>
-          <span className="rp" style={{ marginLeft: 7 }}>
+          <span className="rp svccount">
             {live}/{wt.services.length}
           </span>
         </td>
@@ -118,8 +118,8 @@ export default function Overview({
         <td className="r">
           <span className="cxs-rowact">
             <button
-              className="cx-ib"
-              style={{ height: 21, minWidth: 21 }}
+              className="cx-ib cx-ib--tab"
+              
               title={na.label}
               onClick={(e) => {
                 e.stopPropagation();
@@ -129,8 +129,8 @@ export default function Overview({
               {na.kind === "crash" ? <Restart size={12} /> : na.id === "start" || na.id === "startrest" ? <Play size={12} /> : <ChevRight size={12} />}
             </button>
             <button
-              className="cx-ib"
-              style={{ height: 21, minWidth: 21 }}
+              className="cx-ib cx-ib--tab"
+              
               title="Terminal"
               onClick={(e) => {
                 e.stopPropagation();
@@ -180,13 +180,13 @@ export default function Overview({
             <b>{agentCount}</b> {agentCount === 1 ? "agent" : "agents"}
           </span>
           {attn.length > 0 && (
-            <span className="cxs-ovs" style={{ color: "var(--state-attention)" }}>
+            <span className="cxs-ovs cxs-ovs--warn">
               <Alert size={11} />
-              <b style={{ color: "var(--state-attention)" }}>{attn.length}</b> need you
+              <b>{attn.length}</b> need you
             </span>
           )}
         </div>
-        <span style={{ flex: 1 }} />
+        <span className="cxs-spacer" />
         <button
           className="cx-btn cx-btn--sm"
           onClick={() => {

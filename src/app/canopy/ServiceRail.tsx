@@ -1,4 +1,4 @@
-/* The service rail — everything the old service cards said, in one 38px row.
+/* The service rail — everything the old service cards said, in one 34px row.
 
    Running services read as filled tokens; idle ones recede to text. Selecting
    a chip filters the log stream below it, so the rail and the log toolbar are
@@ -112,11 +112,9 @@ export default function ServiceRail({
       })}
 
       {wt.dbName && (
-        <div className="cxs-svc cxs-svc--off" onClick={onDatabase} role="button" tabIndex={0} title="Database tools">
+        <div className="cxs-svc cxs-svc--off cxs-svc--db" onClick={onDatabase} role="button" tabIndex={0} title="Database tools">
           <Database size={11} />
-          <span className="nm" style={{ color: "var(--text-secondary)" }}>
-            {wt.dbName}
-          </span>
+          <span className="nm">{wt.dbName}</span>
         </div>
       )}
     </div>

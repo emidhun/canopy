@@ -111,15 +111,15 @@ export function AttentionPop({ items, onPick, onClose }: { items: AttnItem[]; on
   }, [onClose]);
 
   return (
-    <div className="cx-pop" ref={ref} style={{ top: 40, right: 82, width: 306 }}>
+    <div className="cx-pop cxs-attnpop" ref={ref}>
       <div className="cx-pop__head">
         <Bell size={11} />
         Needs you
-        <span style={{ marginLeft: "auto", letterSpacing: 0, textTransform: "none", fontWeight: 500 }}>{items.length}</span>
+        <span className="cxs-pop__count">{items.length}</span>
       </div>
       {items.length === 0 ? (
-        <div style={{ padding: "22px 12px", textAlign: "center", color: "var(--text-tertiary)", fontSize: "var(--fs-body)" }}>
-          <div style={{ color: "var(--state-running)", marginBottom: 7 }}>
+        <div className="cxs-pop-empty">
+          <div className="ic">
             <Check size={17} />
           </div>
           Nothing needs you. Everything is running.
