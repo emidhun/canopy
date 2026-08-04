@@ -798,6 +798,17 @@
 .cxs-vdiv.is-on {
   background: var(--action-primary);
 }
+/* The pane tab strip joins the main pane's shared left gutter. The .cx-tabs
+   primitive sits on --sp-3, but inside the pane the worktree bar, service
+   rail, log toolbar and log lines all align on --gutter — the strip has to
+   join that edge or it is the one row that doesn't line up. */
+.cxs-main .cx-tabs {
+  padding-inline: var(--gutter);
+}
+.cxs-main .cx-tab {
+  padding-inline: var(--sp-row);
+}
+
 /* pane tabs: Logs / Terminal / Agent live TOGETHER — the integration fix.
    The tab group scrolls horizontally instead of overflowing, and the trailing
    control lives OUTSIDE the scroller so it stays reachable however many
@@ -906,7 +917,7 @@
 }
 .cxs-fchip {
   height: var(--h-control-sm);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-md);
   border: var(--border-w) solid transparent;
   background: none;
@@ -1393,7 +1404,7 @@
   align-items: center;
   gap: var(--sp-2);
   height: var(--h-statusact);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-xs);
   border: 0;
   background: none;
