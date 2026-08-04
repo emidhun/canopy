@@ -2031,12 +2031,6 @@
   color: var(--text-secondary);
 }
 
-/* the worktree bar's More menu, anchored under its trigger */
-.cxs-moremenu {
-  top: var(--h-control-xs);
-  right: 0;
-  min-width: 216px;
-}
 
 /* ── the agent pane's context bar ──────────────────────────────────
    What the agent was seeded with, always visible above the session so it is

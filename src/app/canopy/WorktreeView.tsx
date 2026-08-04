@@ -8,6 +8,7 @@ import { Cube, Editor, Finder, Fork, More, SidebarIcon, Terminal, Trash } from "
 import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { nextClass, type NextAction } from "../nextAction";
+import AnchoredMenu from "./AnchoredMenu";
 import ServiceRail from "./ServiceRail";
 import WorkSurface, { type PaneKind } from "./WorkSurface";
 import type { LaneLaunch } from "./laneLaunch";
@@ -45,21 +46,12 @@ export default function WorktreeView({
   const restartService = useStore((s) => s.restartService);
   const [filter, setFilter] = useState("all");
   const [menu, setMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
   const NaIcon = na.icon;
 
   // a filter naming a service that no longer exists would silently hide
   // everything, so fall back to "all" when the worktree changes
   useEffect(() => setFilter("all"), [wt.wtKey]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const d = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
-    };
-    document.addEventListener("mousedown", d);
-    return () => document.removeEventListener("mousedown", d);
-  }, [menu]);
 
   const runSetup = () => {
     setMenu(false);
@@ -98,50 +90,48 @@ export default function WorktreeView({
           <button className="cx-ib" title="Reveal in Finder" onClick={() => openWorktree(wt.wtKey, "finder")}>
             <Finder size={14} />
           </button>
-          <div style={{ position: "relative", display: "inline-flex" }} ref={menuRef}>
-            <button className="cx-ib" title="More" onClick={() => setMenu((m) => !m)}>
-              <More size={15} />
-            </button>
-            {menu && (
-              <div className="cx-pop cxs-moremenu">
-                <button className="cx-pop__item" onClick={runSetup}>
-                  <span className="cx-pop__ic">
-                    <Cube size={13} />
-                  </span>
-                  Run setup
-                </button>
-                <button
-                  className="cx-pop__item"
-                  onClick={() => {
-                    setMenu(false);
-                    openWorktree(wt.wtKey, "terminal");
-                  }}
-                >
-                  <span className="cx-pop__ic">
-                    <Terminal size={13} />
-                  </span>
-                  Open in Terminal
-                </button>
-                {!wt.isMain && (
-                  <>
-                    <div className="cx-pop__sep" />
-                    <button
-                      className="cx-pop__item cx-pop__item--danger"
-                      onClick={() => {
-                        setMenu(false);
-                        onRemove();
-                      }}
-                    >
-                      <span className="cx-pop__ic">
-                        <Trash size={13} />
-                      </span>
-                      Remove worktree…
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          <button className="cx-ib" title="More" onClick={() => setMenu((m) => !m)} ref={moreRef} aria-haspopup="menu" aria-expanded={menu}>
+            <More size={15} />
+          </button>
+          {menu && (
+            <AnchoredMenu anchor={moreRef} onClose={() => setMenu(false)} width={216}>
+              <button className="cx-pop__item" onClick={runSetup}>
+                <span className="cx-pop__ic">
+                  <Cube size={13} />
+                </span>
+                Run setup
+              </button>
+              <button
+                className="cx-pop__item"
+                onClick={() => {
+                  setMenu(false);
+                  openWorktree(wt.wtKey, "terminal");
+                }}
+              >
+                <span className="cx-pop__ic">
+                  <Terminal size={13} />
+                </span>
+                Open in Terminal
+              </button>
+              {!wt.isMain && (
+                <>
+                  <div className="cx-pop__sep" />
+                  <button
+                    className="cx-pop__item cx-pop__item--danger"
+                    onClick={() => {
+                      setMenu(false);
+                      onRemove();
+                    }}
+                  >
+                    <span className="cx-pop__ic">
+                      <Trash size={13} />
+                    </span>
+                    Remove worktree…
+                  </button>
+                </>
+              )}
+            </AnchoredMenu>
+          )}
 
           <span className="cxs-actdiv" />
 
