@@ -50,9 +50,12 @@
   --on-green: #06241f;
   --on-amber: #221806;
   --on-red: #2a0d07;
+  --on-danger: #fff; /* a filled danger button carries white, not dark ink */
 
   /* ── derived text tints (readable ON a *-dim fill) ── */
   --red-text: #f0836f;
+  --green-text: #a9dfb6; /* body copy on a --green-dim alert */
+  --amber-text: #e8cda1; /* body copy on a --warn-dim alert */
   --red-text-soft: #f0b5a8;
   --teal-text: #9fe0e4;
   --teal-text-hi: #8fdfe4;
@@ -72,6 +75,10 @@
   --teal-border: rgba(92, 199, 205, 0.34);
   --teal-fill-hi: rgba(92, 199, 205, 0.26);
   --red-border: rgba(224, 83, 61, 0.3);
+  --red-border-hi: rgba(224, 83, 61, 0.34);
+  --red-wash: rgba(224, 83, 61, 0.07); /* the tint under an error log line */
+  --amber-border: rgba(230, 173, 95, 0.3);
+  --green-border: rgba(76, 194, 102, 0.28);
   --amber-halo: rgba(230, 173, 95, 0.16);
   /* washes on floating surfaces, which sit lighter than --hover on the app */
   --wash-pop: rgba(255, 255, 255, 0.05);
@@ -152,6 +159,12 @@
   --sp-row: 8px; /* THE default: row padding and row gap */
   --sp-pop: 10px; /* floating-surface inline padding */
   --sp-pop-lg: 11px; /* popover item inline padding */
+  --sp-modal-head: 13px; /* modal header block padding */
+  --sp-toast-x: 15px; /* toast inline padding — a pill, so wider than tall */
+  --sp-scrim: 28px; /* breathing room between a modal and the window edge */
+  --sp-kbd-y: 1.5px; /* a kbd cap is a half-pixel taller than it is not */
+  --sp-empty: 26px; /* vertical breathing room in an inline empty state */
+  --sp-empty-lg: 30px; /* the same, inside a floating surface */
 
   /* fixed chrome heights — the app's vertical rhythm */
   --h-topbar: 36px;
@@ -171,6 +184,7 @@
   --h-statusact: 17px; /* status-bar button */
   --h-ib-tab: 21px; /* icon button inside a pane tab strip */
   --h-ib-tool: 22px; /* icon button inside a toolbar */
+  --h-ib: 26px; /* the standard icon button, and segmented-control segments */
 
   /* status dots — 6px reads only because of the halo; 5px is the inline
      variant used inside rows and tables where a halo would crowd. */
@@ -185,7 +199,11 @@
   --w-pullpop: 346px;
   --w-attnpop: 306px;
   --w-levelpop: 158px;
-  --w-popover: 230px;
+  --w-popover: 236px;
+  --w-modal: 520px;
+  --w-modal-narrow: 440px;
+  --w-modal-wide: 600px;
+  --w-logsrc: 58px; /* the log line's SERVICE column */
 
   /* window chrome constants (not design choices — the OS and the screen set
      these): the macOS traffic-light inset, and how far ⌘K hangs from the top */
@@ -205,6 +223,7 @@
   --r-win: 11px;
   /* off-scale radii the screens use: a 2px selection bar, a 3px affordance
      inside a chip, and the pull popover at 10px (between --r-xl and --r-2xl) */
+  --r-hairline: 1px; /* sparkline bars — just enough to kill the hard corner */
   --r-indicator: 2px;
   --r-tiny: 3px;
   --r-pop: 10px;

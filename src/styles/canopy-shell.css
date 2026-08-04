@@ -228,7 +228,7 @@
   background: var(--surface-well);
   border-color: var(--divider);
   color: var(--text-tertiary);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .cxs-attn--clear:hover {
   background: var(--btn);
@@ -353,7 +353,7 @@
 .cxs-slist {
   flex: 1;
   overflow-y: auto;
-  padding: 2px var(--sp-tight) var(--sp-row);
+  padding: var(--sp-1) var(--sp-tight) var(--sp-row);
 }
 /* overview entry — the cross-worktree home */
 .cxs-ovrow {
@@ -709,7 +709,7 @@
 .cxs-svc .nm {
   font-size: var(--fs-small);
   color: var(--text-primary);
-  font-weight: 520;
+  font-weight: var(--fw-medium);
 }
 .cxs-svc--off {
   background: none;
@@ -912,7 +912,7 @@
   background: none;
   color: var(--text-tertiary);
   font-size: var(--fs-small);
-  font-weight: 560;
+  font-weight: var(--fw-medium);
   font-family: var(--sans);
   cursor: pointer;
   display: inline-flex;
@@ -1049,7 +1049,7 @@
   padding-right: var(--gutter);
 }
 .cxs-logempty {
-  padding: 26px var(--sp-5);
+  padding: var(--sp-empty) var(--sp-5);
   text-align: center;
   color: var(--text-tertiary);
   font-family: var(--sans);
@@ -1368,7 +1368,7 @@
   opacity: 1;
 }
 .cxs-ovempty {
-  padding: 26px var(--sp-5);
+  padding: var(--sp-empty) var(--sp-5);
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--fs-body);
@@ -1599,7 +1599,7 @@
 }
 .cxs-pp-nm {
   font-size: var(--fs-body);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text-primary);
   flex: none;
 }
@@ -1678,7 +1678,7 @@
   border-color: var(--border);
 }
 .cxs-pp-brl {
-  margin: 1px var(--sp-2) var(--sp-3);
+  margin: var(--sp-hair) var(--sp-2) var(--sp-3);
   border: var(--border-w) solid var(--border);
   border-radius: var(--r-xl);
   background: var(--surface-well);
@@ -1714,7 +1714,7 @@
   white-space: nowrap;
 }
 .cxs-pp-empty {
-  padding: 14px var(--sp-5);
+  padding: var(--sp-6) var(--sp-5);
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--fs-small);
@@ -1751,7 +1751,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-pop);
-  padding: 11px var(--sp-6);
+  padding: var(--sp-pop-lg) var(--sp-6);
   border-bottom: var(--border-w) solid var(--divider);
   color: var(--text-tertiary);
 }
@@ -1857,7 +1857,7 @@
   gap: var(--sp-2);
 }
 .cxs-pal-empty {
-  padding: 30px var(--sp-5);
+  padding: var(--sp-empty-lg) var(--sp-5);
   text-align: center;
   color: var(--text-tertiary);
   font-size: var(--fs-body);
@@ -2002,7 +2002,7 @@
   margin-left: auto;
   letter-spacing: 0;
   text-transform: none;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 /* the next action inside an empty state sits just clear of the copy above it */
 .cxs-empty .cx-next {
