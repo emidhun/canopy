@@ -1,98 +1,22 @@
-// New worktree flow — new branch from base, or check out an existing branch.
-// Branch pickers are searchable; a Fetch button runs `git fetch --all --prune`.
-// Streams create progress (incl. submodule clones) via worktree:op events.
-import { useEffect, useRef, useState } from "react";
+/* New worktree — the creation dialog.
+
+   Two modes: a new branch off a base, or checking out one that exists. The
+   "You'll get" panel is the reassurance — it answers "where will this land?"
+   while the name is still editable. The agent handoff is optional and
+   collapsed, because most worktrees don't need one, but when it's filled in
+   it seeds .canopy/context.md and later becomes the PR body. */
+import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { hasBackend, ipc } from "../ipc";
+import { hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
 import { useStore } from "../store";
+import { Alert, ChevRight, Fork, Info, Plus, Refresh, Spinner } from "../icons";
+import Modal, { Hint, Spacer } from "./canopy/Modal";
+import RefPick from "./canopy/RefPick";
 import { seedWtContext } from "./WorktreeContext";
-import { Fork, Refresh, Search, Spinner } from "../icons";
 
-interface OpEvent {
-  wtKey: string;
-  op: string;
-  state: "progress" | "done" | "error";
-  detail: string;
-}
-
-type RefKind = "local" | "remote" | "tag";
-
-interface BranchItem {
-  name: string;
-  kind: RefKind;
-}
-
-/** Searchable ref dropdown — filters local + remote branches and tags as you type. */
-function BranchPicker({
-  value,
-  items,
-  onPick,
-  disabled,
-  placeholder,
-}: {
-  value: string;
-  items: BranchItem[];
-  onPick: (name: string, kind: RefKind) => void;
-  disabled?: boolean;
-  placeholder: string;
-}) {
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  const needle = q.toLowerCase();
-  const filtered = items.filter((b) => b.name.toLowerCase().includes(needle)).slice(0, 60);
-
-  return (
-    <div className="bp" ref={boxRef}>
-      <div className="bp-field" onClick={() => !disabled && setOpen(true)}>
-        <Search size={13} />
-        <input
-          className="bp-input"
-          value={open ? q : value || ""}
-          placeholder={value || placeholder}
-          disabled={disabled}
-          onFocusCapture={() => setOpen(true)}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setOpen(true);
-          }}
-        />
-        {value && !open && <span className="bp-current">selected</span>}
-      </div>
-      {open && (
-        <div className="bp-list">
-          {filtered.length === 0 ? (
-            <div className="bp-empty">no matching branches</div>
-          ) : (
-            filtered.map((b) => (
-              <button
-                key={b.kind + ":" + b.name}
-                className={"bp-item" + (b.name === value ? " sel" : "")}
-                onClick={() => {
-                  onPick(b.name, b.kind);
-                  setQ("");
-                  setOpen(false);
-                }}
-              >
-                <span className="bp-name">{b.name}</span>
-                {b.kind !== "local" && <span className="bp-tag">{b.kind}</span>}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+/** A branch name becomes a directory name; git and the filesystem disagree
+    about what's legal, so the slug is the safe intersection. */
+const slugify = (b: string) => b.replace(/[^a-z0-9._-]+/gi, "-").toLowerCase();
 
 export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; onClose: () => void }) {
   const tree = useStore((s) => s.tree);
@@ -102,15 +26,11 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const repos = tree.map((r) => ({ id: r.repoId, name: r.name }));
   const [repo, setRepo] = useState(repoId || repos[0]?.id || "");
   const [mode, setMode] = useState<"new" | "existing">("new");
-  const [branch, setBranch] = useState(""); // new-branch name
-  const [base, setBase] = useState(""); // base for new branch
-  const [baseIsTag, setBaseIsTag] = useState(false);
-  const [existing, setExisting] = useState<{ name: string; kind: RefKind } | null>(null);
-  const [branches, setBranches] = useState<{ local: string[]; remote: string[]; tags: string[] }>({
-    local: [],
-    remote: [],
-    tags: [],
-  });
+  const [name, setName] = useState("");
+  const [base, setBase] = useState("");
+  const [existing, setExisting] = useState("");
+  const [existingKind, setExistingKind] = useState<"local" | "remote" | "tags" | "new">("local");
+  const [branches, setBranches] = useState<Branches | null>(null);
   const [busy, setBusy] = useState(false);
   const [fetching, setFetching] = useState(false);
   const [progress, setProgress] = useState<string[]>([]);
@@ -120,20 +40,24 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const [issue, setIssue] = useState("");
   const [issueDescription, setIssueDescription] = useState("");
 
-  const localItems: BranchItem[] = branches.local.map((b) => ({ name: b, kind: "local" as const }));
-  const remoteItems: BranchItem[] = branches.remote.map((b) => ({ name: b, kind: "remote" as const }));
-  const tagItems: BranchItem[] = (branches.tags ?? []).map((t) => ({ name: t, kind: "tag" as const }));
-  const allItems = [...localItems, ...remoteItems, ...tagItems];
+  const activeRepo = tree.find((r) => r.repoId === repo);
+  // git refuses to check the same branch out twice; show them, disabled
+  const inUse = useMemo(() => new Set((activeRepo?.worktrees ?? []).map((w) => w.branch)), [activeRepo]);
 
   useEffect(() => {
-    if (!hasBackend() || !repo) return;
+    if (!hasBackend() || !repo) {
+      setBranches({ local: [], remote: [], tags: [] });
+      return;
+    }
+    setBranches(null);
     ipc
       .listBranches(repo)
       .then((b) => {
         setBranches(b);
-        if (!base) setBase(b.local.includes("main") ? "main" : b.local[0] ?? "");
+        if (!base) setBase(b.local.includes("main") ? "main" : (b.local[0] ?? ""));
       })
-      .catch(() => {});
+      .catch(() => setBranches({ local: [], remote: [], tags: [] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repo]);
 
   useEffect(() => {
@@ -153,7 +77,7 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     try {
       const b = await ipc.fetchBranches(repo);
       setBranches(b);
-      showToast(`Fetched — ${b.local.length} local, ${b.remote.length} remote, ${b.tags?.length ?? 0} tags`);
+      showToast(`Fetched — ${b.local.length} local, ${b.remote.length} remote, ${b.tags.length} tags`);
     } catch (e) {
       setError(`Fetch failed — ${String(e)}`);
     } finally {
@@ -161,41 +85,33 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     }
   }
 
-  async function create() {
-    setError(null);
-    // resolve to {branch, base, createBranch} from the active mode
-    let payload: { branch: string; base?: string; createBranch: boolean };
-    if (mode === "new") {
-      if (!branch.trim()) return setError("Branch name required");
-      // refs/tags/ keeps a tag base unambiguous vs a branch of the same name
-      payload = { branch: branch.trim(), base: baseIsTag ? `refs/tags/${base}` : base, createBranch: true };
-    } else {
-      if (!existing) return setError("Pick a branch or tag");
-      if (existing.kind === "remote") {
-        // checking out a remote branch → create a local tracking branch.
-        // strip the remote name (first path segment): origin/feature/x → feature/x
-        const local = existing.name.split("/").slice(1).join("/");
-        payload = { branch: local, base: existing.name, createBranch: true };
-      } else if (existing.kind === "tag") {
-        // checking out a tag → create a local branch named after it
-        payload = { branch: existing.name, base: `refs/tags/${existing.name}`, createBranch: true };
-      } else {
-        payload = { branch: existing.name, createBranch: false };
-      }
-    }
+  const branch = mode === "new" ? name.trim() : existing;
+  const slug = slugify(branch || "new-branch");
+  const ok = !!branch;
 
+  async function create() {
+    if (!ok) return;
     setBusy(true);
     setProgress([]);
+    setError(null);
     try {
       if (!hasBackend()) {
         showToast("New worktree needs the desktop app");
         return;
       }
+      const payload =
+        mode === "new"
+          ? { branch, base: base || undefined, createBranch: true }
+          : existingKind === "tags"
+            ? // checking out a tag → create a local branch named after it
+              { branch: existing, base: `refs/tags/${existing}`, createBranch: true }
+            : { branch: existing, createBranch: false };
+
       const wtPath = await ipc.createWorktree({ repoId: repo, ...payload });
-      // The runtime details (ports/database) are derived from the authoritative
-      // tree after creation; seed the human handoff now, keyed by the new path.
-      seedWtContext(wtPath, { title: payload.branch, pr, prDescription, issue, issueDescription });
-      showToast(`Worktree ready — ${payload.branch}`);
+      // seed the human handoff now, keyed by the new path — the runtime
+      // details are read back from the authoritative tree afterwards
+      seedWtContext(wtPath, { title: branch, pr, prDescription, issue, issueDescription });
+      showToast(`Worktree ready — ${branch}`);
       select(wtPath);
       onClose();
     } catch (e) {
@@ -205,115 +121,197 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     }
   }
 
-  const canCreate = mode === "new" ? !!branch.trim() : !!existing;
-
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <div className="modal">
-        <div className="modal-head">
-          <span className="fork" style={{ color: "var(--accent)", display: "inline-flex" }}>
-            <Fork size={15} />
-          </span>
-          New worktree
+    <Modal
+      icon={Fork}
+      title="New worktree"
+      sub={activeRepo?.name}
+      busy={busy}
+      onClose={onClose}
+      foot={
+        <>
+          <Hint icon={Info}>Ports and database are derived automatically</Hint>
+          <Spacer />
+          <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="cx-btn cx-btn--primary" onClick={create} disabled={busy || !ok}>
+            {busy ? (
+              <>
+                <Spinner size={12} />
+                Creating…
+              </>
+            ) : (
+              <>
+                <Plus size={12} />
+                Create worktree
+                <span className="cx-k">⌘⏎</span>
+              </>
+            )}
+          </button>
+        </>
+      }
+    >
+      <div className="cxm-fld">
+        <div className="cxm-flab">
+          <Fork size={11} />
+          Repository &amp; branch
+          <button
+            className="cx-btn cx-btn--ghost cxm-opt"
+            style={{ height: "var(--h-session)", padding: "0 var(--sp-3)", fontSize: "var(--fs-micro)" }}
+            onClick={fetchAll}
+            disabled={busy || fetching}
+          >
+            {fetching ? <Spinner size={10} /> : <Refresh size={10} />}
+            Fetch all
+          </button>
         </div>
 
-        <div className="modal-body">
-          <label className="set-label">Repository</label>
-          <select className="set-input" value={repo} onChange={(e) => setRepo(e.target.value)} disabled={busy}>
+        <div className="cxm-grid2" style={{ marginBottom: "var(--sp-row)" }}>
+          <select className="cx-input" value={repo} onChange={(e) => setRepo(e.target.value)} disabled={busy}>
             {repos.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>
             ))}
           </select>
-
-          <div className="bp-head">
-            <label className="set-label" style={{ flex: 1 }}>
-              Branch
-            </label>
-            <button className="bp-fetch" onClick={fetchAll} disabled={busy || fetching} title="git fetch --all --prune">
-              {fetching ? <Spinner size={13} /> : <Refresh size={13} />}
-              {fetching ? "Fetching…" : "Fetch all"}
-            </button>
-          </div>
-
-          <div className="modal-mode">
-            <button className={"console-tab" + (mode === "new" ? " sel" : "")} onClick={() => setMode("new")} disabled={busy}>
+          <div className="cx-seg">
+            <button className={mode === "new" ? "is-on" : ""} onClick={() => setMode("new")} disabled={busy}>
               New branch
             </button>
-            <button
-              className={"console-tab" + (mode === "existing" ? " sel" : "")}
-              onClick={() => setMode("existing")}
-              disabled={busy}
-            >
-              Existing branch / tag
+            <button className={mode === "existing" ? "is-on" : ""} onClick={() => setMode("existing")} disabled={busy}>
+              Existing
             </button>
           </div>
+        </div>
 
-          {mode === "new" ? (
-            <>
+        {mode === "new" ? (
+          <>
+            <div className="cxm-sfld">
+              <div className="cxm-flab cxm-flab--f">Branch name</div>
               <input
-                className="set-input"
-                placeholder="feature/my-branch"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
+                className="cx-input cx-input--mono"
+                placeholder="feat/my-branch"
+                value={name}
+                spellCheck={false}
+                onChange={(e) => setName(e.target.value)}
                 disabled={busy}
-                autoFocus
               />
-              <label className="set-label">From base</label>
-              <BranchPicker
-                value={baseIsTag ? `${base} (tag)` : base}
-                items={allItems}
-                onPick={(name, kind) => {
-                  setBase(name);
-                  setBaseIsTag(kind === "tag");
-                }}
-                disabled={busy}
-                placeholder="search base branch or tag…"
-              />
-            </>
-          ) : (
-            <BranchPicker
-              value={existing?.name ?? ""}
-              items={allItems}
-              onPick={(name, kind) => setExisting({ name, kind })}
-              disabled={busy}
-              placeholder="search branches and tags…"
-            />
-          )}
-
-          <details className="handoff-fields">
-            <summary>Agent handoff <span>optional PR / issue context</span></summary>
-            <label className="set-label">Pull request</label>
-            <input className="set-input" value={pr} placeholder="https://github.com/org/repo/pull/123" onChange={(e) => setPr(e.target.value)} disabled={busy} />
-            <textarea className="set-input handoff-desc" value={prDescription} placeholder="What the PR changes or needs reviewed" onChange={(e) => setPrDescription(e.target.value)} disabled={busy} />
-            <label className="set-label">Issue</label>
-            <input className="set-input" value={issue} placeholder="https://github.com/org/repo/issues/123" onChange={(e) => setIssue(e.target.value)} disabled={busy} />
-            <textarea className="set-input handoff-desc" value={issueDescription} placeholder="Problem, acceptance criteria, and constraints" onChange={(e) => setIssueDescription(e.target.value)} disabled={busy} />
-          </details>
-
-          {busy && (
-            <div className="modal-progress">
-              <span style={{ color: "var(--accent)", display: "inline-flex" }}>
-                <Spinner size={14} />
-              </span>
-              <div className="modal-progress-lines">
-                {progress.length ? progress.slice(-4).map((l, i) => <div key={i}>{l}</div>) : <div>creating…</div>}
-              </div>
             </div>
-          )}
-          {error && <div className="modal-error">{error}</div>}
-        </div>
-
-        <div className="modal-foot">
-          <button className="iconbtn" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
-          <button className="iconbtn primary" onClick={create} disabled={busy || !canCreate}>
-            {busy ? "Creating…" : "Create worktree"}
-          </button>
-        </div>
+            <div className="cxm-sfld">
+              <div className="cxm-flab cxm-flab--f">Created from</div>
+              <RefPick
+                value={base}
+                branches={branches}
+                placeholder="search a base branch or tag…"
+                onPick={(n) => setBase(n)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="cxm-sfld">
+            <div className="cxm-flab cxm-flab--f">Branch to check out</div>
+            <RefPick
+              value={existing}
+              branches={branches}
+              placeholder="search branches and tags…"
+              inUse={inUse}
+              onPick={(n, k) => {
+                setExisting(n);
+                setExistingKind(k);
+              }}
+            />
+          </div>
+        )}
       </div>
-    </div>
+
+      <div className="cxm-fld">
+        <div className="cxm-flab">You'll get</div>
+        <dl className="cx-kv">
+          <dt>Path</dt>
+          <dd>
+            .worktrees/<em>{ok ? slug : "…"}</em>
+          </dd>
+          {/* TODO(#58): ports and the database name are assigned inside
+              create_worktree. Deriving them here would duplicate backend logic
+              that can drift, and a wrong port is worse than a blank one. */}
+          <dt>Ports</dt>
+          <dd title="Assigned at creation">—</dd>
+          <dt>Database</dt>
+          <dd title="Assigned at creation">—</dd>
+        </dl>
+      </div>
+
+      <details className="cxm-disc">
+        <summary>
+          <span className="cv">
+            <ChevRight size={11} />
+          </span>
+          Agent handoff
+          <span className="sub">optional PR / issue context</span>
+        </summary>
+        <div className="cxm-disc__body">
+          <div className="cxm-fld">
+            <div className="cxm-flab cxm-flab--f">Pull request</div>
+            <input
+              className="cx-input"
+              placeholder="https://github.com/org/repo/pull/123"
+              value={pr}
+              onChange={(e) => setPr(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <div className="cxm-fld">
+            <div className="cxm-flab cxm-flab--f">What it changes</div>
+            <textarea
+              className="cx-input"
+              placeholder="Seeds the agent, and later becomes the PR body"
+              value={prDescription}
+              onChange={(e) => setPrDescription(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <div className="cxm-fld">
+            <div className="cxm-flab cxm-flab--f">Issue</div>
+            <input
+              className="cx-input"
+              placeholder="https://github.com/org/repo/issues/42"
+              value={issue}
+              onChange={(e) => setIssue(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+          <div className="cxm-fld">
+            <div className="cxm-flab cxm-flab--f">Problem</div>
+            <textarea
+              className="cx-input"
+              value={issueDescription}
+              onChange={(e) => setIssueDescription(e.target.value)}
+              disabled={busy}
+            />
+          </div>
+        </div>
+      </details>
+
+      {busy && (
+        <div className="cxm-prog">
+          <span className="cxm-prog__ic">
+            <Spinner size={13} />
+          </span>
+          <div className="cxm-prog__lines">
+            {progress.length ? progress.slice(-4).map((l, i) => <div key={i}>{l}</div>) : <div>creating…</div>}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="cx-alert cx-alert--error" style={{ marginTop: "var(--sp-modal-head)" }}>
+          <span className="cx-alert__ic">
+            <Alert size={13} />
+          </span>
+          <div>{error}</div>
+        </div>
+      )}
+    </Modal>
   );
 }

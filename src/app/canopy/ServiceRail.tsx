@@ -1,8 +1,9 @@
 /* The service rail — everything the old service cards said, in one 34px row.
 
-   Running services read as filled tokens; idle ones recede to text. Selecting
-   a chip filters the log stream below it, so the rail and the log toolbar are
-   two views of one selection rather than two competing controls. */
+   Running services read as filled tokens; idle ones recede to text. A chip
+   opens Service detail — the port override, metrics and failure live there.
+   Log filtering is the log toolbar's own chip row, so one click never has to
+   mean two things. */
 import { Database, Play, Restart, Spinner, Stop } from "../../icons";
 import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
@@ -11,14 +12,11 @@ import { svcDotClass } from "../nextAction";
 
 export default function ServiceRail({
   wt,
-  filter,
-  onFilter,
+  onOpenService,
   onDatabase,
 }: {
   wt: WorktreeNode;
-  /** svcKey of the service the logs are filtered to, or "all" */
-  filter: string;
-  onFilter: (svcKey: string) => void;
+  onOpenService: (s: ServiceNode) => void;
   onDatabase: () => void;
 }) {
   const stats = useStore((s) => s.stats);
@@ -54,17 +52,16 @@ export default function ServiceRail({
             className={
               "cxs-svc" +
               (live ? "" : " cxs-svc--off") +
-              (s.status === "error" ? " cxs-svc--error" : "") +
-              (filter === s.svcKey ? " is-on" : "")
+              (s.status === "error" ? " cxs-svc--error" : "")
             }
-            onClick={() => onFilter(filter === s.svcKey ? "all" : s.svcKey)}
+            onClick={() => onOpenService(s)}
             role="button"
             tabIndex={0}
             title={`${s.name} — ${s.status}`}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                onFilter(filter === s.svcKey ? "all" : s.svcKey);
+                onOpenService(s);
               }
             }}
           >

@@ -2037,3 +2037,53 @@
   right: 0;
   min-width: 216px;
 }
+
+/* ── the agent pane's context bar ──────────────────────────────────
+   What the agent was seeded with, always visible above the session so it is
+   never a mystery what it was told. Clicking it opens the context editor. */
+.cxs-ctxbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  padding: var(--sp-tight) var(--sp-pop);
+  border-bottom: var(--border-w) solid var(--divider);
+  background: var(--surface-app);
+  cursor: pointer;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  width: 100%;
+  text-align: left;
+  font-family: var(--sans);
+  transition: background var(--dur-fast);
+}
+.cxs-ctxbar:hover {
+  background: var(--surface);
+}
+.cxs-ctxbar .lb {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  flex: none;
+}
+.cxs-ctxbar .ti {
+  font-size: var(--fs-small);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.cxs-ctxbar .ti.is-empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.cxs-ctxbar .lk {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  flex: none;
+}

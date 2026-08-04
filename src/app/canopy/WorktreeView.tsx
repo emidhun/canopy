@@ -5,7 +5,6 @@
    reason rides in front of the next action and is the first thing to yield. */
 import { useEffect, useRef, useState } from "react";
 import { Cube, Editor, Finder, Fork, More, SidebarIcon, Terminal, Trash } from "../../icons";
-import { hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { nextClass, type NextAction } from "../nextAction";
@@ -24,6 +23,9 @@ export default function WorktreeView({
   onShowSide,
   onRemove,
   onDatabase,
+  onSetup,
+  onOpenService,
+  onEditContext,
 }: {
   wt: WorktreeNode;
   na: NextAction;
@@ -35,10 +37,12 @@ export default function WorktreeView({
   onShowSide: () => void;
   onRemove: () => void;
   onDatabase: () => void;
+  onSetup: () => void;
+  onOpenService: (s: ServiceNode) => void;
+  onEditContext: () => void;
 }) {
   const openWorktree = useStore((s) => s.openWorktree);
   const restartService = useStore((s) => s.restartService);
-  const showToast = useStore((s) => s.showToast);
   const [filter, setFilter] = useState("all");
   const [menu, setMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -59,12 +63,7 @@ export default function WorktreeView({
 
   const runSetup = () => {
     setMenu(false);
-    if (!hasBackend()) {
-      showToast("Setup runs in the desktop app");
-      return;
-    }
-    showToast(`Running setup — ${wt.branch}…`);
-    ipc.runWorktreeSetup(wt.wtKey).catch((e) => showToast(`Setup failed — ${String(e)}`));
+    onSetup();
   };
 
   return (
@@ -156,7 +155,7 @@ export default function WorktreeView({
         </div>
       </div>
 
-      <ServiceRail wt={wt} filter={filter} onFilter={setFilter} onDatabase={onDatabase} />
+      <ServiceRail wt={wt} onOpenService={onOpenService} onDatabase={onDatabase} />
 
       <WorkSurface
         wt={wt}
@@ -168,6 +167,7 @@ export default function WorktreeView({
         onNext={onNext}
         onRestart={(s: ServiceNode) => restartService(s.svcKey)}
         launch={launch}
+        onEditContext={onEditContext}
       />
     </div>
   );

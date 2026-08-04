@@ -12,6 +12,8 @@ import type { ServiceNode, WorktreeNode } from "../../types";
 import TerminalPane from "../TerminalPane";
 import LogsPane from "./LogsPane";
 import { agentState, nextClass, type NextAction } from "../nextAction";
+import { useWtContext } from "../WorktreeContext";
+import { Chevron } from "../../icons";
 import type { LaneLaunch } from "./laneLaunch";
 
 export type PaneKind = "logs" | "shell" | "agent";
@@ -59,6 +61,7 @@ export default function WorkSurface({
   onNext,
   onRestart,
   launch,
+  onEditContext,
 }: {
   wt: WorktreeNode;
   panes: PaneKind[];
@@ -69,6 +72,7 @@ export default function WorkSurface({
   onNext: () => void;
   onRestart: (s: ServiceNode) => void;
   launch: LaneLaunch;
+  onEditContext: () => void;
 }) {
   const [split, setSplit] = useState(0.56);
   const [drag, setDrag] = useState(false);
@@ -121,6 +125,7 @@ export default function WorkSurface({
             onNext={onNext}
             onRestart={onRestart}
             launch={launch}
+            onEditContext={onEditContext}
           />
         </div>
       ))}
@@ -139,6 +144,7 @@ function Pane({
   onNext,
   onRestart,
   launch,
+  onEditContext,
 }: {
   kind: PaneKind;
   index: number;
@@ -150,7 +156,9 @@ function Pane({
   onNext: () => void;
   onRestart: (s: ServiceNode) => void;
   launch: LaneLaunch;
+  onEditContext: () => void;
 }) {
+  const [ctx] = useWtContext(wt.wtKey);
   const all = useStore((s) => s.sessions[wt.wtKey] ?? EMPTY);
   const activeTerm = useStore((s) => s.activeTerm[wt.wtKey]);
   const setActiveTerm = useStore((s) => s.setActiveTerm);
@@ -209,6 +217,16 @@ function Pane({
 
   return (
     <div className="cxs-pane">
+      {kind === "agent" && (
+        <button className="cxs-ctxbar" onClick={onEditContext} title="Edit the context this worktree's agents inherit">
+          <span className="lb">Context</span>
+          <span className={"ti" + (ctx.title.trim() ? "" : " is-empty")}>
+            {ctx.title.trim() || "No task set — the agent still inherits branch, ports and database"}
+          </span>
+          {ctx.links.length > 0 && <span className="lk">{ctx.links.length} links</span>}
+          <Chevron size={11} />
+        </button>
+      )}
       <div className="cx-tabs">
         <div className="cx-tabs__scroll">
           {(Object.keys(TAB_META) as PaneKind[]).map((t) => {

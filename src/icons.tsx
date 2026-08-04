@@ -414,3 +414,11 @@ export const Sliders = ({ size = 14 }: P) => (
     <circle cx="19" cy="18" r="1.9" />
   </svg>
 );
+
+/** Two arrows trading places — branch switching, in place. */
+export const Swap = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M4 8h13l-3 -3" />
+    <path d="M20 16h-13l3 3" />
+  </svg>
+);

@@ -7,8 +7,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { hasBackend, ipc } from "../ipc";
 import { initSync, useStore } from "../store";
-import type { RepoNode, WorktreeNode } from "../types";
-import { Plus, X } from "../icons";
+import type { RepoNode, ServiceNode, WorktreeNode } from "../types";
+import { Plus } from "../icons";
 import { attentionItems, nextAction, type AttnItem, type NextAction } from "./nextAction";
 import { TopBar, AttentionPop } from "./canopy/TopBar";
 import SidebarNav from "./canopy/SidebarNav";
@@ -18,7 +18,10 @@ import Palette from "./canopy/Palette";
 import StatusBar from "./canopy/StatusBar";
 import { LAYOUT_ORDER, LAYOUTS, panesOf, type LayoutId, type PaneKind } from "./canopy/WorkSurface";
 import { useLaneLaunch } from "./canopy/laneLaunch";
-import DatabaseControl from "./DatabaseControl";
+import DatabaseModal from "./canopy/DatabaseModal";
+import SetupRunnerModal from "./canopy/SetupRunnerModal";
+import ServiceDetailModal from "./canopy/ServiceDetailModal";
+import ContextModal from "./canopy/ContextModal";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
@@ -53,6 +56,9 @@ export default function App() {
   const [showNewWt, setShowNewWt] = useState(false);
   const [showSwitchBranch, setShowSwitchBranch] = useState(false);
   const [showDb, setShowDb] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [showCtx, setShowCtx] = useState(false);
+  const [svcDetail, setSvcDetail] = useState<ServiceNode | null>(null);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
@@ -113,9 +119,9 @@ export default function App() {
         if (a.sessionId) setActiveTerm(key, a.sessionId);
         break;
       case "setup":
-        if (!hasBackend()) return showToast("Setup runs in the desktop app");
-        showToast(`Running setup — ${target.branch}…`);
-        ipc.runWorktreeSetup(key).catch((e) => showToast(`Setup failed — ${String(e)}`));
+        select(key);
+        setView("wt");
+        setShowSetup(true);
         break;
       case "starting":
         break; // busy — acting again would double-start
@@ -281,6 +287,9 @@ export default function App() {
               onShowSide={() => setSideHidden(false)}
               onRemove={() => setRemoveWtFor(sel.wt)}
               onDatabase={() => setShowDb(true)}
+              onSetup={() => setShowSetup(true)}
+              onOpenService={(s) => setSvcDetail(s)}
+              onEditContext={() => setShowCtx(true)}
             />
           )
         )}
@@ -336,25 +345,27 @@ export default function App() {
         />
       )}
 
-      {showDb && sel && (
-        <div className="cx-scrim" onMouseDown={() => setShowDb(false)}>
-          <div className="cx-modal" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="cx-modal__head">
-              <div className="cx-modal__title">
-                <b>Database</b>
-                <span>{sel.wt.dbName ?? "not configured"}</span>
-              </div>
-              <button className="cx-ib" onClick={() => setShowDb(false)} title="Close">
-                <X size={13} />
-              </button>
-            </div>
-            <div className="cx-modal__body">
-              <DatabaseControl wt={sel.wt} />
-            </div>
-          </div>
-        </div>
+      {showDb && sel && <DatabaseModal wt={sel.wt} onClose={() => setShowDb(false)} />}
+      {showSetup && sel && (
+        <SetupRunnerModal
+          wt={sel.wt}
+          onClose={() => setShowSetup(false)}
+          onStartServices={() => startAll(sel.wt.wtKey)}
+        />
       )}
-
+      {svcDetail && sel && <ServiceDetailModal wt={sel.wt} svc={svcDetail} onClose={() => setSvcDetail(null)} />}
+      {showCtx && sel && (
+        <ContextModal
+          repo={sel.repo}
+          wt={sel.wt}
+          onClose={() => setShowCtx(false)}
+          onStartAgent={() => {
+            setView("wt");
+            setLayout("agent");
+            launch.startAgent();
+          }}
+        />
+      )}
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
       {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
       {showSwitchBranch && sel && (
