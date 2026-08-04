@@ -122,6 +122,7 @@ export default function Palette({
       { g: "Actions", nm: "Layout: Split logs + agent", icon: Split, why: "⌘2", run: () => onLayout("split") },
       { g: "Actions", nm: "Layout: Agent", icon: Sparkle, why: "⌘3", run: () => onLayout("agent") },
       { g: "Actions", nm: "Layout: Terminal + logs", icon: Split, why: "⌘4", run: () => onLayout("shell") },
+      { g: "Actions", nm: "Layout: Terminal", icon: Terminal, why: "⌘5", run: () => onLayout("terminal") },
       { g: "Actions", nm: "All worktrees", icon: Logs, why: "⌘O", run: onOverview },
       { g: "Actions", nm: "Settings", icon: Settings, run: onSettings },
     ];

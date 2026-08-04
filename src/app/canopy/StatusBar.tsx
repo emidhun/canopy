@@ -10,7 +10,7 @@ import { useStore, type LaneSession } from "../../store";
 import type { SubmoduleStatus, WorktreeNode } from "../../types";
 import { fmtRelTime } from "../../types";
 import { agentState, type AttnItem } from "../nextAction";
-import { LAYOUTS, type LayoutId } from "./WorkSurface";
+import { layoutLabel, type PaneKind } from "./WorkSurface";
 
 const EMPTY: LaneSession[] = [];
 
@@ -18,7 +18,7 @@ export default function StatusBar({
   wt,
   view,
   attn,
-  layout,
+  panes,
   onCycleLayout,
   onAttn,
   onSwitchBranch,
@@ -28,7 +28,7 @@ export default function StatusBar({
   wt: WorktreeNode | null;
   view: "wt" | "overview";
   attn: AttnItem[];
-  layout: LayoutId;
+  panes: PaneKind[];
   onCycleLayout: () => void;
   onAttn: () => void;
   onSwitchBranch: () => void;
@@ -58,7 +58,8 @@ export default function StatusBar({
   const g = wt.git;
   const agents = sessions.filter((s) => s.kind === "agent" && s.running);
   const waiting = agents.some((s) => agentState(s) === "waiting");
-  const LayoutIcon = layout === "split" || layout === "shell" ? Split : Single;
+  // two panes reads as a split whatever the pair happens to be
+  const LayoutIcon = panes.length > 1 ? Split : Single;
 
   return (
     <div className="cxs-statusbar">
@@ -117,9 +118,9 @@ export default function StatusBar({
       )}
 
       <span className="cxs-sdiv" />
-      <button className="cxs-sb" onClick={onCycleLayout} title="Cycle layout  (⌘1–⌘4)">
+      <button className="cxs-sb" onClick={onCycleLayout} title="Cycle layout  (⌘1–⌘5)">
         <LayoutIcon size={11} />
-        {LAYOUTS[layout].label}
+        {layoutLabel(panes)}
       </button>
       <button className="cxs-sb" onClick={onAttn} title="Needs you">
         <Bell size={11} />

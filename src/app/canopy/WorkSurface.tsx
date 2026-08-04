@@ -15,14 +15,31 @@ import { agentState, nextClass, type NextAction } from "../nextAction";
 import type { LaneLaunch } from "./laneLaunch";
 
 export type PaneKind = "logs" | "shell" | "agent";
-export type LayoutId = "runtime" | "split" | "agent" | "shell";
+export type LayoutId = "runtime" | "split" | "agent" | "shell" | "terminal";
 
 export const LAYOUTS: Record<LayoutId, { panes: PaneKind[]; label: string }> = {
   runtime: { panes: ["logs"], label: "Runtime" },
   split: { panes: ["logs", "agent"], label: "Split" },
   agent: { panes: ["agent"], label: "Agent" },
   shell: { panes: ["shell", "logs"], label: "Shell" },
+  // Terminal alone. The handoff stops at four presets, but it has logs alone
+  // and agent alone, so the omission reads as a gap rather than a decision.
+  terminal: { panes: ["shell"], label: "Terminal" },
 };
+
+/** ⌘1–⌘5, and the order the status bar cycles through. */
+export const LAYOUT_ORDER: LayoutId[] = ["runtime", "split", "agent", "shell", "terminal"];
+
+/** The pane set IS the state — a preset is just a named one. Deriving the
+    label instead of storing a preset id means a hand-made combination (swap
+    one pane's tab to something no preset covers) is a first-class layout
+    rather than a click that silently does nothing. */
+export function layoutLabel(panes: PaneKind[]): string {
+  const key = LAYOUT_ORDER.find((l) => LAYOUTS[l].panes.join() === panes.join());
+  return key ? LAYOUTS[key].label : "Custom";
+}
+
+export const panesOf = (l: LayoutId): PaneKind[] => [...LAYOUTS[l].panes];
 
 const TAB_META: Record<PaneKind, { label: string; Icon: typeof LogsIcon }> = {
   logs: { label: "Logs", Icon: LogsIcon },
@@ -34,8 +51,8 @@ const EMPTY: LaneSession[] = [];
 
 export default function WorkSurface({
   wt,
-  layout,
-  setLayout,
+  panes,
+  setPanes,
   filter,
   onFilter,
   na,
@@ -44,8 +61,8 @@ export default function WorkSurface({
   launch,
 }: {
   wt: WorktreeNode;
-  layout: LayoutId;
-  setLayout: (l: LayoutId) => void;
+  panes: PaneKind[];
+  setPanes: (p: PaneKind[]) => void;
   filter: string;
   onFilter: (svcKey: string) => void;
   na: NextAction | null;
@@ -56,7 +73,6 @@ export default function WorkSurface({
   const [split, setSplit] = useState(0.56);
   const [drag, setDrag] = useState(false);
   const workRef = useRef<HTMLDivElement>(null);
-  const panes = LAYOUTS[layout].panes;
 
   useEffect(() => {
     if (!drag) return;
@@ -78,14 +94,12 @@ export default function WorkSurface({
     };
   }, [drag]);
 
-  /** Swapping one pane's tab re-picks the preset that matches the result, so
-      the status bar and ⌘1–4 never disagree with what's on screen. */
+  /** Swapping one pane's tab always takes effect; the status bar names the
+      result, falling back to "Custom" when it isn't one of the presets. */
   const setPane = (index: number, kind: PaneKind) => {
     const next = panes.slice();
     next[index] = kind;
-    const found = (Object.keys(LAYOUTS) as LayoutId[]).find((l) => LAYOUTS[l].panes.join() === next.join());
-    if (found) setLayout(found);
-    else if (next.length === 1) setLayout(next[0] === "logs" ? "runtime" : next[0] === "agent" ? "agent" : "shell");
+    setPanes(next);
   };
 
   return (

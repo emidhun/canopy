@@ -16,7 +16,7 @@ import WorktreeView from "./canopy/WorktreeView";
 import Overview from "./canopy/Overview";
 import Palette from "./canopy/Palette";
 import StatusBar from "./canopy/StatusBar";
-import { type LayoutId } from "./canopy/WorkSurface";
+import { LAYOUT_ORDER, LAYOUTS, panesOf, type LayoutId, type PaneKind } from "./canopy/WorkSurface";
 import { useLaneLaunch } from "./canopy/laneLaunch";
 import DatabaseControl from "./DatabaseControl";
 import SettingsView from "./SettingsView";
@@ -24,8 +24,6 @@ import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
 import SwitchBranchModal from "./SwitchBranchModal";
 import Onboarding from "../onboarding/Onboarding";
-
-const LAYOUT_ORDER: LayoutId[] = ["runtime", "split", "agent", "shell"];
 
 export default function App() {
   const tree = useStore((s) => s.tree);
@@ -44,7 +42,10 @@ export default function App() {
   const setActiveTerm = useStore((s) => s.setActiveTerm);
 
   const [view, setView] = useState<"wt" | "overview">("wt");
-  const [layout, setLayout] = useState<LayoutId>("runtime");
+  // the pane set is the state; a preset is just a named one, so a hand-made
+  // combination is as valid as ⌘1–⌘5 and the status bar simply calls it Custom
+  const [panes, setPanes] = useState<PaneKind[]>(() => panesOf("runtime"));
+  const setLayout = (l: LayoutId) => setPanes(panesOf(l));
   const [sideHidden, setSideHidden] = useState(false);
   const [palette, setPalette] = useState(false);
   const [attnOpen, setAttnOpen] = useState(false);
@@ -189,7 +190,7 @@ export default function App() {
         return;
       }
       if (palette) return;
-      if (meta && e.key >= "1" && e.key <= "4") {
+      if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
         e.preventDefault();
         setLayout(LAYOUT_ORDER[Number(e.key) - 1]);
       }
@@ -273,8 +274,8 @@ export default function App() {
               wt={sel.wt}
               na={na}
               onNext={() => runNext(na)}
-              layout={layout}
-              setLayout={setLayout}
+              panes={panes}
+              setPanes={setPanes}
               launch={launch}
               sideHidden={sideHidden}
               onShowSide={() => setSideHidden(false)}
@@ -289,8 +290,11 @@ export default function App() {
         wt={showSettings ? null : (sel?.wt ?? null)}
         view={showSettings ? "overview" : view}
         attn={attn}
-        layout={layout}
-        onCycleLayout={() => setLayout(LAYOUT_ORDER[(LAYOUT_ORDER.indexOf(layout) + 1) % LAYOUT_ORDER.length])}
+        panes={panes}
+        onCycleLayout={() => {
+          const at = LAYOUT_ORDER.findIndex((l) => LAYOUTS[l].panes.join() === panes.join());
+          setLayout(LAYOUT_ORDER[(at + 1) % LAYOUT_ORDER.length]);
+        }}
         onAttn={() => setAttnOpen((a) => !a)}
         onSwitchBranch={() => setShowSwitchBranch(true)}
         worktreeCount={worktreeCount}

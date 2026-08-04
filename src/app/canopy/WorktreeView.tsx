@@ -10,15 +10,15 @@ import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { nextClass, type NextAction } from "../nextAction";
 import ServiceRail from "./ServiceRail";
-import WorkSurface, { type LayoutId } from "./WorkSurface";
+import WorkSurface, { type PaneKind } from "./WorkSurface";
 import type { LaneLaunch } from "./laneLaunch";
 
 export default function WorktreeView({
   wt,
   na,
   onNext,
-  layout,
-  setLayout,
+  panes,
+  setPanes,
   launch,
   sideHidden,
   onShowSide,
@@ -28,8 +28,8 @@ export default function WorktreeView({
   wt: WorktreeNode;
   na: NextAction;
   onNext: () => void;
-  layout: LayoutId;
-  setLayout: (l: LayoutId) => void;
+  panes: PaneKind[];
+  setPanes: (p: PaneKind[]) => void;
   launch: LaneLaunch;
   sideHidden: boolean;
   onShowSide: () => void;
@@ -160,8 +160,8 @@ export default function WorktreeView({
 
       <WorkSurface
         wt={wt}
-        layout={layout}
-        setLayout={setLayout}
+        panes={panes}
+        setPanes={setPanes}
         filter={filter}
         onFilter={setFilter}
         na={na}
