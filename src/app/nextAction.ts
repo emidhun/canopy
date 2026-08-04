@@ -88,7 +88,9 @@ export function nextAction(wt: WorktreeNode, sessions: LaneSession[]): NextActio
   const crashed = wt.services.find((s) => s.status === "error");
   const waiting = agents.find((s) => agentState(s) === "waiting");
   const busy = agents.find((s) => agentState(s) === "busy");
-  const starting = wt.services.find((s) => s.status === "starting");
+  // `stopping` is equally in-flight: treating it as idle lets a worktree
+  // advertise "everything healthy" mid-shutdown, and lets ⏎ start it again
+  const starting = wt.services.find((s) => s.status === "starting" || s.status === "stopping");
   const stopped = wt.services.filter((s) => s.status === "stopped");
   const web = wt.services.find((s) => s.kind === "web" && s.status === "running" && s.port);
   const git = wt.git;
@@ -123,8 +125,8 @@ export function nextAction(wt: WorktreeNode, sessions: LaneSession[]): NextActio
       id: "starting",
       kind: "busy",
       icon: Spinner,
-      label: `Starting ${starting.name}…`,
-      why: starting.port ? "waiting for the port" : "waiting for the process",
+      label: starting.status === "stopping" ? `Stopping ${starting.name}…` : `Starting ${starting.name}…`,
+      why: starting.status === "stopping" ? "waiting for it to exit" : starting.port ? "waiting for the port" : "waiting for the process",
     };
 
   if (git && git.behind > 0)

@@ -62,7 +62,17 @@ export default function SwitchBranchModal({
   );
   const canCreate = !!t && !known.has(t) && !t.startsWith("origin/");
 
-  async function go(name: string, create: boolean) {
+  /** `git checkout origin/foo` detaches HEAD. Switching to a remote row means
+      the local short name: reuse it if present, else create it from the remote. */
+  async function goRef(ref: string, kind: "local" | "remote" | "new") {
+    if (kind === "remote") {
+      const local = ref.replace(/^[^/]+\//, "");
+      return go(local, !(branches?.local ?? []).includes(local), ref);
+    }
+    return go(ref, kind === "new");
+  }
+
+  async function go(name: string, create: boolean, from?: string) {
     setBusy(true);
     setError(null);
     try {
@@ -70,7 +80,7 @@ export default function SwitchBranchModal({
         showToast("Switching branch needs the desktop app");
         return;
       }
-      await ipc.switchWorktreeBranch(wt.wtKey, name, create, create ? current : undefined);
+      await ipc.switchWorktreeBranch(wt.wtKey, name, create, create ? (from ?? current) : undefined);
       showToast(`Switched to ${name} — dependencies reused`);
       onClose();
     } catch (e) {
@@ -116,7 +126,7 @@ export default function SwitchBranchModal({
         {!branches && <div className="cxm-pick-e">Loading branches…</div>}
 
         {canCreate && (
-          <button className="cxm-pick-i cxm-pick-i--new" onClick={() => go(t, true)} disabled={busy}>
+          <button className="cxm-pick-i cxm-pick-i--new" onClick={() => goRef(t, "new")} disabled={busy}>
             <span className="ic">
               <Plus size={12} />
             </span>
@@ -131,15 +141,16 @@ export default function SwitchBranchModal({
           <div key={g.k}>
             <div className="cxm-pick-g">{g.label}</div>
             {g.items.map((n) => {
-              const isCur = n === current;
-              const taken = g.k === "local" && inUse.has(n) && !isCur;
+              const short = g.k === "remote" ? n.replace(/^[^/]+\//, "") : n;
+              const isCur = short === current;
+              const taken = inUse.has(short) && !isCur;
               return (
                 <button
                   key={g.k + n}
                   className={"cxm-pick-i" + (isCur ? " is-on" : "")}
                   disabled={isCur || taken || busy}
                   title={taken ? `${n} is checked out in another worktree` : undefined}
-                  onClick={() => go(n, false)}
+                  onClick={() => goRef(n, g.k)}
                 >
                   <span className="ic">
                     <Fork size={12} />

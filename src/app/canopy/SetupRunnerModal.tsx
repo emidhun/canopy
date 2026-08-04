@@ -1,7 +1,7 @@
 /* Setup runner — the provisioning stream as a step list rather than a spinner.
 
    Steps come from the worktree:op buffer the store already folds; the backend
-   emits ordered "[k/n]: cmd" markers. "Run in background" simply closes the
+   emits ordered "{label} [k/n]: cmd" markers. "Run in background" simply closes the
    dialog: the run is backend-owned and keeps going either way, which is why
    the button says what it does rather than "Hide". */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,8 +11,9 @@ import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer } from "./Modal";
 
-/** "[2/5]: pnpm install" → { n: 2, of: 5, cmd: "pnpm install" } */
-const STEP = /^\[(\d+)\/(\d+)\]:\s*(.*)$/;
+/** setup.rs emits `{label} [2/5]: pnpm install` — the operation label comes
+    first, so the marker is matched anywhere in the line rather than anchored. */
+const STEP = /\[(\d+)\/(\d+)\]:\s*(.*)$/;
 
 export default function SetupRunnerModal({
   wt,
@@ -27,17 +28,25 @@ export default function SetupRunnerModal({
   const showToast = useStore((s) => s.showToast);
   const startedAt = useRef(Date.now());
   const [failed, setFailed] = useState(false);
+  /** true when we joined a run already in progress rather than starting one */
+  const [attached, setAttached] = useState(false);
 
   useEffect(() => {
     if (!hasBackend()) {
       showToast("Setup runs in the desktop app");
       return;
     }
+    // Reopening after "Run in background" must ATTACH to the run in flight.
+    // The backend has no per-worktree guard, so invoking again would provision
+    // concurrently — two `pnpm install`s in one directory.
+    if (useStore.getState().ops[wt.wtKey]?.running) {
+      setAttached(true);
+      return;
+    }
     ipc.runWorktreeSetup(wt.wtKey).catch((e) => {
       setFailed(true);
       showToast(`Setup failed — ${String(e)}`);
     });
-    // launched once per open; the run is backend-owned from here
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wt.wtKey]);
 
@@ -75,7 +84,7 @@ export default function SetupRunnerModal({
             {errored
               ? "The failing step is shown above"
               : done
-                ? `Took ${elapsed}s`
+                ? (attached ? "Finished" : `Took ${elapsed}s`)
                 : total
                   ? `Step ${Math.min(current, total)} of ${total}`
                   : "starting…"}

@@ -14,9 +14,12 @@ import Modal, { Hint, Spacer } from "./canopy/Modal";
 import RefPick from "./canopy/RefPick";
 import { seedWtContext } from "./WorktreeContext";
 
-/** A branch name becomes a directory name; git and the filesystem disagree
-    about what's legal, so the slug is the safe intersection. */
-const slugify = (b: string) => b.replace(/[^a-z0-9._-]+/gi, "-").toLowerCase();
+/** Mirrors `sanitize_branch` in commands.rs:605 exactly — alphanumerics, `-`
+    and `.` survive, everything else becomes `_`, and CASE IS PRESERVED. An
+    approximation here is worse than nothing: the panel exists to tell you
+    where the worktree lands, so `Feature/foo` must read `Feature_foo`, not
+    `feature-foo`. Rust's is_alphanumeric is Unicode-aware, hence \p{L}\p{N}. */
+const sanitizeBranch = (b: string) => b.replace(/[^\p{L}\p{N}.-]/gu, "_");
 
 export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; onClose: () => void }) {
   const tree = useStore((s) => s.tree);
@@ -39,6 +42,8 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const [prDescription, setPrDescription] = useState("");
   const [issue, setIssue] = useState("");
   const [issueDescription, setIssueDescription] = useState("");
+  /** the repo's configured worktree dir; blank means `${repo.path}-worktrees` */
+  const [worktreeDir, setWorktreeDir] = useState<string | null>(null);
 
   const activeRepo = tree.find((r) => r.repoId === repo);
   // git refuses to check the same branch out twice; show them, disabled
@@ -49,15 +54,33 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       setBranches({ local: [], remote: [], tags: [] });
       return;
     }
+    // refs are repo-scoped: carrying a base/branch across a repo switch lets
+    // Create submit something that doesn't exist in the selected repository
     setBranches(null);
+    setBase("");
+    setExisting("");
+    setExistingKind("local");
     ipc
       .listBranches(repo)
       .then((b) => {
         setBranches(b);
-        if (!base) setBase(b.local.includes("main") ? "main" : (b.local[0] ?? ""));
+        setBase(b.local.includes("main") ? "main" : (b.local[0] ?? ""));
       })
       .catch(() => setBranches({ local: [], remote: [], tags: [] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo]);
+
+  // read the repo's worktreeDir so the destination shown is the real one
+  useEffect(() => {
+    if (!hasBackend() || !repo) return;
+    let alive = true;
+    ipc
+      .getSettings()
+      .then((st) => alive && setWorktreeDir(st.repos.find((r) => r.id === repo)?.worktreeDir ?? ""))
+      .catch(() => alive && setWorktreeDir(null));
+    return () => {
+      alive = false;
+    };
   }, [repo]);
 
   useEffect(() => {
@@ -86,8 +109,12 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   }
 
   const branch = mode === "new" ? name.trim() : existing;
-  const slug = slugify(branch || "new-branch");
   const ok = !!branch;
+  // create_worktree: `${worktree_dir || repo.path + "-worktrees"}/${sanitize_branch(branch)}`
+  const destination =
+    ok && worktreeDir !== null && activeRepo
+      ? `${worktreeDir.trim() || `${activeRepo.path}-worktrees`}/${sanitizeBranch(branch)}`
+      : null;
 
   async function create() {
     if (!ok) return;
@@ -99,13 +126,19 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
         showToast("New worktree needs the desktop app");
         return;
       }
+      // `git worktree add <path> origin/foo` checks out the remote-tracking ref
+      // DETACHED. A remote pick has to become a real local branch tracking it —
+      // reuse the local one if it already exists, otherwise create it.
+      const localOf = (ref: string) => ref.replace(/^[^/]+\//, "");
       const payload =
         mode === "new"
           ? { branch, base: base || undefined, createBranch: true }
           : existingKind === "tags"
             ? // checking out a tag → create a local branch named after it
               { branch: existing, base: `refs/tags/${existing}`, createBranch: true }
-            : { branch: existing, createBranch: false };
+            : existingKind === "remote"
+              ? { branch: localOf(existing), base: existing, createBranch: !branches?.local.includes(localOf(existing)) }
+              : { branch: existing, createBranch: false };
 
       const wtPath = await ipc.createWorktree({ repoId: repo, ...payload });
       // seed the human handoff now, keyed by the new path — the runtime
@@ -229,9 +262,7 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
         <div className="cxm-flab">You'll get</div>
         <dl className="cx-kv">
           <dt>Path</dt>
-          <dd>
-            .worktrees/<em>{ok ? slug : "…"}</em>
-          </dd>
+          <dd title={destination ?? undefined}>{destination ?? "—"}</dd>
           {/* TODO(#58): ports and the database name are assigned inside
               create_worktree. Deriving them here would duplicate backend logic
               that can drift, and a wrong port is worse than a blank one. */}

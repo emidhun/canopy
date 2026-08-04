@@ -36,6 +36,29 @@ export default function Modal({
   const card = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // aria-modal="true" promises focus cannot leave the dialog. Without a trap
+    // Tab walks straight into the app behind the scrim, so the promise was
+    // false for assistive tech and keyboard users alike.
+    const opener = document.activeElement as HTMLElement | null;
+    const FOCUSABLE =
+      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+    const trap = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !card.current) return;
+      const items = [...card.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !card.current.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", trap, true);
+
     const k = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) {
         // capture phase + stopPropagation: the app-level Escape handler would
@@ -49,7 +72,11 @@ export default function Modal({
     const t = setTimeout(() => first?.focus(), 40);
     return () => {
       document.removeEventListener("keydown", k, true);
+      document.removeEventListener("keydown", trap, true);
       clearTimeout(t);
+      // hand focus back to whatever opened us, so the keyboard doesn't reset
+      // to the top of the document
+      opener?.focus?.();
     };
   }, [busy, onClose]);
 

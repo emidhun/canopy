@@ -59,8 +59,11 @@ export default function Overview({
     const agent = ss.find((s) => s.kind === "agent" && s.running);
     const state = agent ? agentState(agent) : null;
     const live = wt.services.filter((s) => isLive(s.status)).length;
-    const cpu = wt.services.reduce((n, s) => n + (stats[s.svcKey]?.cpu ?? 0), 0);
-    const mem = wt.services.reduce((n, s) => n + (stats[s.svcKey]?.memMb ?? 0), 0);
+    // the store retains a service's last sample after it stops, so totalling
+    // every service would keep counting processes that are gone
+    const running = wt.services.filter((s) => isLive(s.status));
+    const cpu = running.reduce((n, s) => n + (stats[s.svcKey]?.cpu ?? 0), 0);
+    const mem = running.reduce((n, s) => n + (stats[s.svcKey]?.memMb ?? 0), 0);
     const na = nextAction(wt, ss);
     const g = wt.git;
 

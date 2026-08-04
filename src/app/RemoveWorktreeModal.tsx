@@ -11,9 +11,14 @@ import type { WorktreeNode } from "../types";
 import { Alert, Info, Spinner, Trash } from "../icons";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 
+/** git::dirty_report truncates `status --porcelain` with .take(10), so a
+    result of exactly this length is a floor rather than a total. */
+const DIRTY_CAP = 10;
+
 export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const [report, setReport] = useState<{ dirty: boolean; details: string[] } | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [dropDb, setDropDb] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -25,10 +30,19 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       setReport({ dirty: false, details: [] });
       return;
     }
+    // Fail CLOSED. Treating a failed probe as "clean" would let the dialog
+    // assert nothing is uncommitted and arm a destructive delete on the
+    // strength of an error.
     ipc
       .worktreeDirtyReport(wt.wtKey)
-      .then(setReport)
-      .catch(() => setReport({ dirty: false, details: [] }));
+      .then((r) => {
+        setReport(r);
+        setProbeError(null);
+      })
+      .catch((e) => {
+        setReport(null);
+        setProbeError(String(e));
+      });
   }, [wt.wtKey]);
 
   const armed = confirm.trim() === wt.branch;
@@ -67,7 +81,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
           <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy || !armed || !report}>
+          <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy || !armed || !report || !!probeError}>
             {busy ? (
               <>
                 <Spinner size={12} />
@@ -83,7 +97,18 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
         </>
       }
     >
-      {!report ? (
+      {probeError ? (
+        <div className="cx-alert cx-alert--error">
+          <span className="cx-alert__ic">
+            <Alert size={13} />
+          </span>
+          <div>
+            <b>Could not check for uncommitted changes.</b>
+            <pre>{probeError}</pre>
+            Removal is disabled until this succeeds — deleting without knowing what is here could lose work.
+          </div>
+        </div>
+      ) : !report ? (
         <div className="cxm-prog" style={{ borderTop: 0, marginTop: 0, paddingTop: 0 }}>
           <span className="cxm-prog__ic">
             <Spinner size={13} />
@@ -97,9 +122,14 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
           </span>
           <div>
             <b>
-              {report.details.length} uncommitted change{report.details.length === 1 ? "" : "s"} will be lost.
+              {report.details.length >= DIRTY_CAP
+                ? `At least ${DIRTY_CAP} uncommitted changes will be lost.`
+                : `${report.details.length} uncommitted change${report.details.length === 1 ? "" : "s"} will be lost.`}
             </b>
             <pre>{report.details.join("\n")}</pre>
+            {report.details.length >= DIRTY_CAP && (
+              <span style={{ color: "var(--red-text-soft)" }}>Showing the first {DIRTY_CAP}; there may be more.</span>
+            )}
           </div>
         </div>
       ) : (

@@ -107,7 +107,10 @@ export default function RefPick({
             <div key={g.k}>
               <div className="cxm-pick-g">{g.label}</div>
               {g.items.map((n) => {
-                const taken = g.k === "local" && inUse?.has(n) && n !== value;
+                // selecting `origin/foo` creates or reuses local `foo`, so the
+                // in-use test has to compare the name it will actually resolve to
+                const short = g.k === "remote" ? n.replace(/^[^/]+\//, "") : n;
+                const taken = g.k !== "tags" && inUse?.has(short) && short !== value;
                 return (
                   <button
                     key={g.k + n}

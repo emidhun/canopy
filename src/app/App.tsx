@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { hasBackend, ipc } from "../ipc";
 import { initSync, useStore } from "../store";
-import type { RepoNode, ServiceNode, WorktreeNode } from "../types";
+import type { RepoNode, WorktreeNode } from "../types";
 import { Plus } from "../icons";
 import { attentionItems, nextAction, type AttnItem, type NextAction } from "./nextAction";
 import { TopBar, AttentionPop } from "./canopy/TopBar";
@@ -58,7 +58,7 @@ export default function App() {
   const [showDb, setShowDb] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showCtx, setShowCtx] = useState(false);
-  const [svcDetail, setSvcDetail] = useState<ServiceNode | null>(null);
+  const [svcDetail, setSvcDetail] = useState<string | null>(null);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
@@ -292,7 +292,7 @@ export default function App() {
               onRemove={() => setRemoveWtFor(sel.wt)}
               onDatabase={() => setShowDb(true)}
               onSetup={() => setShowSetup(true)}
-              onOpenService={(s) => setSvcDetail(s)}
+              onOpenService={(s) => setSvcDetail(s.svcKey)}
               onEditContext={() => setShowCtx(true)}
               onSwitchBranch={() => setShowSwitchBranch(true)}
             />
@@ -358,7 +358,7 @@ export default function App() {
           onStartServices={() => startAll(sel.wt.wtKey)}
         />
       )}
-      {svcDetail && sel && <ServiceDetailModal wt={sel.wt} svc={svcDetail} onClose={() => setSvcDetail(null)} />}
+      {svcDetail && sel && <ServiceDetailModal wt={sel.wt} svcKey={svcDetail} onClose={() => setSvcDetail(null)} />}
       {showCtx && sel && (
         <ContextModal
           repo={sel.repo}

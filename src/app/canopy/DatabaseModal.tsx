@@ -56,13 +56,14 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
         title="Save snapshot"
         sub={current ?? undefined}
         narrow
-        busy={busy}
         onClose={() => setSnap(null)}
         foot={
           <>
             <Spacer />
-            <button className="cx-btn cx-btn--ghost" onClick={() => setSnap(null)} disabled={busy}>
-              Cancel
+            {/* the snapshot is backend-owned and can take a while; dismissing
+                lets it finish rather than holding the dialog hostage */}
+            <button className="cx-btn cx-btn--ghost" onClick={() => setSnap(null)}>
+              {busy ? "Run in background" : "Cancel"}
             </button>
             <button
               className="cx-btn cx-btn--primary"

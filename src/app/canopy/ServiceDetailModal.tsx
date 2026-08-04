@@ -13,23 +13,30 @@ import Modal, { Hint, Spacer } from "./Modal";
 
 export default function ServiceDetailModal({
   wt,
-  svc,
+  svcKey,
   onClose,
 }: {
   wt: WorktreeNode;
-  svc: ServiceNode;
+  /** the KEY, not the node: a captured node would freeze at the status it had
+      when the chip was clicked, so a process dying while this is open would
+      never surface its failure or exit code */
+  svcKey: string;
   onClose: () => void;
 }) {
-  const stats = useStore((s) => s.stats[svc.svcKey]);
-  const history = useStore((s) => s.cpuHistory[svc.svcKey]);
-  const exitCode = useStore((s) => s.exitCodes[svc.svcKey]);
-  const logs = useStore((s) => s.logs[svc.svcKey]);
+  const stats = useStore((s) => s.stats[svcKey]);
+  const history = useStore((s) => s.cpuHistory[svcKey]);
+  const exitCode = useStore((s) => s.exitCodes[svcKey]);
+  const logs = useStore((s) => s.logs[svcKey]);
   const tree = useStore((s) => s.tree);
+  const svc = useMemo<ServiceNode | null>(() => {
+    for (const r of tree) for (const w of r.worktrees) for (const s of w.services) if (s.svcKey === svcKey) return s;
+    return null;
+  }, [tree, svcKey]);
   const restartService = useStore((s) => s.restartService);
   const stopService = useStore((s) => s.stopService);
   const showToast = useStore((s) => s.showToast);
 
-  const opened = String(svc.port ?? "");
+  const opened = String(svc?.port ?? "");
   const [port, setPort] = useState(opened);
   const changed = port !== opened;
 
@@ -41,12 +48,16 @@ export default function ServiceDetailModal({
     for (const r of tree)
       for (const w of r.worktrees)
         for (const s of w.services)
-          if (s.svcKey !== svc.svcKey && s.port === n) return `${w.branch} · ${s.name}`;
+          if (s.svcKey !== svcKey && s.port === n) return `${w.branch} · ${s.name}`;
     return null;
-  }, [port, tree, svc.svcKey]);
+  }, [port, tree, svcKey]);
 
-  const valid = /^\d{2,5}$/.test(port) && !clash;
-  const crashed = svc.status === "error";
+  // set_service_port rejects anything outside 1024–65535 (commands.rs:861).
+  // Only gate on the port when it actually changed — a portless service
+  // (ServiceNode.port === null) must still be restartable.
+  const portOk = /^\d+$/.test(port) && Number(port) >= 1024 && Number(port) <= 65535 && !clash;
+  const valid = changed ? portOk : true;
+  const crashed = svc?.status === "error";
   const tail = (logs ?? []).filter((l) => l.lv === "err").slice(-2);
 
   const max = Math.max(12, ...(history ?? [0]));
@@ -58,14 +69,14 @@ export default function ServiceDetailModal({
         return;
       }
       try {
-        await ipc.setServicePort(svc.svcKey, Number(port));
-        showToast(`${svc.name} port → ${port}`);
+        await ipc.setServicePort(svcKey, Number(port));
+        showToast(`${svc?.name} port → ${port}`);
       } catch (e) {
         showToast(String(e));
         return;
       }
     } else {
-      restartService(svc.svcKey);
+      restartService(svcKey);
     }
     onClose();
   };
@@ -73,8 +84,8 @@ export default function ServiceDetailModal({
   return (
     <Modal
       icon={Server}
-      title={svc.name}
-      sub={crashed ? `${wt.branch} · exited${exitCode != null ? ` with code ${exitCode}` : ""}` : `${wt.branch} · ${svc.status}`}
+      title={svc?.name ?? "Service"}
+      sub={crashed ? `${wt.branch} · exited${exitCode != null ? ` with code ${exitCode}` : ""}` : `${wt.branch} · ${svc?.status ?? "gone"}`}
       onClose={onClose}
       foot={
         <>
@@ -126,11 +137,11 @@ export default function ServiceDetailModal({
             <span className="k">uptime</span>
           </div>
           <Spacer />
-          {svc.status === "running" && (
+          {svc?.status === "running" && (
             <button
               className="cx-btn cx-btn--sm"
               onClick={() => {
-                stopService(svc.svcKey);
+                stopService(svcKey);
                 onClose();
               }}
             >
@@ -160,6 +171,8 @@ export default function ServiceDetailModal({
         />
         {clash ? (
           <div className="cxm-fhint cxm-fhint--bad">Port {port} is already used by {clash}.</div>
+        ) : changed && !portOk ? (
+          <div className="cxm-fhint cxm-fhint--bad">Port must be between 1024 and 65535.</div>
         ) : changed ? (
           <div className="cxm-fhint cxm-fhint--warn">Overrides the assigned port. Esc reverts to {opened}.</div>
         ) : (
