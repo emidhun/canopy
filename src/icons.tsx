@@ -345,3 +345,72 @@ export const Info = ({ size = 13 }: P) => (
     <path d="M11 12h1v4h1" />
   </svg>
 );
+
+/* ── workflow layer — added for the redesign (attention queue, next action,
+   layout presets, the sidebar toggle). Same 24u grid, same stroke discipline. */
+
+export const Alert = ({ size = 13 }: P) => (
+  <svg {...isvg(size, 1.9)}>
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+    <path d="M10.3 4.3L2.8 17a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0z" />
+  </svg>
+);
+
+export const Bell = ({ size = 13 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3H4a4 4 0 0 0 2-3v-3a7 7 0 0 1 4-6" />
+    <path d="M9 17v1a3 3 0 0 0 6 0v-1" />
+  </svg>
+);
+
+export const Pin = ({ size = 12 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M9 4h6l-1 6l3 3v2H7v-2l3-3l-1-6z" />
+    <path d="M12 15v5" />
+  </svg>
+);
+
+export const Browser = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M3 9h18" />
+    <path d="M6 6.5h.01M8.5 6.5h.01" />
+  </svg>
+);
+
+export const Bolt = ({ size = 13 }: P) => (
+  <svg {...isvg(size, 1.9)}>
+    <path d="M13 3l-7 9h5l-1 9l7-9h-5l1-9z" />
+  </svg>
+);
+
+/* layout presets — a window, split or whole */
+export const Split = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.7)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M12 4v16" />
+  </svg>
+);
+
+export const Single = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.7)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+  </svg>
+);
+
+export const SidebarIcon = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.7)}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </svg>
+);
+
+export const Sliders = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h13M21 18h-1" />
+    <circle cx="15" cy="6" r="1.9" />
+    <circle cx="9" cy="12" r="1.9" />
+    <circle cx="19" cy="18" r="1.9" />
+  </svg>
+);

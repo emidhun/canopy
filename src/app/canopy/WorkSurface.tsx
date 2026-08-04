@@ -1,0 +1,342 @@
+/* The work surface — Logs, Terminal and Agent as tabs in ONE pane instead of
+   three competing columns, splittable into two.
+
+   Layout presets are the answer to "it doesn't adapt between runtime-heavy and
+   AI-heavy work": each is one keystroke (⌘1–⌘4) and the panes are the same
+   components either way. */
+import { useEffect, useRef, useState } from "react";
+import { Play, PopIn, PopOut, Sparkle, Spinner, Terminal as TerminalIcon, Logs as LogsIcon, Plus, X } from "../../icons";
+import { hasBackend } from "../../ipc";
+import { laneLabel, useStore, type LaneSession } from "../../store";
+import type { ServiceNode, WorktreeNode } from "../../types";
+import TerminalPane from "../TerminalPane";
+import LogsPane from "./LogsPane";
+import { agentState, nextClass, type NextAction } from "../nextAction";
+import type { LaneLaunch } from "./laneLaunch";
+
+export type PaneKind = "logs" | "shell" | "agent";
+export type LayoutId = "runtime" | "split" | "agent" | "shell";
+
+export const LAYOUTS: Record<LayoutId, { panes: PaneKind[]; label: string }> = {
+  runtime: { panes: ["logs"], label: "Runtime" },
+  split: { panes: ["logs", "agent"], label: "Split" },
+  agent: { panes: ["agent"], label: "Agent" },
+  shell: { panes: ["shell", "logs"], label: "Shell" },
+};
+
+const TAB_META: Record<PaneKind, { label: string; Icon: typeof LogsIcon }> = {
+  logs: { label: "Logs", Icon: LogsIcon },
+  shell: { label: "Terminal", Icon: TerminalIcon },
+  agent: { label: "Agent", Icon: Sparkle },
+};
+
+const EMPTY: LaneSession[] = [];
+
+export default function WorkSurface({
+  wt,
+  layout,
+  setLayout,
+  filter,
+  onFilter,
+  na,
+  onNext,
+  onRestart,
+  launch,
+}: {
+  wt: WorktreeNode;
+  layout: LayoutId;
+  setLayout: (l: LayoutId) => void;
+  filter: string;
+  onFilter: (svcKey: string) => void;
+  na: NextAction | null;
+  onNext: () => void;
+  onRestart: (s: ServiceNode) => void;
+  launch: LaneLaunch;
+}) {
+  const [split, setSplit] = useState(0.56);
+  const [drag, setDrag] = useState(false);
+  const workRef = useRef<HTMLDivElement>(null);
+  const panes = LAYOUTS[layout].panes;
+
+  useEffect(() => {
+    if (!drag) return;
+    const mv = (e: MouseEvent) => {
+      const r = workRef.current?.getBoundingClientRect();
+      if (!r) return;
+      setSplit(Math.min(0.78, Math.max(0.22, (e.clientX - r.left) / r.width)));
+    };
+    const up = () => setDrag(false);
+    window.addEventListener("mousemove", mv);
+    window.addEventListener("mouseup", up);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    return () => {
+      window.removeEventListener("mousemove", mv);
+      window.removeEventListener("mouseup", up);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [drag]);
+
+  /** Swapping one pane's tab re-picks the preset that matches the result, so
+      the status bar and ⌘1–4 never disagree with what's on screen. */
+  const setPane = (index: number, kind: PaneKind) => {
+    const next = panes.slice();
+    next[index] = kind;
+    const found = (Object.keys(LAYOUTS) as LayoutId[]).find((l) => LAYOUTS[l].panes.join() === next.join());
+    if (found) setLayout(found);
+    else if (next.length === 1) setLayout(next[0] === "logs" ? "runtime" : next[0] === "agent" ? "agent" : "shell");
+  };
+
+  return (
+    <div className="cxs-work" ref={workRef}>
+      {panes.map((p, n) => (
+        <div
+          key={p + n}
+          style={panes.length > 1 ? { flex: n === 0 ? split : 1 - split, display: "flex", minWidth: 0 } : { flex: 1, display: "flex", minWidth: 0 }}
+        >
+          {n > 0 && <div className={"cxs-vdiv" + (drag ? " is-on" : "")} onMouseDown={(e) => { e.preventDefault(); setDrag(true); }} />}
+          <Pane
+            kind={p}
+            index={n}
+            wt={wt}
+            setPane={setPane}
+            filter={filter}
+            onFilter={onFilter}
+            na={na}
+            onNext={onNext}
+            onRestart={onRestart}
+            launch={launch}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Pane({
+  kind,
+  index,
+  wt,
+  setPane,
+  filter,
+  onFilter,
+  na,
+  onNext,
+  onRestart,
+  launch,
+}: {
+  kind: PaneKind;
+  index: number;
+  wt: WorktreeNode;
+  setPane: (i: number, k: PaneKind) => void;
+  filter: string;
+  onFilter: (svcKey: string) => void;
+  na: NextAction | null;
+  onNext: () => void;
+  onRestart: (s: ServiceNode) => void;
+  launch: LaneLaunch;
+}) {
+  const all = useStore((s) => s.sessions[wt.wtKey] ?? EMPTY);
+  const activeTerm = useStore((s) => s.activeTerm[wt.wtKey]);
+  const setActiveTerm = useStore((s) => s.setActiveTerm);
+  const closeSession = useStore((s) => s.closeSession);
+  const restartSession = useStore((s) => s.restartSession);
+  const detached = useStore((s) => s.detachedTerms);
+  const setTermDetached = useStore((s) => s.setTermDetached);
+  const showToast = useStore((s) => s.showToast);
+
+  const laneKind = kind === "shell" ? "shell" : "agent";
+  const mine = all.filter((s) => s.kind === laneKind);
+  const active = mine.find((s) => s.id === activeTerm) ?? mine[mine.length - 1];
+  const agentSess = all.find((s) => s.kind === "agent" && s.running);
+
+  const popOut = async (id: string) => {
+    if (!hasBackend()) {
+      showToast("Pop-out is available in the desktop app");
+      return;
+    }
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const label = laneLabel(id);
+    const existing = await WebviewWindow.getByLabel(label);
+    if (existing) {
+      existing.setFocus();
+      return;
+    }
+    const sess = mine.find((s) => s.id === id);
+    const title = sess?.title ?? "Terminal";
+    // carry the command: if this window ends up creating the PTY, it must
+    // launch the agent, not a bare login shell
+    const cmd = sess?.command ? `&cmd=${encodeURIComponent(sess.command)}` : "";
+    const url = `terminal.html?id=${encodeURIComponent(id)}&cwd=${encodeURIComponent(wt.path)}&branch=${encodeURIComponent(wt.branch)}&title=${encodeURIComponent(title)}${cmd}`;
+    const win = new WebviewWindow(label, {
+      url,
+      width: 560,
+      height: 360,
+      minWidth: 360,
+      minHeight: 220,
+      title: `${title} — ${wt.branch}`,
+      decorations: false,
+      resizable: true,
+    });
+    win.once("tauri://created", () => setTermDetached(id, true));
+    win.once("tauri://error", () => showToast("Could not open terminal window"));
+    win.once("tauri://destroyed", () => setTermDetached(id, false));
+  };
+
+  const bringBack = async (id: string) => {
+    if (hasBackend()) {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const w = await WebviewWindow.getByLabel(laneLabel(id));
+      await w?.close();
+    }
+    setTermDetached(id, false);
+  };
+
+  return (
+    <div className="cxs-pane">
+      <div className="cx-tabs">
+        <div className="cx-tabs__scroll">
+          {(Object.keys(TAB_META) as PaneKind[]).map((t) => {
+            const { label, Icon } = TAB_META[t];
+            const state = t === "agent" && agentSess ? agentState(agentSess) : null;
+            return (
+              <button key={t} className={"cx-tab" + (kind === t ? " is-on" : "")} onClick={() => setPane(index, t)}>
+                <Icon size={12} />
+                {label}
+                {state && <span className={"cx-tab__pip" + (state === "waiting" ? " cx-tab__pip--wait" : "")} />}
+              </button>
+            );
+          })}
+
+          {kind !== "logs" && mine.length > 0 && (
+            <div className="cxs-sess">
+              {mine.map((s) => {
+                const st = s.kind === "agent" ? agentState(s) : s.running ? "busy" : "idle";
+                return (
+                  <span
+                    key={s.id}
+                    className={"cxs-sc" + (active?.id === s.id ? " is-on" : "")}
+                    onClick={() => setActiveTerm(wt.wtKey, s.id)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setActiveTerm(wt.wtKey, s.id);
+                      }
+                    }}
+                  >
+                    <span className={"d " + (st === "waiting" ? "wait" : st === "busy" ? "run" : "")} />
+                    {s.title}
+                    <span
+                      className="x"
+                      title="Close session"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeSession(s.id);
+                      }}
+                    >
+                      <X size={9} />
+                    </span>
+                  </span>
+                );
+              })}
+              <button
+                className="cxs-sc"
+                title={kind === "agent" ? "New agent" : "New shell"}
+                onClick={() => (kind === "agent" ? launch.startAgent() : launch.startShell())}
+              >
+                <Plus size={10} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {kind !== "logs" && active && (
+          <button
+            className="cx-ib"
+            style={{ height: 21, minWidth: 21 }}
+            title="Open in a separate window"
+            onClick={() => popOut(active.id)}
+          >
+            <PopOut size={12} />
+          </button>
+        )}
+      </div>
+
+      {kind === "logs" ? (
+        <LogsPane wt={wt} filter={filter} onFilter={onFilter} na={na} onNext={onNext} onRestart={onRestart} />
+      ) : mine.length === 0 ? (
+        <div className="cxs-empty">
+          <span className="eic">{kind === "agent" ? <Sparkle size={17} /> : <TerminalIcon size={17} />}</span>
+          <span className="et">{kind === "agent" ? "No agent running here" : "No terminal open here"}</span>
+          <span className="es">
+            {kind === "agent"
+              ? "It starts in a real terminal, seeded with this worktree's context — the task, its links, and the branch, database and ports."
+              : "A login shell in this worktree's directory, on its pinned toolchain."}
+          </span>
+          <button
+            className={nextClass("primary")}
+            style={{ marginTop: 3 }}
+            onClick={() => (kind === "agent" ? launch.startAgent() : launch.startShell())}
+          >
+            {kind === "agent" ? <Sparkle size={12} /> : <TerminalIcon size={12} />}
+            {kind === "agent" ? "Start agent" : "Open terminal"}
+          </button>
+        </div>
+      ) : (
+        <div className="cxs-pbody cxs-pbody--term">
+          {mine.map((s) => {
+            const isActive = active?.id === s.id;
+            if (detached.has(s.id))
+              return (
+                isActive && (
+                  <div className="cxs-empty" key={s.id}>
+                    <span className="eic">
+                      <PopOut size={19} />
+                    </span>
+                    <span className="et">Running in a detached window</span>
+                    <span className="es">
+                      The session keeps running — output goes to the floating window. Close it or bring it back any time.
+                    </span>
+                    <button className="cx-btn cx-btn--sm" onClick={() => bringBack(s.id)}>
+                      <PopIn size={13} />
+                      Bring back
+                    </button>
+                  </div>
+                )
+              );
+            return (
+              <TerminalPane
+                key={`${s.id}#${s.gen}`}
+                termId={s.id}
+                cwd={wt.path}
+                command={s.command}
+                hidden={!isActive}
+                readOnly={!s.running}
+              />
+            );
+          })}
+
+          {active && !active.running && !detached.has(active.id) && (
+            <div className="cxs-fixbar" style={{ borderColor: "var(--divider)", background: "var(--surface-app)" }}>
+              <span className="tx" style={{ color: "var(--text-secondary)" }}>
+                <b style={{ color: "var(--text-primary)" }}>{active.title}</b> ended. Its output is kept above.
+              </span>
+              <button className="cx-btn cx-btn--sm cx-btn--fix" onClick={() => restartSession(active.id)}>
+                <Play size={10} />
+                Restart
+              </button>
+              <button className="cx-btn cx-btn--sm" onClick={() => closeSession(active.id)}>
+                Close
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export { Spinner };
