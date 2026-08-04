@@ -193,6 +193,9 @@
 
   --w-sidebar: 238px;
   --w-sidebar-narrow: 210px; /* below the 1180px breakpoint */
+  /* Declared by the handoff's layout.css but referenced by none of its
+     screens. Carried for token parity; nothing consumes it yet. */
+  --w-rail-collapsed: 52px;
 
   /* floating-surface widths */
   --w-palette: 592px;

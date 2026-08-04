@@ -634,7 +634,7 @@
   align-items: center;
   gap: var(--sp-micro);
   height: var(--h-gitchip);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-sm);
   background: var(--surface-well);
   border: var(--border-w) solid var(--divider);
@@ -690,7 +690,7 @@
 .cxs-svc {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-row);
   height: var(--h-control-xs);
   padding: 0 var(--sp-4);
   border-radius: var(--r-md);
