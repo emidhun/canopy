@@ -1,141 +1,365 @@
+/* The Canopy workspace shell.
+
+   Owns the view (worktree vs overview), layout presets, keyboard bindings, and
+   the one runner that turns a NextAction into work. Everything that offers
+   "the next thing" routes through `runNext`, so the worktree bar's button,
+   ⌘K's Suggested row, ⏎, and the overview's row action stay in lockstep. */
 import { useEffect, useMemo, useState } from "react";
+import { hasBackend, ipc } from "../ipc";
 import { initSync, useStore } from "../store";
-import { isLive, WorktreeNode } from "../types";
-import { ChevRight, Fork, Logs, Plus, Refresh, Settings } from "../icons";
-import Sidebar from "./Sidebar";
-import WorktreeHeader from "./WorktreeHeader";
-import ServiceCard from "./ServiceCard";
+import type { RepoNode, WorktreeNode } from "../types";
+import { Plus, X } from "../icons";
+import { attentionItems, nextAction, type AttnItem, type NextAction } from "./nextAction";
+import { TopBar, AttentionPop } from "./canopy/TopBar";
+import SidebarNav from "./canopy/SidebarNav";
+import WorktreeView from "./canopy/WorktreeView";
+import Overview from "./canopy/Overview";
+import Palette from "./canopy/Palette";
+import StatusBar from "./canopy/StatusBar";
+import { LAYOUT_ORDER, LAYOUTS, panesOf, type LayoutId, type PaneKind } from "./canopy/WorkSurface";
+import { useLaneLaunch } from "./canopy/laneLaunch";
 import DatabaseControl from "./DatabaseControl";
-import Console from "./Console";
-import AgentLane from "./AgentLane";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
+import SwitchBranchModal from "./SwitchBranchModal";
 import Onboarding from "../onboarding/Onboarding";
 
 export default function App() {
   const tree = useStore((s) => s.tree);
   const selKey = useStore((s) => s.selKey);
+  const select = useStore((s) => s.select);
+  const sessions = useStore((s) => s.sessions);
   const toast = useStore((s) => s.toast);
   const showToast = useStore((s) => s.showToast);
-  const mainRailed = useStore((s) => s.mainRailed);
-  const setMainRailed = useStore((s) => s.setMainRailed);
-  const [, setTick] = useState(0);
+  const primeLogs = useStore((s) => s.primeLogs);
+  const startAll = useStore((s) => s.startAll);
+  const startService = useStore((s) => s.startService);
+  const restartService = useStore((s) => s.restartService);
+  const gitPull = useStore((s) => s.gitPull);
+  const openPort = useStore((s) => s.openPort);
+  const openWorktree = useStore((s) => s.openWorktree);
+  const setActiveTerm = useStore((s) => s.setActiveTerm);
+
+  const [view, setView] = useState<"wt" | "overview">("wt");
+  // the pane set is the state; a preset is just a named one, so a hand-made
+  // combination is as valid as ⌘1–⌘5 and the status bar simply calls it Custom
+  const [panes, setPanes] = useState<PaneKind[]>(() => panesOf("runtime"));
+  const setLayout = (l: LayoutId) => setPanes(panesOf(l));
+  const [sideHidden, setSideHidden] = useState(false);
+  const [palette, setPalette] = useState(false);
+  const [attnOpen, setAttnOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showNewWt, setShowNewWt] = useState(false);
+  const [showSwitchBranch, setShowSwitchBranch] = useState(false);
+  const [showDb, setShowDb] = useState(false);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
+  const [, setTick] = useState(0);
 
   useEffect(() => initSync(), []);
-  // uptime re-render
+  // uptime / relative-time re-render
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const sel = useMemo(() => {
+  const sel = useMemo<{ repo: RepoNode; wt: WorktreeNode } | null>(() => {
     for (const r of tree) for (const w of r.worktrees) if (w.wtKey === selKey) return { repo: r, wt: w };
     const r = tree[0];
-    return r ? { repo: r, wt: r.worktrees[0] } : null;
+    return r?.worktrees[0] ? { repo: r, wt: r.worktrees[0] } : null;
   }, [tree, selKey]);
+
+  // the logs pane merges every service's buffer, so prime them all on switch
+  useEffect(() => {
+    if (sel) primeLogs(sel.wt.wtKey);
+  }, [sel?.wt.wtKey, primeLogs]);
+
+  const attn = useMemo<AttnItem[]>(() => attentionItems(tree, sessions), [tree, sessions]);
+  const na = useMemo<NextAction | null>(
+    () => (sel ? nextAction(sel.wt, sessions[sel.wt.wtKey] ?? []) : null),
+    [sel, sessions],
+  );
+
+  const running = tree.reduce(
+    (n, r) => n + r.worktrees.reduce((m, w) => m + w.services.filter((s) => s.status === "running").length, 0),
+    0,
+  );
+  const agentCount = Object.values(sessions)
+    .flat()
+    .filter((s) => s.kind === "agent" && s.running).length;
+
+  const launch = useLaneLaunch(sel?.repo ?? EMPTY_REPO, sel?.wt ?? EMPTY_WT);
+
+  /* ── the one action ───────────────────────────────────────────────
+     Every surface that offers "the next thing" calls this. */
+  const runNext = (action?: NextAction | null, forKey?: string) => {
+    const key = forKey ?? sel?.wt.wtKey;
+    if (!key) return;
+    const target = tree.flatMap((r) => r.worktrees).find((w) => w.wtKey === key);
+    if (!target) return;
+    const a = action ?? nextAction(target, sessions[key] ?? []);
+
+    switch (a.id) {
+      case "restart":
+        if (a.svcKey) restartService(a.svcKey);
+        break;
+      case "answer":
+      case "watch":
+        select(key);
+        setView("wt");
+        setLayout("agent");
+        if (a.sessionId) setActiveTerm(key, a.sessionId);
+        break;
+      case "setup":
+        if (!hasBackend()) return showToast("Setup runs in the desktop app");
+        showToast(`Running setup — ${target.branch}…`);
+        ipc.runWorktreeSetup(key).catch((e) => showToast(`Setup failed — ${String(e)}`));
+        break;
+      case "starting":
+        break; // busy — acting again would double-start
+      case "pull":
+        gitPull(key);
+        break;
+      case "start":
+        startAll(key);
+        break;
+      case "startrest":
+        if (a.svcKey) startService(a.svcKey);
+        else startAll(key);
+        break;
+      case "review":
+        openWorktree(key, "editor");
+        break;
+      case "open":
+        if (a.port) openPort(a.port);
+        break;
+      case "agent":
+        select(key);
+        setView("wt");
+        setLayout("agent");
+        launch.startAgent();
+        break;
+    }
+  };
+
+  const goto = (wtKey: string, want?: "terminal") => {
+    select(wtKey);
+    setView("wt");
+    if (want === "terminal") {
+      setLayout("shell");
+      launch.startShell();
+    }
+  };
+
+  const openTerminalFor = (wtKey: string) => {
+    if (wtKey === sel?.wt.wtKey) {
+      setView("wt");
+      setLayout("shell");
+      if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell();
+      return;
+    }
+    // a different worktree: select it first — its launcher belongs to that
+    // worktree's context, so the shell opens on the next render
+    select(wtKey);
+    setView("wt");
+    setLayout("shell");
+  };
 
   const refresh = () => {
     showToast("Rescanning worktrees…");
-    import("../ipc").then(({ hasBackend, ipc }) => {
-      if (hasBackend()) ipc.refresh().catch(() => {});
-    });
+    if (hasBackend()) ipc.refresh().catch(() => {});
   };
 
-  const running = sel?.wt ? sel.wt.services.filter((s) => isLive(s.status)).length : 0;
-  // first run (no repos configured) → onboarding, unless the user skipped it
+  /* ── keyboard: the whole app is reachable without the mouse ─────── */
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey;
+      const el = document.activeElement;
+      const typing = /^(INPUT|TEXTAREA)$/.test(el?.tagName ?? "") || (el as HTMLElement | null)?.isContentEditable === true;
+
+      if (meta && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalette((p) => !p);
+        return;
+      }
+      if (e.key === "Escape") {
+        setPalette(false);
+        setAttnOpen(false);
+        return;
+      }
+      if (palette) return;
+      if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
+        e.preventDefault();
+        setLayout(LAYOUT_ORDER[Number(e.key) - 1]);
+      }
+      if (meta && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setSideHidden((s) => !s);
+      }
+      if (meta && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        setView((v) => (v === "overview" ? "wt" : "overview"));
+      }
+      // ⏎ runs the next action — but never while a terminal or field has focus
+      if (e.key === "Enter" && !meta && !typing && view === "wt" && na && na.kind !== "busy") {
+        e.preventDefault();
+        runNext(na);
+      }
+    };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  });
+
   const onboardingActive = showOnboarding || (tree.length === 0 && !obDismissed);
+  const worktreeCount = tree.reduce((n, r) => n + r.worktrees.length, 0);
 
   return (
-    <div className="shell">
-      <div className="topbar" data-tauri-drag-region>
-        <div className="tb-brand" data-tauri-drag-region>
-          <span className="fork">
-            <Fork size={13} />
-          </span>
-          Canopy
-        </div>
-        <div className="sp" data-tauri-drag-region />
-        <button className="ib" title="Add repository" onClick={() => setShowOnboarding(true)}>
-          <Plus size={15} />
-        </button>
-        <button className="ib" title="Rescan worktrees" onClick={refresh}>
-          <Refresh size={15} />
-        </button>
-        <button className="ib" title="Settings" onClick={() => setShowSettings(true)}>
-          <Settings size={15} />
-        </button>
-      </div>
+    <div className="cxs-shell">
+      <TopBar
+        repo={sel?.repo ?? null}
+        wt={view === "overview" ? null : (sel?.wt ?? null)}
+        attn={attn}
+        running={running}
+        agents={agentCount}
+        onPalette={() => setPalette(true)}
+        onAttn={() => setAttnOpen((a) => !a)}
+        onOverview={() => setView("overview")}
+        onRefresh={refresh}
+        onSettings={() => setShowSettings(true)}
+      />
 
-      <div className={"app" + (!showSettings && sel?.wt ? " with-lane" : "")}>
-        <Sidebar onAdd={() => setShowNewWt(true)} onRemove={(wt) => setRemoveWtFor(wt)} />
+      <div className="cxs-body">
+        <SidebarNav
+          hidden={sideHidden}
+          view={view}
+          selKey={sel?.wt.wtKey ?? null}
+          attn={attn}
+          onSelect={(k) => goto(k)}
+          onOverview={() => setView("overview")}
+          onToggle={() => setSideHidden((s) => !s)}
+          onNew={() => setShowNewWt(true)}
+          onOpenTerminal={openTerminalFor}
+        />
 
         {showSettings ? (
           <SettingsView onClose={() => setShowSettings(false)} />
-        ) : !sel?.wt ? (
-          <div className="main" style={{ alignItems: "center", justifyContent: "center" }}>
-            <button className="primary" onClick={() => setShowOnboarding(true)}>
-              <Plus size={13} />
-              Add your first repository
-            </button>
-          </div>
-        ) : mainRailed ? (
-          <div className="main railed">
-            <div className="main-rail">
-              <button className="ib" title="Show worktree details" onClick={() => setMainRailed(false)}>
-                <ChevRight size={16} />
+        ) : view === "overview" ? (
+          <Overview
+            attn={attn}
+            onSelect={(k) => goto(k)}
+            onOpenTerminal={openTerminalFor}
+            onRunNext={(k) => runNext(null, k)}
+            sideHidden={sideHidden}
+            onShowSide={() => setSideHidden(false)}
+          />
+        ) : !sel ? (
+          <div className="cxs-main">
+            <div className="cxs-empty">
+              <span className="eic">
+                <Plus size={17} />
+              </span>
+              <span className="et">No repositories yet</span>
+              <span className="es">Add a repository and Canopy will track every worktree in it.</span>
+              <button className="cx-next" onClick={() => setShowOnboarding(true)} style={{ marginTop: 3 }}>
+                <Plus size={12} />
+                Add your first repository
               </button>
-              <span className="rdiv" />
-              {sel.wt.services
-                .filter((s) => isLive(s.status))
-                .map((s) => (
-                  <span className="rdot" key={s.svcKey} title={`${s.name} running`} />
-                ))}
-              <span className="rdiv" />
-              <button className="ib" title="Logs" onClick={() => setMainRailed(false)}>
-                <Logs size={15} />
-              </button>
-              <span className="grow" />
-              <span className="vtxt">{sel.wt.branch}</span>
             </div>
           </div>
         ) : (
-          <section className="main">
-            <WorktreeHeader
-              repo={sel.repo}
+          na && (
+            <WorktreeView
               wt={sel.wt}
+              na={na}
+              onNext={() => runNext(na)}
+              panes={panes}
+              setPanes={setPanes}
+              launch={launch}
+              sideHidden={sideHidden}
+              onShowSide={() => setSideHidden(false)}
               onRemove={() => setRemoveWtFor(sel.wt)}
-              onOpenSettings={() => setShowSettings(true)}
+              onDatabase={() => setShowDb(true)}
             />
-            <div className="block">
-              <div className="section-label">
-                Services <span className="count">· {running ? `${running} running` : "all stopped"}</span>
-              </div>
-              {sel.wt.services.length === 0 ? (
-                <div className="log-empty" style={{ padding: "6px 8px 14px", fontSize: 12.5 }}>
-                  No services configured — add them in Settings.
-                </div>
-              ) : (
-                sel.wt.services.map((svc) => <ServiceCard key={svc.svcKey} svc={svc} />)
-              )}
+          )
+        )}
+      </div>
 
-              <div className="section-label">Database</div>
+      <StatusBar
+        wt={showSettings ? null : (sel?.wt ?? null)}
+        view={showSettings ? "overview" : view}
+        attn={attn}
+        panes={panes}
+        onCycleLayout={() => {
+          const at = LAYOUT_ORDER.findIndex((l) => LAYOUTS[l].panes.join() === panes.join());
+          setLayout(LAYOUT_ORDER[(at + 1) % LAYOUT_ORDER.length]);
+        }}
+        onAttn={() => setAttnOpen((a) => !a)}
+        onSwitchBranch={() => setShowSwitchBranch(true)}
+        worktreeCount={worktreeCount}
+        repoCount={tree.length}
+      />
+
+      {attnOpen && (
+        <AttentionPop
+          items={attn}
+          onClose={() => setAttnOpen(false)}
+          onPick={(a) => {
+            setAttnOpen(false);
+            goto(a.wtKey);
+            if (a.kind === "wait") setLayout("agent");
+          }}
+        />
+      )}
+
+      {palette && (
+        <Palette
+          selKey={sel?.wt.wtKey ?? null}
+          attn={attn}
+          onClose={() => setPalette(false)}
+          onSelect={(k) => goto(k)}
+          onOverview={() => setView("overview")}
+          onAction={(a) => runNext(a)}
+          onLayout={(l) => {
+            setLayout(l);
+            setView("wt");
+          }}
+          onNewWorktree={() => setShowNewWt(true)}
+          onSettings={() => setShowSettings(true)}
+          onOpenTerminal={() => sel && openTerminalFor(sel.wt.wtKey)}
+          onStartAgent={() => {
+            setView("wt");
+            setLayout("agent");
+            launch.startAgent();
+          }}
+        />
+      )}
+
+      {showDb && sel && (
+        <div className="cx-scrim" onMouseDown={() => setShowDb(false)}>
+          <div className="cx-modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="cx-modal__head">
+              <div className="cx-modal__title">
+                <b>Database</b>
+                <span>{sel.wt.dbName ?? "not configured"}</span>
+              </div>
+              <button className="cx-ib" onClick={() => setShowDb(false)} title="Close">
+                <X size={13} />
+              </button>
+            </div>
+            <div className="cx-modal__body">
               <DatabaseControl wt={sel.wt} />
             </div>
-            <Console wt={sel.wt} />
-          </section>
-        )}
-
-        {!showSettings && sel?.wt && <AgentLane key={sel.wt.wtKey} repo={sel.repo} wt={sel.wt} />}
-      </div>
+          </div>
+        </div>
+      )}
 
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
       {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
+      {showSwitchBranch && sel && (
+        <SwitchBranchModal repo={sel.repo} wt={sel.wt} onClose={() => setShowSwitchBranch(false)} />
+      )}
       {onboardingActive && (
         <Onboarding
           onClose={() => {
@@ -145,7 +369,20 @@ export default function App() {
           onCreateWorktree={() => setShowNewWt(true)}
         />
       )}
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="cx-toast">{toast}</div>}
     </div>
   );
 }
+
+/* Stable placeholders so the launch hook keeps a consistent identity while the
+   tree is still loading — it reads repo/worktree lazily inside its callbacks. */
+const EMPTY_REPO: RepoNode = { repoId: "", name: "", path: "", worktrees: [] };
+const EMPTY_WT: WorktreeNode = {
+  wtKey: "",
+  branch: "",
+  path: "",
+  isMain: false,
+  git: null,
+  dbName: null,
+  services: [],
+};

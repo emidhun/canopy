@@ -113,6 +113,10 @@ interface State {
   setQuery: (q: string) => void;
   select: (wtKey: string) => void;
   setTab: (svcKey: string) => void;
+  /** snapshot every service's ring buffer for one worktree — the redesigned
+      logs pane merges them into a single stream, so it can't rely on the
+      per-service tab fetch to prime them one at a time */
+  primeLogs: (wtKey: string) => void;
   setCollapsed: (c: boolean) => void;
   clearLogs: (svcKey: string) => void;
   clearOpLog: (wtKey: string) => void;
@@ -350,6 +354,17 @@ export const useStore = create<State>((set, get) => {
         ipc
           .getLogs(svcKey)
           .then((lines) => useStore.setState((st) => ({ logs: { ...st.logs, [svcKey]: lines } })))
+          .catch(() => {});
+      }
+    },
+    primeLogs: (wtKey) => {
+      if (!hasBackend()) return;
+      const f = findWt(get().tree, wtKey);
+      if (!f) return;
+      for (const s of f.wt.services) {
+        ipc
+          .getLogs(s.svcKey)
+          .then((lines) => useStore.setState((st) => ({ logs: { ...st.logs, [s.svcKey]: lines } })))
           .catch(() => {});
       }
     },

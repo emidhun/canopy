@@ -1,0 +1,197 @@
+/* Canopy component primitives — the single source of truth.
+   Extracted from the shipped app and the redesign so screens stop carrying
+   private copies of these rules. Obeys the radius rule in tokens/layout.css:
+   controls and floating surfaces get radius; layout regions stay flat. */
+
+/* ── Button ───────────────────────────────────────────────────────
+   Buttons NEVER shrink or wrap. In any toolbar the supporting text is the
+   elastic item; an action label is not worth degrading. */
+.cx-btn{height:var(--h-control);padding:0 var(--sp-pop-lg);border-radius:var(--r-lg);border:var(--border-w) solid var(--divider);background:var(--btn);color:var(--text-secondary);font:var(--fw-medium) var(--fs-body) var(--sans);cursor:pointer;display:inline-flex;align-items:center;gap:var(--sp-3);flex:none;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast)}
+.cx-btn:hover{background:var(--btn-hover);color:var(--text-primary);border-color:var(--border-pop)}
+.cx-btn:disabled{opacity:.4;cursor:default}
+.cx-btn:disabled:hover{background:var(--btn);color:var(--text-secondary);border-color:var(--divider)}
+.cx-btn--primary{background:var(--action-primary);border-color:var(--action-primary);color:var(--action-primary-ink);font-weight:var(--fw-semi)}
+.cx-btn--primary:hover{filter:brightness(1.09);background:var(--action-primary);color:var(--action-primary-ink)}
+.cx-btn--danger{background:var(--action-danger);border-color:var(--action-danger);color:var(--on-danger);font-weight:var(--fw-semi)}
+.cx-btn--danger:hover{filter:brightness(1.09);background:var(--action-danger);color:var(--on-danger)}
+.cx-btn--ghost{background:none;border-color:transparent;color:var(--text-tertiary)}
+.cx-btn--ghost:hover{background:var(--btn);color:var(--text-primary);border-color:transparent}
+.cx-btn--sm{height:24px;padding:0 var(--sp-4);font-size:var(--fs-small)}
+.cx-btn .cx-k{font:var(--fw-medium) var(--fs-micro) var(--mono);opacity:.6;flex:none}
+
+/* ── IconButton ── */
+.cx-ib{height:var(--h-ib);min-width:var(--h-ib);padding:0 var(--sp-2);border:0;cursor:pointer;background:none;color:var(--text-secondary);border-radius:var(--r-md);display:inline-flex;align-items:center;justify-content:center;gap:var(--sp-3);font:var(--fs-body) var(--sans);flex:none;transition:background var(--dur-fast),color var(--dur-fast)}
+.cx-ib:hover{background:var(--btn);color:var(--text-primary)}
+.cx-ib[aria-pressed=true],.cx-ib.is-on{background:var(--btn-hover);color:var(--text-primary)}
+.cx-ib:disabled{opacity:.35;cursor:default}
+.cx-ib:disabled:hover{background:none;color:var(--text-secondary)}
+
+/* ── NextAction — the signature control ──────────────────────────
+   There is never more than ONE on screen. Its kind is chosen by state:
+   teal for anything actionable (including recovery — red marks the problem,
+   never the fix), amber when a human decision is pending, neutral when the
+   app is busy and you can only wait. */
+.cx-next{height:var(--h-control-sm);padding:0 var(--sp-row);border-radius:var(--r-sm);border:var(--border-w) solid transparent;cursor:pointer;font:var(--fw-semi) var(--fs-small) var(--sans);display:inline-flex;align-items:center;gap:var(--sp-3);flex:none;white-space:nowrap;background:var(--action-primary);color:var(--action-primary-ink);transition:filter var(--dur-fast)}
+.cx-next:hover{filter:brightness(1.09)}
+.cx-next--urgent{background:var(--state-attention);color:var(--on-amber)}
+.cx-next--busy{background:var(--btn);color:var(--text-tertiary);border-color:var(--divider);font-weight:var(--fw-medium);cursor:default}
+.cx-next--busy:hover{filter:none}
+.cx-next--calm{background:var(--btn);color:var(--text-secondary);border-color:var(--divider);font-weight:var(--fw-medium)}
+.cx-next--calm:hover{background:var(--btn-hover);color:var(--text-primary);border-color:var(--border-pop);filter:none}
+.cx-next .cx-k{font:var(--fw-medium) var(--fs-label) var(--mono);opacity:.6}
+/* the reason that rides beside it — always the first thing to yield */
+.cx-why{font-size:var(--fs-micro);color:var(--text-tertiary);flex:0 1 auto;min-width:0;margin-right:var(--sp-row);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
+
+/* ── Input / Select / SearchField ── */
+.cx-input{width:100%;height:var(--h-input);padding:0 var(--sp-pop);border-radius:var(--r-lg);border:var(--border-w) solid var(--divider);background:var(--surface-well);color:var(--text-primary);font:var(--fs-body) var(--sans);outline:none;transition:border-color var(--dur),box-shadow var(--dur)}
+.cx-input:focus{border-color:var(--action-primary);box-shadow:0 0 0 3px var(--focus-ring)}
+.cx-input::placeholder{color:var(--text-tertiary)}
+.cx-input--mono{font-family:var(--mono);font-size:var(--fs-body)}
+textarea.cx-input{height:auto;min-height:62px;padding:var(--sp-row) var(--sp-pop);resize:vertical;line-height:var(--lh-body)}
+select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--text-tertiary) 50%),linear-gradient(135deg,var(--text-tertiary) 50%,transparent 50%);background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px;background-size:5px 5px;background-repeat:no-repeat}
+.cx-search{display:flex;align-items:center;gap:var(--sp-3);height:30px;padding:0 var(--sp-row);background:var(--surface-well);border:var(--border-w) solid var(--divider);border-radius:var(--r-lg);color:var(--text-tertiary)}
+.cx-search:focus-within{border-color:var(--action-primary);box-shadow:0 0 0 3px var(--focus-ring)}
+.cx-search input{flex:1;background:none;border:0;outline:none;color:var(--text-primary);font:var(--fs-small) var(--sans);min-width:0}
+.cx-search input::placeholder{color:var(--text-tertiary)}
+
+/* ── Kbd ── */
+.cx-kbd{display:inline-flex;align-items:center;gap:var(--sp-1);font:var(--fs-micro) var(--mono);color:var(--text-tertiary);background:var(--btn);border-radius:var(--r-xs);padding:var(--sp-kbd-y) var(--sp-2);letter-spacing:.02em;flex:none}
+
+/* ── StatusDot ── */
+.cx-dot{width:6px;height:6px;border-radius:50%;flex:none;background:var(--state-idle);display:inline-block}
+.cx-dot--running{background:var(--state-running);box-shadow:var(--halo) var(--green-dim)}
+.cx-dot--partial{background:var(--state-attention)}
+.cx-dot--error{background:var(--state-error);box-shadow:var(--halo) var(--red-dim)}
+.cx-dot--starting{background:var(--state-attention);animation:cx-pulse 1.3s ease-in-out infinite}
+.cx-dot--lg{width:8px;height:8px}
+
+/* ── Chip / Tag ── */
+.cx-chip{display:inline-flex;align-items:center;gap:var(--sp-2);height:var(--h-control-sm);padding:0 var(--sp-row);border-radius:var(--r-md);border:var(--border-w) solid var(--divider);background:var(--surface-app);color:var(--text-primary);font-size:var(--fs-small);cursor:pointer;flex:none;transition:border-color var(--dur-fast),background var(--dur-fast)}
+.cx-chip:hover{border-color:var(--border-pop);background:var(--surface)}
+.cx-chip--mono{font-family:var(--mono);font-size:var(--fs-small);color:var(--text-secondary)}
+.cx-chip--git{height:18px;padding:0 var(--sp-tight);border-radius:var(--r-sm);background:var(--surface-well);font:var(--fs-micro) var(--mono);color:var(--text-tertiary);cursor:default}
+.cx-chip--teal{color:var(--action-primary)}
+.cx-chip--amber{color:var(--state-attention)}
+.cx-tag{font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--text-tertiary);background:var(--btn);padding:var(--sp-1) var(--sp-tight);border-radius:var(--r-xs);flex:none}
+.cx-tag--warn{color:var(--state-attention);background:var(--warn-dim)}
+.cx-tag--teal{color:var(--action-primary);background:var(--teal-dim)}
+
+/* ── ServiceChip — the dense runtime readout ── */
+.cx-svc{display:inline-flex;align-items:center;gap:var(--sp-3);height:var(--h-control-sm);padding:0 var(--sp-row);border-radius:var(--r-md);border:var(--border-w) solid var(--divider);background:var(--surface-app);cursor:pointer;flex:none;transition:border-color var(--dur-fast),background var(--dur-fast)}
+.cx-svc:hover{border-color:var(--border-pop);background:var(--surface)}
+.cx-svc__name{font-size:var(--fs-small);color:var(--text-primary);font-weight:var(--fw-medium)}
+.cx-svc--off .cx-svc__name{color:var(--text-tertiary)}
+.cx-svc__port{font:var(--fs-micro) var(--mono);color:var(--action-primary)}
+.cx-svc--off .cx-svc__port{color:var(--text-tertiary)}
+.cx-svc__stat{font:var(--fs-micro) var(--mono);color:var(--text-tertiary);font-variant-numeric:tabular-nums}
+.cx-svc__sep{width:1px;height:11px;background:var(--divider)}
+.cx-svc--error{border-color:var(--red-border-hi);background:var(--red-dim)}
+.cx-svc--error .cx-svc__name,.cx-svc--error .cx-svc__port{color:var(--red-text)}
+
+/* ── Sparkline ── */
+.cx-spark{display:flex;align-items:flex-end;gap:var(--sp-1);height:16px;flex:none}
+.cx-spark i{width:3px;min-height:2px;background:var(--action-primary);opacity:.5;border-radius:var(--r-hairline);display:block}
+
+/* ── SegmentedControl ── */
+.cx-seg{display:flex;gap:var(--sp-1);padding:var(--sp-1);background:var(--surface-well);border:var(--border-w) solid var(--divider);border-radius:var(--r-xl)}
+.cx-seg button{flex:1;height:var(--h-ib);border:0;border-radius:var(--r-md);background:none;color:var(--text-tertiary);font:var(--fw-semi) var(--fs-small) var(--sans);cursor:pointer;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast)}
+.cx-seg button:hover{color:var(--text-secondary)}
+.cx-seg button.is-on{background:var(--btn);color:var(--text-primary)}
+
+/* ── SectionLabel ── */
+.cx-label{display:flex;align-items:center;gap:var(--sp-3);font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-tertiary)}
+.cx-label__count{margin-left:auto;font-size:var(--fs-micro);letter-spacing:0;font-weight:var(--fw-semi);font-variant-numeric:tabular-nums}
+
+/* ── ListRow — flat, hairline-free, hover-washed ── */
+.cx-row{position:relative;display:flex;align-items:center;gap:var(--sp-4);width:100%;height:var(--h-row);padding:0 var(--sp-3);border:0;border-radius:var(--r-md);background:none;color:var(--text-primary);cursor:pointer;font-family:var(--sans);text-align:left;transition:background var(--dur-fast)}
+.cx-row:hover{background:var(--row-hover)}
+.cx-row.is-selected{background:var(--surface)}
+.cx-row.is-selected::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:var(--r-indicator);background:var(--action-primary)}
+.cx-row__label{font:var(--fs-small) var(--mono);letter-spacing:var(--tracking-tight);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.cx-row.is-selected .cx-row__label{color:var(--text-primary)}
+
+/* ── PaneTab + scrolling tab strip ─────────────────────────────────
+   The strip scrolls; the trailing control lives OUTSIDE it so it stays
+   reachable however many tabs are open. */
+.cx-tabs{flex:none;height:var(--h-panetabs);display:flex;align-items:center;gap:var(--sp-1);padding:0 var(--sp-3);border-bottom:var(--border-w) solid var(--divider);background:var(--surface-app);min-width:0}
+.cx-tabs__scroll{flex:1;min-width:0;display:flex;align-items:center;gap:var(--sp-1);overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.cx-tabs__scroll::-webkit-scrollbar{display:none}
+.cx-tabs>.cx-ib{flex:none}
+.cx-tab{display:inline-flex;align-items:center;gap:var(--sp-3);height:var(--h-control-sm);padding:0 var(--sp-4);border-radius:var(--r-md);border:0;background:none;color:var(--text-tertiary);font:var(--fw-medium) var(--fs-small) var(--sans);cursor:pointer;flex:0 0 auto;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast)}
+.cx-tab:hover{background:var(--btn);color:var(--text-secondary)}
+.cx-tab.is-on{background:var(--btn-hover);color:var(--text-primary)}
+.cx-tab__pip{width:5px;height:5px;border-radius:50%;background:var(--action-primary)}
+.cx-tab__pip--wait{background:var(--state-attention)}
+
+/* ── Alert ── */
+.cx-alert{display:flex;gap:var(--sp-4);padding:var(--sp-pop) var(--sp-pop-lg);border-radius:var(--r-xl);font-size:var(--fs-small);line-height:var(--lh-body)}
+.cx-alert__ic{flex:none;margin-top:var(--sp-hair)}
+.cx-alert--error{border:var(--border-w) solid var(--red-border);background:var(--red-dim);color:var(--red-text-soft)}
+.cx-alert--error .cx-alert__ic,.cx-alert--error b{color:var(--red-text)}
+.cx-alert--warn{border:var(--border-w) solid var(--amber-border);background:var(--warn-dim);color:var(--amber-text)}
+.cx-alert--warn .cx-alert__ic,.cx-alert--warn b{color:var(--state-attention)}
+.cx-alert--ok{border:var(--border-w) solid var(--green-border);background:var(--green-dim);color:var(--green-text)}
+.cx-alert--ok .cx-alert__ic{color:var(--state-running)}
+.cx-alert pre{margin:var(--sp-tight) 0 0;font:var(--fs-micro)/1.6 var(--mono);white-space:pre-wrap}
+
+/* ── Toast ── */
+.cx-toast{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);background:var(--toast-bg);color:var(--text-primary);padding:var(--sp-row) var(--sp-toast-x);border-radius:var(--r-xl);font-size:var(--fs-body);box-shadow:var(--shadow-toast);border:var(--border-w) solid var(--border);z-index:70;animation:cx-pop var(--dur) ease}
+
+/* ── StepList ── */
+.cx-step{display:flex;align-items:baseline;gap:var(--sp-4);padding:var(--sp-micro) 0;font:var(--fs-small) var(--mono)}
+.cx-step__bullet{width:13px;flex:none;text-align:center;color:var(--text-tertiary)}
+.cx-step__text{flex:1;min-width:0;color:var(--text-secondary)}
+.cx-step__meta{font-size:var(--fs-micro);color:var(--text-tertiary);flex:none}
+.cx-step--done .cx-step__bullet{color:var(--state-running)}
+.cx-step--done .cx-step__text{color:var(--text-primary)}
+.cx-step--active .cx-step__bullet{color:var(--action-primary)}
+.cx-step--pending .cx-step__text{color:var(--text-tertiary)}
+.cx-step--failed .cx-step__bullet,.cx-step--failed .cx-step__text{color:var(--red-text)}
+
+/* ── Modal ─────────────────────────────────────────────────────────
+   The card is the float. Its INTERIOR is flat: hairline-divided rows, no
+   nested bordered pills. */
+.cx-scrim{position:absolute;inset:0;background:var(--scrim);backdrop-filter:blur(var(--scrim-blur));z-index:60;display:flex;align-items:center;justify-content:center;padding:var(--sp-scrim);animation:cx-fade var(--dur-fast) ease}
+.cx-modal{width:var(--w-modal);max-width:100%;max-height:100%;background:var(--surface-float);border:var(--border-w) solid var(--border-pop);border-radius:var(--r-2xl);box-shadow:var(--shadow-modal);display:flex;flex-direction:column;overflow:hidden;animation:cx-pop var(--dur-panel) var(--ease-pop)}
+.cx-modal--narrow{width:var(--w-modal-narrow)}
+.cx-modal--wide{width:var(--w-modal-wide)}
+.cx-modal__head{flex:none;display:flex;align-items:center;gap:var(--sp-5);padding:var(--sp-modal-head) var(--sp-6);border-bottom:var(--border-w) solid var(--divider)}
+.cx-modal__ic{width:26px;height:var(--h-ib);border-radius:var(--r-lg);display:grid;place-items:center;flex:none;background:var(--teal-dim);color:var(--action-primary)}
+.cx-modal__ic--danger{background:var(--red-dim);color:var(--red-text)}
+.cx-modal__title{min-width:0;flex:1;display:flex;flex-direction:column;gap:var(--sp-1)}
+.cx-modal__title b{font:var(--fw-semi) var(--fs-md) var(--sans)}
+.cx-modal__title span{font-size:var(--fs-small);color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cx-modal__body{flex:1;min-height:0;overflow-y:auto;padding:var(--sp-6)}
+.cx-modal__foot{flex:none;display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-pop-lg) var(--sp-6);border-top:var(--border-w) solid var(--divider);background:var(--wash-sunken)}
+.cx-modal__hint{font-size:var(--fs-micro);color:var(--text-tertiary);display:inline-flex;align-items:center;gap:var(--sp-3);min-width:0;flex:0 1 auto;overflow:hidden}
+.cx-modal__hint>svg{flex:none}
+.cx-modal__hint span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── Popover ── */
+.cx-pop{position:absolute;z-index:62;min-width:var(--w-popover);background:var(--surface-float);border:var(--border-w) solid var(--border);border-radius:var(--r-xl);box-shadow:var(--shadow-pop);overflow:hidden;animation:cx-pop var(--dur) var(--ease-pop)}
+.cx-pop__head{display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-4) 11px;border-bottom:var(--border-w) solid var(--divider);font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-tertiary)}
+.cx-pop__item{display:flex;align-items:center;gap:var(--sp-4);width:100%;padding:var(--sp-3) 11px;border:0;background:none;cursor:pointer;color:var(--text-primary);font:var(--fs-body) var(--sans);text-align:left}
+.cx-pop__item:hover{background:var(--raised-hi)}
+.cx-pop__item .cx-pop__ic{color:var(--text-tertiary);display:inline-flex;flex:none}
+.cx-pop__item .cx-k{margin-left:auto;font:var(--fs-micro) var(--mono);color:var(--text-tertiary)}
+.cx-pop__item--danger{color:var(--red-text)}
+.cx-pop__item--danger .cx-pop__ic{color:var(--red-text)}
+.cx-pop__sep{height:1px;background:var(--divider);margin:var(--sp-xs) 0}
+
+/* ── LogLine ── */
+.cx-logs{font:var(--fs-small)/var(--lh-log) var(--mono);padding:var(--sp-2) 0;user-select:text;background:var(--surface-well)}
+.cx-log{display:flex;gap:var(--sp-4);padding:var(--sp-hair) var(--sp-5);white-space:pre-wrap;word-break:break-word}
+.cx-log:hover{background:var(--wash-row-faint)}
+.cx-log__t{color:var(--log-time);flex:none;font-size:var(--fs-micro);font-variant-numeric:tabular-nums}
+.cx-log__src{color:var(--text-tertiary);flex:none;font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:.05em;text-transform:uppercase;width:var(--w-logsrc);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cx-log__msg{color:var(--log-text);min-width:0}
+.cx-log--ok .cx-log__msg{color:var(--state-running)}
+.cx-log--warn .cx-log__msg{color:var(--state-attention)}
+.cx-log--error{background:var(--red-wash)}
+.cx-log--error .cx-log__msg{color:var(--red-text)}
+
+/* ── KeyValue ── */
+.cx-kv{display:grid;grid-template-columns:auto 1fr;gap:var(--sp-tight) var(--sp-5);font-size:var(--fs-small);margin:0}
+.cx-kv dt{color:var(--text-tertiary)}
+.cx-kv dd{margin:0;font:var(--fs-small) var(--mono);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cx-kv dd em{font-style:normal;color:var(--action-primary)}

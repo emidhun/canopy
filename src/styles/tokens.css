@@ -1,56 +1,287 @@
-/* Design tokens — redesigned palette (darker surfaces, teal accent).
-   New names drive the redesigned main window; legacy aliases keep Settings,
-   modals, the branch picker, and the popover coherent without rewriting them. */
+/* Canopy design tokens.
+
+   The palette is layered charcoal for depth (never flat near-black) with ONE
+   accent. Teal is scarce on purpose: it marks the single next action, live
+   agents, and ports. If everything is teal, nothing is.
+
+   Base names are the ramp; the semantic block below maps the ramp onto
+   meaning. Product code should reach for a semantic name — those are the
+   values a theme redefines. Legacy aliases keep Settings, the modals, the
+   branch picker and the popover coherent without rewriting them. */
 :root {
-  /* ── v0.4 palette — layered charcoals (depth instead of flat near-black) ── */
-  --bg: #1d1e22; /* main pane */
-  --sidebar: #17181b; /* sidebar (recedes) */
-  --titlebar: #212327; /* title bar (lifts) */
-  --surface: #232529; /* subtle hover tone (rows) */
-  --panel: #24262b; /* service / db cards */
+  /* ── surfaces, darkest → lightest ── */
+  --sidebar: #17181b; /* navigation; recedes behind the work */
+  --panel-2: #191a1d; /* consoles, terminals, inputs — deepest well */
+  --bg: #1d1e22; /* main working pane */
+  --titlebar: #212327; /* title bar, floating surfaces; lifts */
+  --surface: #232529; /* selected row tone */
+  --panel: #24262b; /* cards */
+  --raised: #292b31; /* menus, active rows */
   --panel-hi: #292b31; /* card hover */
-  --panel-2: #191a1d; /* console */
-  --raised: #292b31; /* active row / button hover / menu */
   --raised-hi: #303239; /* menu item hover */
-  --border: #34373d;
-  --border-soft: #2b2d33;
-  /* contrast tiers — all lifted for readability */
+
+  /* ── borders ── */
+  --border-soft: #2b2d33; /* internal dividers — the default hairline */
+  --border: #34373d; /* standard 1px edge */
+  --border-pop: #3a3d42; /* hover-emphasised edge */
+
+  /* ── text tiers ── */
   --text: #edeef1;
   --muted: #aeb0b6;
   --faint: #7c7e86;
+  --meta-faint: #63656c;
+
+  /* ── accent + status hues ── */
   --teal: #5cc7cd;
   --teal-dim: rgba(92, 199, 205, 0.15);
   --green: #4cc266;
   --green-dim: rgba(76, 194, 102, 0.16);
   --amber: #e6ad5f;
+  --warn-dim: rgba(230, 173, 95, 0.14);
   --red: #e0533d;
   --red-dim: rgba(224, 83, 61, 0.12);
-  /* agent-lane status halos (design handoff names) */
-  --run-dim: var(--green-dim);
-  --warn-dim: rgba(230, 173, 95, 0.14);
+  /* inactive status DOT only — never type. At 9–11px on charcoal it measures
+     ~2.3:1, well under AA. The small-metadata text tier is --text-tertiary. */
+  --off: #55575e;
 
-  /* ── legacy aliases (Settings / modals / branch picker / popover) ── */
-  --sidebar-bg: var(--sidebar);
-  --titlebar-bg: var(--titlebar);
-  --border-pop: #3a3d42;
-  --dim: var(--muted);
-  --accent: var(--teal);
-  --accent-dim: var(--teal-dim);
-  /* ink for text/icons sitting *on* an accent fill (badges, pills) */
+  /* ── ink for text sitting ON a saturated fill ── */
   --on-accent: #0d1113;
-  --run: var(--green);
-  --stop: var(--red);
-  --warn: var(--amber);
+  --on-teal: #08171a;
+  --on-green: #06241f;
+  --on-amber: #221806;
+  --on-red: #2a0d07;
+  --on-danger: #fff; /* a filled danger button carries white, not dark ink */
+
+  /* ── derived text tints (readable ON a *-dim fill) ── */
+  --red-text: #f0836f;
+  --green-text: #a9dfb6; /* body copy on a --green-dim alert */
+  --amber-text: #e8cda1; /* body copy on a --warn-dim alert */
+  --red-text-soft: #f0b5a8;
+  --teal-text: #9fe0e4;
+  --teal-text-hi: #8fdfe4;
+  --log-text: #c6c9cf;
+  --log-time: #5d5f66;
+
+  /* ── interaction washes ── */
   --btn: rgba(255, 255, 255, 0.07);
   --btn-hover: rgba(255, 255, 255, 0.13);
   --hover: rgba(255, 255, 255, 0.04);
   --row-hover: rgba(255, 255, 255, 0.045);
+  --focus-ring: rgba(92, 199, 205, 0.4);
 
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* Tinted edges and fills. The screens write these as raw rgba because the
+     accent needs alphas the *-dim tokens don't carry: a border reads at ~.3,
+     a hover fill at ~.26, while *-dim (.12–.16) is the resting wash. */
+  --teal-border: rgba(92, 199, 205, 0.34);
+  --teal-fill-hi: rgba(92, 199, 205, 0.26);
+  --red-border: rgba(224, 83, 61, 0.3);
+  --red-border-hi: rgba(224, 83, 61, 0.34);
+  --red-wash: rgba(224, 83, 61, 0.07); /* the tint under an error log line */
+  --amber-border: rgba(230, 173, 95, 0.3);
+  --green-border: rgba(76, 194, 102, 0.28);
+  --amber-halo: rgba(230, 173, 95, 0.16);
+  /* washes on floating surfaces, which sit lighter than --hover on the app */
+  --wash-pop: rgba(255, 255, 255, 0.05);
+  --wash-pop-soft: rgba(255, 255, 255, 0.03);
+  --wash-row-faint: rgba(255, 255, 255, 0.028); /* table + log hover */
+  --wash-sunken: rgba(0, 0, 0, 0.16); /* modal + palette footers */
+
+  /* ── legacy aliases kept so shipped screens stay coherent ── */
+  --sidebar-bg: var(--sidebar);
+  --titlebar-bg: var(--titlebar);
+  --dim: var(--muted);
+  --accent: var(--teal);
+  --accent-dim: var(--teal-dim);
+  --run: var(--green);
+  --run-dim: var(--green-dim);
+  --stop: var(--red);
+  --warn: var(--amber);
+  --toast-bg: #16171a;
+
+  /* ── typography ──────────────────────────────────────────────────
+     System fonts only — no webfonts ship, which keeps a native desktop feel
+     and avoids a flash on launch. Mono is load-bearing, not decorative:
+     anything git or the filesystem owns is monospace so it can't be misread. */
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --ui: var(--sans);
+
+  /* size ramp — dense by design; 9.5px is legible only in caps + tracking */
+  --fs-label: 9.5px;
+  --fs-micro: 10.5px;
+  --fs-small: 11.5px;
+  --fs-body: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+
+  --lh-tight: 1.35;
+  --lh-body: 1.55;
+  --lh-log: 1.62;
+
+  --fw-regular: 400;
+  --fw-medium: 550;
+  --fw-semi: 620;
+  --fw-bold: 700;
+
+  --tracking-label: 0.1em;
+  --tracking-tight: -0.01em;
+
+  /* ── spacing, chrome, radius, elevation, motion ──────────────────
+     THE RADIUS RULE: radius and shadow are reserved for things that FLOAT
+     (modals, popovers, menus, toasts) and for interactive CONTROLS (buttons,
+     inputs, chips). Layout regions are flat, separated by 1px hairlines.
+     A bordered box inside a bordered box is always a bug. */
+  /* The index scale, as shipped. */
+  --sp-1: 2px;
+  --sp-2: 5px;
+  --sp-3: 7px;
+  --sp-4: 9px;
+  --sp-5: 12px;
+  --sp-6: 14px;
+  --sp-7: 18px;
+  --sp-8: 24px;
+
+  /* Dense steps the index scale doesn't cover.
+
+     Counting every padding/gap/margin in the redesign screen: 8px appears 36
+     times and 6px 27 times — more often than 7px (26) or 9px (21), both of
+     which ARE on the scale. So the sparse scale never described the UI it
+     ships with; these are not exceptions, they are its two busiest steps.
+
+     They are named by role rather than interleaved as --sp-3.5 etc. because
+     the component layer ships verbatim against --sp-1…8, and renumbering
+     would silently repoint every one of those. */
+  --sp-hair: 1px; /* hairline offsets, dot-to-dot gaps */
+  --sp-micro: 3px; /* icon-to-glyph, quick-action gaps */
+  --sp-xs: 4px; /* tight stacks, chip internals */
+  --sp-tight: 6px; /* label-to-affordance, list inline padding */
+  --sp-row: 8px; /* THE default: row padding and row gap */
+  --sp-pop: 10px; /* floating-surface inline padding */
+  --sp-pop-lg: 11px; /* popover item inline padding */
+  --sp-modal-head: 13px; /* modal header block padding */
+  --sp-toast-x: 15px; /* toast inline padding — a pill, so wider than tall */
+  --sp-scrim: 28px; /* breathing room between a modal and the window edge */
+  --sp-kbd-y: 1.5px; /* a kbd cap is a half-pixel taller than it is not */
+  --sp-empty: 26px; /* vertical breathing room in an inline empty state */
+  --sp-empty-lg: 30px; /* the same, inside a floating surface */
+
+  /* fixed chrome heights — the app's vertical rhythm */
+  --h-topbar: 36px;
+  --h-worktreebar: 36px;
+  --h-rail: 34px;
+  --h-panetabs: 29px;
+  --h-statusbar: 23px;
+  --h-row: 26px;
+  --h-control: 28px;
+  --h-control-sm: 22px;
+  --h-control-xs: 24px; /* topbar controls, service chips, crumb */
+  --h-input: 32px;
+  --h-logtool: 30px; /* log filter toolbar */
+  --h-session: 20px; /* session chip in a pane's tab strip */
+  --h-quickact: 19px; /* sidebar row hover action */
+  --h-gitchip: 18px; /* ↑n ↓n ● in the worktree bar */
+  --h-statusact: 17px; /* status-bar button */
+  --h-ib-tab: 21px; /* icon button inside a pane tab strip */
+  --h-ib-tool: 22px; /* icon button inside a toolbar */
+  --h-ib: 26px; /* the standard icon button, and segmented-control segments */
+
+  /* status dots — 6px reads only because of the halo; 5px is the inline
+     variant used inside rows and tables where a halo would crowd. */
+  --dot: 6px;
+  --dot-sm: 5px;
+
+  --w-sidebar: 238px;
+  --w-sidebar-narrow: 210px; /* below the 1180px breakpoint */
+
+  /* floating-surface widths */
+  --w-palette: 592px;
+  --w-pullpop: 346px;
+  --w-attnpop: 306px;
+  --w-levelpop: 158px;
+  --w-popover: 236px;
+  --w-modal: 520px;
+  --w-modal-narrow: 440px;
+  --w-modal-wide: 600px;
+  --w-logsrc: 58px; /* the log line's SERVICE column */
+
+  /* window chrome constants (not design choices — the OS and the screen set
+     these): the macOS traffic-light inset, and how far ⌘K hangs from the top */
+  --inset-traffic-lights: 80px;
+  --drop-palette: 96px;
+  --inset-attnpop: 82px; /* clears the topbar's refresh + settings buttons */
+  --min-main: 460px; /* main pane floor — without it the pane absorbs every
+                        deficit and silently clips its own content */
+
+  /* radius — controls only; layout regions get 0 */
+  --r-xs: 4px;
+  --r-sm: 5px;
+  --r-md: 6px;
+  --r-lg: 7px;
+  --r-xl: 9px;
+  --r-2xl: 12px;
+  --r-win: 11px;
+  /* off-scale radii the screens use: a 2px selection bar, a 3px affordance
+     inside a chip, and the pull popover at 10px (between --r-xl and --r-2xl) */
+  --r-hairline: 1px; /* sparkline bars — just enough to kill the hard corner */
+  --r-indicator: 2px;
+  --r-tiny: 3px;
+  --r-pop: 10px;
+
+  --border-w: 1px;
+
+  /* elevation — only floating things cast shadows */
+  --shadow-pop: 0 22px 54px -12px rgba(0, 0, 0, 0.65);
+  --shadow-modal: 0 34px 90px -14px rgba(0, 0, 0, 0.7);
+  --shadow-toast: 0 14px 34px rgba(0, 0, 0, 0.5);
+  --shadow-menu: 0 14px 34px -10px rgba(0, 0, 0, 0.6); /* small anchored menus */
+  --shadow-drawer: -18px 0 44px -14px rgba(0, 0, 0, 0.55);
+  --scrim: rgba(9, 10, 12, 0.58);
+  --scrim-light: rgba(9, 10, 12, 0.55); /* the palette veil, a touch thinner */
+  --scrim-blur: 3px;
+
+  /* status halo — a dot's ring, sized to read at 6px */
+  --halo: 0 0 0 2.5px;
+
+  /* motion — quick and unshowy; this is a tool you use all day */
+  --dur-fast: 0.1s;
+  --dur: 0.12s;
+  --dur-panel: 0.16s;
+  --dur-slide: 0.2s;
+  --ease-pop: cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 
+/* ── themes — the ONLY layer a theme swaps ─────────────────────────
+   Adding a theme = copying this block under a new selector and changing the
+   right-hand sides. No component CSS changes, because no component
+   references a raw colour for anything themeable.
+
+   A light theme is deliberately not shipped: it is a real design exercise,
+   not an inversion. The layered-charcoal depth model has to be replaced by a
+   shadow/border model, and the status hues re-picked for contrast on light
+   surfaces (amber #e6ad5f fails on white). These 16 properties are the
+   complete surface area when that work happens. */
+:root,
+[data-theme="dark"] {
+  --text-primary: var(--text);
+  --text-secondary: var(--muted);
+  --text-tertiary: var(--faint);
+  --surface-app: var(--bg);
+  --surface-nav: var(--sidebar);
+  --surface-well: var(--panel-2);
+  --surface-float: var(--titlebar);
+  --surface-card: var(--panel);
+  --divider: var(--border-soft);
+  --action-primary: var(--teal);
+  --action-primary-ink: var(--on-accent);
+  --action-danger: var(--red);
+  --state-running: var(--green);
+  --state-attention: var(--amber);
+  --state-error: var(--red);
+  --state-idle: var(--off);
+}
+
+/* ── base ── */
 * {
   box-sizing: border-box;
 }
@@ -63,14 +294,91 @@ body {
 
 body {
   font-family: var(--ui);
+  font-size: var(--fs-body);
+  background: var(--surface-app);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  user-select: none;
+  user-select: none; /* desktop app, not a document */
   cursor: default;
-  background: var(--bg);
-  color: var(--text);
 }
 
 #root {
   height: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--action-primary);
+  outline-offset: -2px;
+}
+
+@keyframes cx-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes cx-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes cx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes cx-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes cx-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+.cx-spin {
+  animation: cx-spin 0.8s linear infinite;
+  transform-origin: 50% 50%;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 6px;
+  border: 2.5px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.17);
+  background-clip: padding-box;
+}
+
+/* Respect the OS setting. Canopy's motion is functional (spinners, pulses that
+   mean "waiting on you"), so reduce rather than remove: durations collapse but
+   state changes stay visible. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

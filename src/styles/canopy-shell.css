@@ -1,0 +1,2039 @@
+/* Canopy workspace shell — the redesigned main window.
+
+   Layout regions are FLAT: no radius, no shadow, separated by 1px hairlines
+   and background tone. Radius and shadow belong to things that float
+   (popovers, the palette, toasts) and to interactive controls, which live in
+   canopy-components.css. A bordered box inside a bordered box is a bug.
+
+   Narrow behaviour keys off the PANE, not the viewport — panes resize
+   independently of the window, so @media cannot see them. Hence
+   container-type/container-name on .cxs-shell and .cxs-main. */
+
+.cxs-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-app);
+  color: var(--text-primary);
+  overflow: hidden;
+  position: relative;
+  container-type: inline-size;
+  container-name: appwin;
+}
+
+/* ── topbar: global state lives here, always visible ──────────────── */
+.cxs-topbar {
+  height: var(--h-topbar);
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(min-content, 1fr) minmax(0, 360px) minmax(min-content, 1fr);
+  align-items: center;
+  gap: var(--sp-pop);
+  padding: 0 var(--sp-pop) 0 var(--sp-5);
+  background: var(--surface-float);
+  border-bottom: var(--border-w) solid var(--divider);
+  overflow: hidden;
+}
+/* macOS uses titleBarStyle: Overlay — inset the left so the toolbar clears the
+   native traffic lights (the `mac` class is set on <html> at startup). The
+   design mock draws its own lights because it renders in a browser; the real
+   window must not, or there would be two sets. */
+.mac .cxs-topbar {
+  padding-left: var(--inset-traffic-lights);
+}
+.cxs-tb-l {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-width: 0;
+  overflow: hidden;
+}
+.cxs-tb-c {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  width: 100%;
+}
+.cxs-tb-r {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
+}
+/* command field: centred, the one global entry point */
+.cxs-gsearch {
+  width: 100%;
+  max-width: 360px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: var(--h-control-xs);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid var(--divider);
+  background: var(--surface-well);
+  color: var(--text-tertiary);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.cxs-gsearch:hover {
+  border-color: var(--border-pop);
+  background: var(--btn);
+}
+.cxs-gsearch .k {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+  flex: none;
+}
+.cxs-gsearch .ph {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  letter-spacing: -0.01em;
+  flex: none;
+}
+.cxs-brand .fk {
+  color: var(--action-primary);
+  display: inline-flex;
+}
+.cxs-tdiv {
+  width: 1px;
+  height: 16px;
+  background: var(--divider);
+  flex: none;
+}
+.cxs-crumb {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control-xs);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+  min-width: 0;
+  flex: 0 1 auto;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-crumb:hover {
+  background: var(--btn);
+  color: var(--text-primary);
+}
+.cxs-crumb .rp {
+  color: var(--text-tertiary);
+  flex: none;
+}
+.cxs-crumb .br {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* global chips — the cross-worktree signal, always on screen */
+.cxs-gchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid var(--divider);
+  background: var(--surface-well);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.cxs-gchip:hover {
+  background: var(--btn);
+  color: var(--text-primary);
+  border-color: var(--border-pop);
+}
+.cxs-gchip--agent {
+  color: var(--action-primary);
+}
+.cxs-gchip--agent:hover {
+  background: var(--teal-dim);
+  color: var(--action-primary);
+}
+
+/* ── attention queue: anything needing a human, across worktrees ──── */
+.cxs-attn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid transparent;
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-semi);
+  white-space: nowrap;
+  flex: none;
+  background: var(--warn-dim);
+  color: var(--state-attention);
+  transition: filter var(--dur-fast);
+}
+.cxs-attn:hover {
+  filter: brightness(1.14);
+}
+.cxs-attn--crash {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+.cxs-attn .d {
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  background: currentColor;
+  animation: cx-pulse 1.5s ease-in-out infinite;
+}
+.cxs-attn--clear {
+  background: var(--surface-well);
+  border-color: var(--divider);
+  color: var(--text-tertiary);
+  font-weight: var(--fw-medium);
+}
+.cxs-attn--clear:hover {
+  background: var(--btn);
+  color: var(--text-secondary);
+  filter: none;
+}
+.cxs-attn-i {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3) 11px;
+  border: 0;
+  border-bottom: var(--border-w) solid var(--divider);
+  background: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: var(--sans);
+}
+.cxs-attn-i:last-child {
+  border-bottom: 0;
+}
+.cxs-attn-i:hover {
+  background: var(--raised);
+}
+.cxs-attn-i .ic {
+  flex: none;
+  display: inline-flex;
+  width: 20px;
+  height: var(--h-session);
+  border-radius: var(--r-sm);
+  align-items: center;
+  justify-content: center;
+}
+.cxs-attn-i .ic.crash {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+.cxs-attn-i .ic.wait {
+  background: var(--warn-dim);
+  color: var(--state-attention);
+}
+.cxs-attn-i .ic.todo {
+  background: var(--teal-dim);
+  color: var(--action-primary);
+}
+.cxs-attn-i .tx {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cxs-attn-i .tt {
+  font-size: var(--fs-small);
+  line-height: var(--lh-tight);
+}
+.cxs-attn-i .wt {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-attn-i .go {
+  flex: none;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-xs);
+}
+.cxs-attn-i:hover .go {
+  color: var(--action-primary);
+}
+
+.cxs-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* ── sidebar: navigation only, dense and grouped ──────────────────── */
+.cxs-side {
+  width: var(--w-sidebar);
+  flex: none;
+  background: var(--surface-nav);
+  border-right: var(--border-w) solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  transition: width var(--dur-panel) ease;
+}
+.cxs-side.is-hidden {
+  width: 0;
+  border-right: 0;
+  overflow: hidden;
+}
+.cxs-side.is-hidden > * {
+  opacity: 0;
+  pointer-events: none;
+}
+.cxs-shead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-micro);
+  margin: var(--sp-row) var(--sp-3) var(--sp-tight) var(--sp-4);
+}
+.cxs-sfilter {
+  flex: 1;
+  min-width: 0;
+}
+/* The screen sets the filter a tier above .cx-search's default: at 238px the
+   sidebar is the one place a search field is the primary control rather than a
+   secondary one, so it takes body size. */
+.cxs-sfilter input {
+  font-size: var(--fs-body);
+}
+.cxs-slist {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-1) var(--sp-tight) var(--sp-row);
+}
+/* overview entry — the cross-worktree home */
+.cxs-ovrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  width: 100%;
+  text-align: left;
+  height: 28px;
+  padding: 0 var(--sp-row);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+  margin-bottom: var(--sp-xs);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-ovrow:hover {
+  background: var(--row-hover);
+  color: var(--text-primary);
+}
+.cxs-ovrow.is-on {
+  background: var(--teal-dim);
+  color: var(--action-primary);
+}
+.cxs-ovrow .n {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-ovrow.is-on .n {
+  color: var(--action-primary);
+}
+.cxs-grp {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-tight);
+  width: 100%;
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-row);
+  margin-top: var(--sp-3);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  font-family: var(--sans);
+}
+.cxs-grp:hover {
+  color: var(--text-secondary);
+}
+.cxs-grp .cv {
+  display: inline-flex;
+  transition: transform 0.14s;
+}
+.cxs-grp.is-closed .cv {
+  transform: rotate(-90deg);
+}
+.cxs-grp .gn {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  letter-spacing: 0;
+  font-weight: var(--fw-semi);
+  font-variant-numeric: tabular-nums;
+}
+/* worktree row — 26px, scannable, actions on hover */
+.cxs-wtr {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  width: 100%;
+  text-align: left;
+  height: var(--h-row);
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: var(--sans);
+  transition: background var(--dur-fast);
+}
+.cxs-wtr:hover {
+  background: var(--row-hover);
+}
+.cxs-wtr.is-on {
+  background: var(--surface);
+}
+.cxs-wtr.is-on::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: var(--r-indicator);
+  background: var(--action-primary);
+}
+.cxs-wtr .b {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.cxs-wtr.is-on .b {
+  color: var(--text-primary);
+}
+.cxs-wtr .meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+.cxs-wtr:hover .meta {
+  display: none;
+}
+.cxs-wtr .pin {
+  color: var(--text-tertiary);
+  display: inline-flex;
+}
+.cxs-wtr .agp {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--action-primary);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-wtr .agp.is-wait {
+  color: var(--state-attention);
+}
+.cxs-wtr .dirty {
+  width: var(--dot-sm);
+  height: var(--dot-sm);
+  border-radius: 50%;
+  background: var(--state-attention);
+  flex: none;
+}
+.cxs-qa {
+  display: none;
+  align-items: center;
+  gap: var(--sp-hair);
+  flex: none;
+  margin-right: calc(var(--sp-micro) * -1);
+}
+.cxs-wtr:hover .cxs-qa {
+  display: flex;
+}
+.cxs-qa .qb {
+  width: var(--h-quickact);
+  height: var(--h-quickact);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-qa .qb:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+.cxs-qa .qb.go:hover {
+  color: var(--state-running);
+}
+.cxs-qa .qb.st:hover {
+  color: var(--action-danger);
+}
+.cxs-qa .qb.is-on {
+  color: var(--action-primary);
+}
+.cxs-sfoot {
+  flex: none;
+  padding: var(--sp-3) var(--sp-4);
+  border-top: var(--border-w) solid var(--divider);
+}
+.cxs-newbtn {
+  width: 100%;
+  height: var(--h-control);
+  border: var(--border-w) dashed var(--border);
+  border-radius: var(--r-lg);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.cxs-newbtn:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
+.cxs-sempty {
+  padding: var(--h-session) var(--sp-pop);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+}
+
+/* ── main ─────────────────────────────────────────────────────────
+   One left gutter for every row in the main pane, so the first item in the
+   worktree bar, service rail, pane tabs, log toolbar and log lines all share
+   a vertical edge. */
+.cxs-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: pane;
+  --gutter: 10px;
+}
+/* worktree bar: ONE line. Metadata moved to the status bar. */
+.cxs-wtbar {
+  flex: none;
+  height: var(--h-worktreebar);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3) 0 var(--gutter);
+  background: var(--surface-app);
+  overflow: hidden;
+}
+.cxs-wtbar .fk {
+  color: var(--action-primary);
+  display: inline-flex;
+  flex: none;
+}
+.cxs-wtbar h1 {
+  font-family: var(--mono);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--tracking-tight);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 44px;
+}
+.cxs-gitchips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+.cxs-gc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-micro);
+  height: var(--h-gitchip);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-well);
+  border: var(--border-w) solid var(--divider);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-gc--up {
+  color: var(--action-primary);
+}
+.cxs-gc--down {
+  color: var(--text-secondary);
+}
+.cxs-gc--dirty {
+  color: var(--state-attention);
+}
+/* The branch name is the only elastic item; .cxs-acts never shrinks because
+   its child button can't, and a shrinking .cxs-acts would just clip it. */
+.cxs-acts {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.cxs-actdiv {
+  width: 1px;
+  height: 15px;
+  background: var(--divider);
+  margin: 0 var(--sp-2);
+  flex: none;
+}
+
+/* ── service rail: everything the old cards said, in one row ──────── */
+.cxs-rail {
+  flex: none;
+  height: var(--h-rail);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--gutter);
+  border-bottom: var(--border-w) solid var(--divider);
+  background: var(--surface-app);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.cxs-rail::-webkit-scrollbar {
+  display: none;
+}
+/* running services read as filled tokens; idle ones recede to text */
+.cxs-svc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control-xs);
+  padding: 0 var(--sp-4);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid transparent;
+  background: var(--surface-well);
+  cursor: pointer;
+  flex: none;
+  transition:
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.cxs-svc:hover,
+.cxs-svc.is-on {
+  background: var(--surface-card);
+}
+.cxs-svc .nm {
+  font-size: var(--fs-small);
+  color: var(--text-primary);
+  font-weight: var(--fw-medium);
+}
+.cxs-svc--off {
+  background: none;
+}
+.cxs-svc--off:hover {
+  background: var(--surface-well);
+}
+.cxs-svc--off .nm {
+  color: var(--text-tertiary);
+}
+.cxs-svc .pt {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--action-primary);
+}
+.cxs-svc--off .pt {
+  color: var(--text-tertiary);
+}
+.cxs-svc .st {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-svc .act {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  margin: 0 calc(var(--sp-micro) * -1) 0 0;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-svc .act:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+.cxs-svc--error {
+  background: var(--red-dim);
+}
+.cxs-svc--error .nm,
+.cxs-svc--error .act {
+  color: var(--red-text);
+}
+.cxs-railempty {
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+  padding: 0 var(--sp-1);
+}
+
+/* ── work surface: one dominant pane, splittable ──────────────────── */
+.cxs-work {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+.cxs-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface-well);
+}
+.cxs-vdiv {
+  flex: none;
+  width: 1px;
+  background: var(--divider);
+  cursor: col-resize;
+  position: relative;
+}
+.cxs-vdiv::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  z-index: 5;
+}
+.cxs-vdiv:hover,
+.cxs-vdiv.is-on {
+  background: var(--action-primary);
+}
+/* pane tabs: Logs / Terminal / Agent live TOGETHER — the integration fix.
+   The tab group scrolls horizontally instead of overflowing, and the trailing
+   control lives OUTSIDE the scroller so it stays reachable however many
+   sessions are open. */
+.cxs-sess {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-xs);
+  padding-left: var(--sp-3);
+  border-left: var(--border-w) solid var(--divider);
+  flex: 0 0 auto;
+}
+.cxs-sc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-session);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-sm);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+  font-family: var(--mono);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-sc:hover {
+  background: var(--btn);
+  color: var(--text-secondary);
+}
+.cxs-sc.is-on {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+.cxs-sc .d {
+  width: var(--dot-sm);
+  height: var(--dot-sm);
+  border-radius: 50%;
+  background: var(--state-idle);
+  flex: none;
+}
+.cxs-sc .d.run {
+  background: var(--action-primary);
+}
+.cxs-sc .d.wait {
+  background: var(--state-attention);
+}
+.cxs-sc .x {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  border-radius: var(--r-tiny);
+  margin-right: calc(var(--sp-micro) * -1);
+}
+.cxs-sc .x:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+.cxs-pbody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+/* a pane that hosts an xterm surface manages its own scrolling */
+.cxs-pbody--term {
+  overflow: hidden;
+}
+
+/* ── logs ─────────────────────────────────────────────────────────
+   Same scroller contract as the pane tabs: enumerable chips scroll, the
+   controls you always need (search, follow, clear) stay pinned outside. */
+.cxs-ltool {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-logtool);
+  padding: 0 var(--gutter);
+  border-bottom: var(--border-w) solid var(--divider);
+  background: var(--surface-app);
+  min-width: 0;
+}
+.cxs-ltool-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+}
+.cxs-ltool-scroll::-webkit-scrollbar {
+  display: none;
+}
+.cxs-ltool > .cx-ib,
+.cxs-ltool > .cxs-fchip {
+  flex: none;
+}
+.cxs-fchip {
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid transparent;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+  font-weight: var(--fw-medium);
+  font-family: var(--sans);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 0 0 auto;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-fchip:hover {
+  background: var(--btn);
+  color: var(--text-secondary);
+}
+.cxs-fchip.is-on {
+  background: var(--surface-card);
+  color: var(--text-primary);
+}
+.cxs-fchip .d {
+  width: var(--dot-sm);
+  height: var(--dot-sm);
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+  flex: none;
+}
+.cxs-fchip .badge {
+  font-size: var(--fs-micro);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+  margin-left: var(--sp-hair);
+}
+/* levels: one control, opened on demand — the row stays at four items */
+.cxs-fltwrap {
+  position: relative;
+  flex: none;
+}
+.cxs-fltpop {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  z-index: 40;
+  width: var(--w-levelpop);
+  padding: var(--sp-xs);
+  border-radius: var(--r-xl);
+  background: var(--surface-float);
+  border: var(--border-w) solid var(--border-pop);
+  box-shadow: var(--shadow-menu);
+}
+.cxs-fltrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  height: 26px;
+  padding: 0 var(--sp-3);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: var(--sans);
+  font-size: var(--fs-small);
+  text-align: left;
+}
+.cxs-fltrow:hover {
+  background: var(--btn);
+}
+.cxs-fltrow.is-on {
+  color: var(--text-primary);
+}
+.cxs-fltrow .bx {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border-radius: var(--r-xs);
+  border: var(--border-w) solid var(--border-pop);
+  display: grid;
+  place-items: center;
+  color: var(--action-primary);
+}
+.cxs-fltrow.is-on .bx {
+  background: var(--teal-dim);
+  border-color: var(--action-primary);
+}
+.cxs-fltrow .d {
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  flex: none;
+}
+/* level filters share the neutral active state — colour stays in the log body */
+.cxs-fchip--err .d {
+  background: var(--action-danger);
+  opacity: 1;
+}
+.cxs-fchip--warn .d {
+  background: var(--state-attention);
+  opacity: 1;
+}
+.cxs-lsearch {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--surface-well);
+  border: var(--border-w) solid transparent;
+  color: var(--text-tertiary);
+  flex: 0 1 140px;
+  min-width: 96px;
+}
+.cxs-lsearch:focus-within {
+  border-color: var(--action-primary);
+}
+.cxs-lsearch input {
+  flex: 1;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text-primary);
+  font-size: var(--fs-small);
+  font-family: var(--sans);
+  min-width: 0;
+}
+.cxs-lsearch input::placeholder {
+  color: var(--text-tertiary);
+}
+/* the log body owns the gutter so lines align with every row above them */
+.cxs-logs .cx-log {
+  padding-left: var(--gutter);
+  padding-right: var(--gutter);
+}
+.cxs-logempty {
+  padding: var(--sp-empty) var(--sp-5);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+
+/* recovery offered where the problem is visible, not in a menu.
+   An alert must never lose its action — wrap instead of overflowing. */
+.cxs-fixbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4);
+  margin: var(--sp-2) var(--gutter) 2px;
+  padding: var(--sp-3) 10px;
+  border: var(--border-w) solid var(--red-border);
+  border-radius: var(--r-lg);
+  background: var(--red-dim);
+  font-family: var(--sans);
+  flex: none;
+}
+.cxs-fixbar .ic {
+  color: var(--red-text);
+  display: inline-flex;
+  flex: none;
+}
+.cxs-fixbar .tx {
+  font-size: var(--fs-small);
+  color: var(--red-text-soft);
+  flex: 1 1 130px;
+  min-width: 0;
+}
+.cxs-fixbar .tx b {
+  color: var(--red-text);
+  font-weight: var(--fw-semi);
+}
+.cxs-fixbar .cx-btn {
+  flex: none;
+}
+/* Recovery is constructive, so the action carries the accent — red is
+   reserved for the PROBLEM (dot, log lines, alert bar), never for the fix. */
+.cxs-fixbar .cx-btn--fix {
+  background: var(--teal-dim);
+  border-color: var(--teal-border);
+  color: var(--action-primary);
+}
+.cxs-fixbar .cx-btn--fix:hover {
+  background: var(--teal-fill-hi);
+  color: var(--teal-text);
+}
+
+/* ── empty states ─────────────────────────────────────────────────── */
+.cxs-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: safe center;
+  gap: var(--sp-4);
+  padding: var(--sp-8);
+  text-align: center;
+  overflow-y: auto;
+}
+.cxs-empty > * {
+  flex: none;
+}
+.cxs-empty .eic {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-xl);
+  display: grid;
+  place-items: center;
+  background: var(--btn);
+  color: var(--text-tertiary);
+}
+.cxs-empty .et {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  color: var(--text-secondary);
+}
+.cxs-empty .es {
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+  max-width: 270px;
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+/* ── overview: the cross-worktree surface ─────────────────────────── */
+.cxs-ov {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--surface-app);
+}
+.cxs-ovhead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+  height: var(--h-topbar);
+  padding: 0 var(--sp-5);
+  border-bottom: var(--border-w) solid var(--divider);
+  min-width: 0;
+}
+.cxs-ovhead h2 {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  margin: 0;
+  flex: none;
+}
+.cxs-ovhead > .cx-btn {
+  flex: none;
+}
+.cxs-ovstats {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  margin-left: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
+}
+.cxs-ovs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cxs-ovs b {
+  color: var(--text-primary);
+  font-weight: var(--fw-semi);
+}
+.cxs-ovs .d {
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+}
+.cxs-ovbody {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  min-height: 0;
+  --tblmin: 760px;
+}
+.cxs-ovsec {
+  padding: 11px var(--sp-5) 4px;
+}
+.cxs-ovlabel {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin: 0 0 var(--sp-3) 2px;
+}
+/* Every section's table shares ONE geometry so columns align down the page.
+   Column 1 (the branch — each row's identity) is sized explicitly and widest;
+   it must never be left as the remainder, or it collapses to nothing. The
+   widths sum to --tblmin, and the body scrolls below that rather than
+   crushing any column. */
+.cxs-tbl {
+  width: 100%;
+  min-width: var(--tblmin);
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+  table-layout: fixed;
+}
+.cxs-tbl th:nth-child(1),
+.cxs-tbl td:nth-child(1) {
+  width: 200px;
+}
+.cxs-tbl th:nth-child(2),
+.cxs-tbl td:nth-child(2) {
+  width: 100px;
+}
+.cxs-tbl th:nth-child(3),
+.cxs-tbl td:nth-child(3) {
+  width: 88px;
+}
+.cxs-tbl th:nth-child(4),
+.cxs-tbl td:nth-child(4) {
+  width: 86px;
+}
+.cxs-tbl th:nth-child(5),
+.cxs-tbl td:nth-child(5) {
+  width: 56px;
+}
+.cxs-tbl th:nth-child(6),
+.cxs-tbl td:nth-child(6) {
+  width: 68px;
+}
+.cxs-tbl th:nth-child(7),
+.cxs-tbl td:nth-child(7) {
+  width: 62px;
+}
+.cxs-tbl th:nth-child(8),
+.cxs-tbl td:nth-child(8) {
+  width: 60px;
+}
+.cxs-tbl th:nth-child(9),
+.cxs-tbl td:nth-child(9) {
+  width: 40px;
+}
+/* headers clip like cells, so a tight column can never overlap its neighbour */
+.cxs-tbl td,
+.cxs-tbl th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-tbl th {
+  text-align: left;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  padding: 0 var(--sp-3) var(--sp-3);
+  border-bottom: var(--border-w) solid var(--divider);
+}
+.cxs-tbl th.r,
+.cxs-tbl td.r {
+  text-align: right;
+}
+.cxs-tbl td {
+  padding: 0 var(--sp-3);
+  height: 29px;
+  border-bottom: var(--border-w) solid var(--wash-row-faint);
+  color: var(--text-secondary);
+}
+.cxs-tbl tr {
+  cursor: pointer;
+}
+.cxs-tbl tbody tr:hover td {
+  background: var(--row-hover);
+  color: var(--text-primary);
+}
+.cxs-tbl .bcell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.cxs-tbl .bn {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.cxs-tbl .rp {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+.cxs-tbl .num {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-tbl .muted {
+  color: var(--text-tertiary);
+}
+.cxs-dots {
+  display: inline-flex;
+  gap: var(--sp-micro);
+}
+.cxs-dots i {
+  width: var(--dot-sm);
+  height: var(--dot-sm);
+  border-radius: 50%;
+  background: var(--state-idle);
+  display: block;
+}
+.cxs-dots i.on {
+  background: var(--state-running);
+}
+.cxs-dots i.bad {
+  background: var(--action-danger);
+}
+.cxs-agtag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-gitchip);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--teal-dim);
+  color: var(--action-primary);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semi);
+}
+.cxs-agtag--wait {
+  background: var(--warn-dim);
+  color: var(--state-attention);
+}
+.cxs-agtag--none {
+  background: none;
+  color: var(--text-tertiary);
+}
+.cxs-rowact {
+  display: flex;
+  gap: var(--sp-hair);
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+.cxs-tbl tbody tr:hover .cxs-rowact {
+  opacity: 1;
+}
+.cxs-ovempty {
+  padding: var(--sp-empty) var(--sp-5);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+}
+
+/* ── status bar: where the tall metadata row went ─────────────────── */
+.cxs-statusbar {
+  flex: none;
+  height: var(--h-statusbar);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-4);
+  background: var(--surface-float);
+  border-top: var(--border-w) solid var(--divider);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  position: relative;
+}
+.cxs-sb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-statusact);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-xs);
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-micro);
+  font-family: var(--sans);
+  cursor: pointer;
+  flex: none;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxs-sb:hover {
+  background: var(--btn);
+  color: var(--text-secondary);
+}
+.cxs-sb--mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.cxs-sb .d {
+  width: var(--dot-sm);
+  height: var(--dot-sm);
+  border-radius: 50%;
+}
+.cxs-sb--warn {
+  color: var(--state-attention);
+}
+.cxs-sb--bad {
+  color: var(--red-text);
+}
+.cxs-sb--teal {
+  color: var(--action-primary);
+}
+.cxs-statusbar .msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+  color: var(--meta-faint);
+}
+.cxs-sdiv {
+  width: 1px;
+  height: 11px;
+  background: var(--divider);
+  flex: none;
+}
+
+/* welded pull pair: one control, two targets */
+.cxs-pullwrap {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+}
+.cxs-pullsplit {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: var(--r-xs);
+}
+.cxs-pullmain {
+  border-radius: var(--r-xs) 0 0 var(--r-xs);
+  padding-right: var(--sp-2);
+}
+.cxs-pullcaret {
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  padding: 0 var(--sp-xs);
+  position: relative;
+}
+.cxs-pullcaret::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--divider);
+  opacity: 0;
+  transition: opacity var(--dur);
+}
+.cxs-pullwrap:hover .cxs-pullcaret::before,
+.cxs-pullcaret.is-on::before {
+  opacity: 1;
+}
+.cxs-pullcaret.is-on {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
+.cxs-pullpop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 62;
+  width: var(--w-pullpop);
+  background: var(--surface-float);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-pop);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  animation: cx-pop var(--dur) var(--ease-pop);
+  font-family: var(--sans);
+}
+.cxs-pp-all {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop-lg);
+  width: 100%;
+  padding: var(--sp-pop) var(--sp-pop-lg);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  text-align: left;
+  font-family: var(--sans);
+}
+.cxs-pp-all:hover {
+  background: var(--wash-pop);
+}
+.cxs-pp-all:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.cxs-pp-ic {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-xl);
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--accent-dim);
+  color: var(--action-primary);
+}
+.cxs-pp-tx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cxs-pp-tx b {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+}
+.cxs-pp-tx span {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+.cxs-pp-sep {
+  height: 1px;
+  background: var(--divider);
+}
+.cxs-pp-lab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) 4px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.cxs-pp-fetch {
+  margin-left: auto;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: var(--fw-regular);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+}
+.cxs-pp-list {
+  padding: 0 var(--sp-2) var(--sp-3);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.cxs-pp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-lg);
+  min-height: 34px;
+}
+.cxs-pp-row:hover {
+  background: var(--wash-pop-soft);
+}
+.cxs-pp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.cxs-pp-dot--clean {
+  background: var(--state-running);
+  box-shadow: var(--halo) var(--run-dim);
+}
+.cxs-pp-dot--attention {
+  background: var(--state-attention);
+  box-shadow: var(--halo) var(--amber-halo);
+}
+.cxs-pp-dot--detached {
+  background: var(--state-idle);
+}
+.cxs-pp-nm {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  color: var(--text-primary);
+  flex: none;
+}
+.cxs-pp-g {
+  flex: 1;
+  min-width: 5px;
+}
+.cxs-pp-ahead {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-micro);
+  font-size: var(--fs-label);
+  color: var(--action-primary);
+  white-space: nowrap;
+}
+.cxs-pp-br {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 23px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--surface-well);
+  border: var(--border-w) solid var(--divider);
+  color: var(--text-secondary);
+  font: var(--fs-small) var(--mono);
+  cursor: pointer;
+  max-width: 146px;
+  flex: none;
+  transition:
+    border-color var(--dur),
+    color var(--dur);
+}
+.cxs-pp-br:hover {
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+.cxs-pp-br.is-open {
+  border-color: var(--action-primary);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+  color: var(--text-primary);
+}
+.cxs-pp-br--detached {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.cxs-pp-br:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.cxs-pp-br:disabled:hover {
+  border-color: var(--divider);
+  color: var(--text-secondary);
+}
+.cxs-pp-br .n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-pp-pull {
+  width: 25px;
+  height: 23px;
+  border: var(--border-w) solid var(--divider);
+  background: var(--surface-well);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.cxs-pp-pull:hover {
+  background: var(--btn);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.cxs-pp-brl {
+  margin: var(--sp-hair) var(--sp-2) var(--sp-3);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface-well);
+  padding: var(--sp-xs);
+  max-height: 190px;
+  overflow-y: auto;
+}
+.cxs-pp-bri {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-primary);
+  font: var(--fs-small) var(--mono);
+  cursor: pointer;
+  text-align: left;
+}
+.cxs-pp-bri:hover {
+  background: var(--raised-hi);
+}
+.cxs-pp-bri.is-current {
+  background: var(--accent-dim);
+}
+.cxs-pp-bri .n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-pp-empty {
+  padding: var(--sp-6) var(--sp-5);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-small);
+}
+
+/* ── command palette: the primary action on open ──────────────────── */
+.cxs-pal-veil {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim-light);
+  backdrop-filter: blur(var(--scrim-blur));
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  padding-top: var(--drop-palette);
+  animation: cx-fade var(--dur-fast) ease;
+}
+.cxs-pal {
+  width: var(--w-palette);
+  max-width: calc(100% - 60px);
+  height: max-content;
+  max-height: 436px;
+  background: var(--surface-float);
+  border: var(--border-w) solid var(--border-pop);
+  border-radius: var(--r-win);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: cx-pop 0.13s var(--ease-pop);
+}
+.cxs-pal-in {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+  padding: var(--sp-pop-lg) var(--sp-6);
+  border-bottom: var(--border-w) solid var(--divider);
+  color: var(--text-tertiary);
+}
+.cxs-pal-in input {
+  flex: 1;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--fs-md);
+  min-width: 0;
+}
+.cxs-pal-in input::placeholder {
+  color: var(--text-tertiary);
+}
+.cxs-pal-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--sp-2);
+}
+.cxs-pal-g {
+  padding: var(--sp-3) var(--sp-4) 3px;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+/* suggested (contextual) results sit above generic ones */
+.cxs-pal-g--sug {
+  color: var(--action-primary);
+}
+.cxs-pal-i {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+  width: 100%;
+  text-align: left;
+  height: 31px;
+  padding: 0 var(--sp-4);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+.cxs-pal-i .ic {
+  color: var(--text-tertiary);
+  display: inline-flex;
+  flex: none;
+}
+.cxs-pal-i.is-on {
+  background: var(--teal-dim);
+}
+.cxs-pal-i.is-on .ic {
+  color: var(--action-primary);
+}
+.cxs-pal-i .ic.urgent {
+  color: var(--state-attention);
+}
+.cxs-pal-i .ic.crash {
+  color: var(--red-text);
+}
+.cxs-pal-i .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-pal-i .nm.mono {
+  font-family: var(--mono);
+}
+.cxs-pal-i .why {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  flex: none;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-pal-i.is-on .why {
+  color: var(--teal-text);
+}
+.cxs-pal-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: var(--border-w) solid var(--divider);
+  background: var(--wash-sunken);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+.cxs-pal-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.cxs-pal-empty {
+  padding: var(--sp-empty-lg) var(--sp-5);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+}
+
+/* The sidebar is fixed-width and sits outside any resizable pane, so the
+   window really is what changed here — @media is correct, not @container. */
+@media (max-width: 1180px) {
+  .cxs-side {
+    width: var(--w-sidebar-narrow);
+  }
+}
+
+/* ── narrow behaviour ──────────────────────────────────────────────
+   Keyed off the PANE, not the viewport — the work area is resizable
+   independently of the window, so media queries can't see it.
+   Supplementary chrome sheds in order; the next action is never shed. */
+@container pane (max-width: 560px) {
+  .cx-why {
+    display: none;
+  }
+}
+@container pane (max-width: 500px) {
+  .cxs-acts > .cx-ib,
+  .cxs-actdiv {
+    display: none;
+  }
+}
+@container pane (max-width: 640px) {
+  .cxs-lsearch {
+    flex: 0 0 auto;
+    min-width: 0;
+    width: 22px;
+    padding: 0;
+    justify-content: center;
+  }
+  .cxs-lsearch input {
+    display: none;
+  }
+}
+@container pane (max-width: 430px) {
+  .cxs-gitchips {
+    display: none;
+  }
+  .cxs-wtbar h1 {
+    min-width: 0;
+  }
+  .cxs-lsearch {
+    display: none;
+  }
+}
+/* At the window minimum the pane can't hold two actions — keep the fix, drop
+   the navigational one. */
+@container pane (max-width: 340px) {
+  .cxs-fixbar .cx-btn--jump {
+    display: none;
+  }
+}
+@container appwin (max-width: 700px) {
+  .cxs-ovstats {
+    display: none;
+  }
+}
+@container appwin (max-width: 520px) {
+  .cxs-ovhead > .cx-btn > span {
+    display: none;
+  }
+  .cxs-ovhead > .cx-btn {
+    padding: 0 var(--sp-3);
+  }
+}
+/* Narrow: shed the side zones' content so the command field keeps its width. */
+@container appwin (max-width: 1080px) {
+  .cxs-crumb .rp,
+  .cxs-crumb .rpchev {
+    display: none;
+  }
+}
+@container appwin (max-width: 760px) {
+  .cxs-gchip .lbl,
+  .cxs-attn .lbl,
+  .cxs-tb-r > .cxs-tdiv {
+    display: none;
+  }
+  .cxs-gchip,
+  .cxs-attn {
+    padding: 0 var(--sp-3);
+    gap: var(--sp-2);
+  }
+  .cxs-gchip {
+    display: none;
+  }
+}
+@container appwin (max-width: 660px) {
+  .cxs-gsearch .ph {
+    display: none;
+  }
+  .cxs-gsearch {
+    min-width: 0;
+  }
+}
+@container appwin (max-width: 520px) {
+  .cxs-brand {
+    display: none;
+  }
+}
+
+
+/* ── small utilities ───────────────────────────────────────────────
+   These exist so the shell's markup carries no magic numbers: anything a
+   component would otherwise express as an inline style object lives here,
+   resolved from tokens like every other rule. */
+.cxs-spacer {
+  flex: 1;
+}
+.cx-ib--tab {
+  height: var(--h-ib-tab);
+  min-width: var(--h-ib-tab);
+}
+.cx-ib--tool {
+  height: var(--h-ib-tool);
+  min-width: var(--h-ib-tool);
+}
+/* the attention queue hangs off the topbar, clearing its trailing controls */
+.cxs-attnpop {
+  top: var(--h-topbar);
+  right: var(--inset-attnpop);
+  width: var(--w-attnpop);
+}
+.cxs-pop-empty {
+  padding: var(--sp-8) var(--sp-5);
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-body);
+}
+.cxs-pop-empty .ic {
+  display: block;
+  color: var(--state-running);
+  margin-bottom: var(--sp-3);
+}
+.cxs-pop__count {
+  margin-left: auto;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: var(--fw-medium);
+}
+/* the next action inside an empty state sits just clear of the copy above it */
+.cxs-empty .cx-next {
+  margin-top: var(--sp-micro);
+}
+.cxs-tbl .svccount {
+  margin-left: var(--sp-3);
+}
+.cxs-ovs--warn,
+.cxs-ovs--warn b {
+  color: var(--state-attention);
+}
+/* an ended session's bar is informational, not an alert — it borrows the
+   fixbar's shape but none of its red */
+.cxs-endedbar {
+  border-color: var(--divider);
+  background: var(--surface-app);
+}
+.cxs-endedbar .tx {
+  color: var(--text-secondary);
+}
+.cxs-endedbar .tx b {
+  color: var(--text-primary);
+}
+.cxs-svc--db .nm {
+  color: var(--text-secondary);
+}
+
+/* the worktree bar's More menu, anchored under its trigger */
+.cxs-moremenu {
+  top: var(--h-control-xs);
+  right: 0;
+  min-width: 216px;
+}
