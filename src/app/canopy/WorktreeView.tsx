@@ -115,9 +115,7 @@ export default function WorktreeView({
           <button className="cx-ib" title="Open in editor" onClick={() => openWorktree(wt.wtKey, "editor")}>
             <Editor size={14} />
           </button>
-          <button className="cx-ib" title="Reveal in Finder" onClick={() => openWorktree(wt.wtKey, "finder")}>
-            <Finder size={14} />
-          </button>
+          {/* Reveal in Finder lives in the ⋯ menu — one route, not two. */}
           <button className="cx-ib" title="More" onClick={() => setMenu((m) => !m)} ref={moreRef} aria-haspopup="menu" aria-expanded={menu}>
             <More size={15} />
           </button>
