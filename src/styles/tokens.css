@@ -176,7 +176,9 @@
   --h-control: 28px;
   --h-control-sm: 22px;
   --h-control-xs: 24px; /* topbar controls, service chips, crumb */
-  --h-input: 32px;
+  /* Both screens draw form inputs at 30px; .cx-input was this token's only
+     consumer, so the token was the outlier rather than the usage. */
+  --h-input: 30px;
   --h-logtool: 30px; /* log filter toolbar */
   --h-session: 20px; /* session chip in a pane's tab strip */
   --h-quickact: 19px; /* sidebar row hover action */

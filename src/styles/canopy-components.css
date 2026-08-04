@@ -6,7 +6,7 @@
 /* ── Button ───────────────────────────────────────────────────────
    Buttons NEVER shrink or wrap. In any toolbar the supporting text is the
    elastic item; an action label is not worth degrading. */
-.cx-btn{height:var(--h-control);padding:0 var(--sp-pop-lg);border-radius:var(--r-lg);border:var(--border-w) solid var(--divider);background:var(--btn);color:var(--text-secondary);font:var(--fw-medium) var(--fs-body) var(--sans);cursor:pointer;display:inline-flex;align-items:center;gap:var(--sp-3);flex:none;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast)}
+.cx-btn{height:var(--h-control);padding:0 var(--sp-pop-lg);border-radius:var(--r-md);border:var(--border-w) solid var(--divider);background:var(--btn);color:var(--text-secondary);font:var(--fw-medium) var(--fs-body) var(--sans);cursor:pointer;display:inline-flex;align-items:center;gap:var(--sp-3);flex:none;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast)}
 .cx-btn:hover{background:var(--btn-hover);color:var(--text-primary);border-color:var(--border-pop)}
 .cx-btn:disabled{opacity:.4;cursor:default}
 .cx-btn:disabled:hover{background:var(--btn);color:var(--text-secondary);border-color:var(--divider)}
@@ -43,7 +43,7 @@
 .cx-why{font-size:var(--fs-micro);color:var(--text-tertiary);flex:0 1 auto;min-width:0;margin-right:var(--sp-row);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:230px}
 
 /* ── Input / Select / SearchField ── */
-.cx-input{width:100%;height:var(--h-input);padding:0 var(--sp-pop);border-radius:var(--r-lg);border:var(--border-w) solid var(--divider);background:var(--surface-well);color:var(--text-primary);font:var(--fs-body) var(--sans);outline:none;transition:border-color var(--dur),box-shadow var(--dur)}
+.cx-input{width:100%;height:var(--h-input);padding:0 var(--sp-pop);border-radius:var(--r-md);border:var(--border-w) solid var(--divider);background:var(--surface-well);color:var(--text-primary);font:var(--fs-body) var(--sans);outline:none;transition:border-color var(--dur),box-shadow var(--dur)}
 .cx-input:focus{border-color:var(--action-primary);box-shadow:0 0 0 3px var(--focus-ring)}
 .cx-input::placeholder{color:var(--text-tertiary)}
 .cx-input--mono{font-family:var(--mono);font-size:var(--fs-body)}
@@ -93,8 +93,8 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-spark i{width:3px;min-height:2px;background:var(--action-primary);opacity:.5;border-radius:var(--r-hairline);display:block}
 
 /* ── SegmentedControl ── */
-.cx-seg{display:flex;gap:var(--sp-1);padding:var(--sp-1);background:var(--surface-well);border:var(--border-w) solid var(--divider);border-radius:var(--r-xl)}
-.cx-seg button{flex:1;height:var(--h-ib);border:0;border-radius:var(--r-md);background:none;color:var(--text-tertiary);font:var(--fw-semi) var(--fs-small) var(--sans);cursor:pointer;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast)}
+.cx-seg{display:flex;gap:var(--sp-1);padding:var(--sp-1);background:var(--surface-well);border:var(--border-w) solid var(--divider);border-radius:var(--r-lg)}
+.cx-seg button{flex:1;height:var(--h-control-xs);border:0;border-radius:var(--r-md);background:none;color:var(--text-tertiary);font:var(--fw-semi) var(--fs-small) var(--sans);cursor:pointer;white-space:nowrap;transition:background var(--dur-fast),color var(--dur-fast)}
 .cx-seg button:hover{color:var(--text-secondary)}
 .cx-seg button.is-on{background:var(--btn);color:var(--text-primary)}
 
@@ -156,13 +156,13 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-modal--narrow{width:var(--w-modal-narrow)}
 .cx-modal--wide{width:var(--w-modal-wide)}
 .cx-modal__head{flex:none;display:flex;align-items:center;gap:var(--sp-5);padding:var(--sp-modal-head) var(--sp-6);border-bottom:var(--border-w) solid var(--divider)}
-.cx-modal__ic{width:26px;height:var(--h-ib);border-radius:var(--r-lg);display:grid;place-items:center;flex:none;background:var(--teal-dim);color:var(--action-primary)}
+.cx-modal__ic{width:var(--h-ib);height:var(--h-ib);border-radius:var(--r-md);display:grid;place-items:center;flex:none;background:var(--teal-dim);color:var(--action-primary)}
 .cx-modal__ic--danger{background:var(--red-dim);color:var(--red-text)}
 .cx-modal__title{min-width:0;flex:1;display:flex;flex-direction:column;gap:var(--sp-1)}
 .cx-modal__title b{font:var(--fw-semi) var(--fs-md) var(--sans)}
 .cx-modal__title span{font-size:var(--fs-small);color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cx-modal__body{flex:1;min-height:0;overflow-y:auto;padding:var(--sp-6)}
-.cx-modal__foot{flex:none;display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-pop-lg) var(--sp-6);border-top:var(--border-w) solid var(--divider);background:var(--wash-sunken)}
+.cx-modal__foot{flex:none;display:flex;align-items:center;gap:var(--sp-row);padding:var(--sp-pop-lg) var(--sp-6);border-top:var(--border-w) solid var(--divider);background:var(--wash-sunken)}
 .cx-modal__hint{font-size:var(--fs-micro);color:var(--text-tertiary);display:inline-flex;align-items:center;gap:var(--sp-3);min-width:0;flex:0 1 auto;overflow:hidden}
 .cx-modal__hint>svg{flex:none}
 .cx-modal__hint span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
