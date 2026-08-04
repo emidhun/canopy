@@ -204,6 +204,10 @@ export default function App() {
         e.preventDefault();
         setSideHidden((s) => !s);
       }
+      if (meta && e.key === "\\") {
+        e.preventDefault();
+        if (sel) setShowSwitchBranch(true);
+      }
       if (meta && e.key.toLowerCase() === "o") {
         e.preventDefault();
         setView((v) => (v === "overview" ? "wt" : "overview"));
@@ -290,6 +294,7 @@ export default function App() {
               onSetup={() => setShowSetup(true)}
               onOpenService={(s) => setSvcDetail(s)}
               onEditContext={() => setShowCtx(true)}
+              onSwitchBranch={() => setShowSwitchBranch(true)}
             />
           )
         )}
