@@ -634,3 +634,17 @@ pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     recorded_secs <= now
 }
+
+#[cfg(test)]
+mod tests {
+    use super::classify_line;
+
+    #[test]
+    fn classifies_log_levels() {
+        assert_eq!(classify_line("Error: boom", false), "err");
+        assert_eq!(classify_line("npm WARN deprecated", false), "warn");
+        assert_eq!(classify_line("webpack compiled successfully", false), "ok");
+        assert_eq!(classify_line("Listening on :3000", true), "ok");
+        assert_eq!(classify_line("plain build output", true), "info", "stderr alone isn't an error");
+    }
+}

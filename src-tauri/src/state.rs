@@ -343,3 +343,31 @@ pub async fn refresh_all_git_meta(app: &AppHandle) {
         refresh_git_meta(app, &p).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_index_is_stable_and_reclaims_gaps() {
+        let mut rt = RuntimeState::default();
+        assert_eq!(port_index(&mut rt, "repo", "/main", true), 0, "main is always 0");
+        assert_eq!(port_index(&mut rt, "repo", "/wt-a", false), 1);
+        assert_eq!(port_index(&mut rt, "repo", "/wt-b", false), 2);
+        // stable across repeat calls
+        assert_eq!(port_index(&mut rt, "repo", "/wt-a", false), 1);
+        // freeing an index lets the next worktree take the first gap
+        rt.port_indices.get_mut("repo").unwrap().remove("/wt-a");
+        assert_eq!(port_index(&mut rt, "repo", "/wt-c", false), 1);
+        // separate repos have independent index spaces
+        assert_eq!(port_index(&mut rt, "other", "/wt-x", false), 1);
+    }
+
+    #[test]
+    fn effective_port_prefers_override() {
+        let mut overrides = HashMap::new();
+        assert_eq!(effective_port(&overrides, "k", 3000, 2), 3020, "derived = base + idx*10");
+        overrides.insert("k".to_string(), 4321);
+        assert_eq!(effective_port(&overrides, "k", 3000, 2), 4321, "override wins");
+    }
+}

@@ -26,14 +26,18 @@ pub struct WorktreeInfo {
 /// `git worktree list --porcelain` — first entry is the main working tree.
 pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     let out = run_git(repo_path, &["worktree", "list", "--porcelain"]).await?;
+    Ok(parse_worktree_list(&out))
+}
 
+/// Pure parser for `git worktree list --porcelain` output.
+fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
     struct Entry {
         path: String,
         branch: Option<String>,
         bare: bool,
     }
     let mut entries: Vec<Entry> = Vec::new();
-    for line in out.lines() {
+    for line in porcelain.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
             entries.push(Entry { path: p.to_string(), branch: None, bare: false });
         } else if let Some(e) = entries.last_mut() {
@@ -47,7 +51,7 @@ pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String
         }
     }
 
-    Ok(entries
+    entries
         .into_iter()
         .filter(|e| !e.bare)
         .enumerate()
@@ -56,7 +60,7 @@ pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String
             branch: e.branch.unwrap_or_else(|| "(detached)".into()),
             is_main: i == 0,
         })
-        .collect())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
@@ -71,6 +75,17 @@ pub struct GitMeta {
 
 pub async fn git_meta(wt_path: &str) -> Result<GitMeta, String> {
     let status = run_git(wt_path, &["status", "--porcelain=v2", "--branch"]).await?;
+    let mut meta = parse_status_meta(&status);
+    if let Ok(log) = run_git(wt_path, &["log", "-1", "--format=%ct%x09%s"]).await {
+        let (ts, msg) = parse_last_commit(&log);
+        meta.last_commit_ts = ts;
+        meta.last_commit_msg = msg;
+    }
+    Ok(meta)
+}
+
+/// Pure parser for `git status --porcelain=v2 --branch`: ahead/behind + dirty.
+fn parse_status_meta(status: &str) -> GitMeta {
     let mut meta = GitMeta::default();
     for line in status.lines() {
         if let Some(ab) = line.strip_prefix("# branch.ab ") {
@@ -82,16 +97,19 @@ pub async fn git_meta(wt_path: &str) -> Result<GitMeta, String> {
                     meta.behind = b.parse().unwrap_or(0);
                 }
             }
-        } else if !line.starts_with('#') {
+        } else if !line.starts_with('#') && !line.trim().is_empty() {
             meta.dirty = true;
         }
     }
-    if let Ok(log) = run_git(wt_path, &["log", "-1", "--format=%ct%x09%s"]).await {
-        let mut it = log.trim_end().splitn(2, '\t');
-        meta.last_commit_ts = it.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-        meta.last_commit_msg = it.next().unwrap_or("").to_string();
-    }
-    Ok(meta)
+    meta
+}
+
+/// Pure parser for `git log -1 --format=%ct%x09%s`.
+fn parse_last_commit(log: &str) -> (i64, String) {
+    let mut it = log.trim_end().splitn(2, '\t');
+    let ts = it.next().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
+    let msg = it.next().unwrap_or("").to_string();
+    (ts, msg)
 }
 
 /// (name, path) pairs from a worktree's .gitmodules (empty if none).
@@ -581,4 +599,51 @@ pub async fn remove_worktree(
     }
     let _ = run_git(repo_path, &["worktree", "prune"]).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_worktree_porcelain() {
+        let out = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n\
+                   worktree /repo-worktrees/feat\nHEAD def456\nbranch refs/heads/feat\n\n\
+                   worktree /repo-worktrees/det\nHEAD 987fed\ndetached\n";
+        let wts = parse_worktree_list(out);
+        assert_eq!(wts.len(), 3);
+        assert!(wts[0].is_main && wts[0].branch == "main" && wts[0].path == "/repo");
+        assert!(!wts[1].is_main && wts[1].branch == "feat");
+        assert_eq!(wts[2].branch, "(detached)");
+    }
+
+    #[test]
+    fn skips_bare_entries() {
+        let out = "worktree /repo.git\nbare\n\nworktree /wt\nHEAD abc\nbranch refs/heads/x\n";
+        let wts = parse_worktree_list(out);
+        assert_eq!(wts.len(), 1);
+        assert_eq!(wts[0].path, "/wt");
+        // NOTE: is_main is positional over the filtered list — a bare main repo
+        // promotes the first linked worktree, which matches git's ordering.
+        assert!(wts[0].is_main);
+    }
+
+    #[test]
+    fn parses_status_ahead_behind_dirty() {
+        let s = "# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +3 -1\n\
+                 1 .M N... 100644 100644 100644 abc def src/x.rs\n";
+        let m = parse_status_meta(s);
+        assert_eq!((m.ahead, m.behind, m.dirty), (3, 1, true));
+        let clean = "# branch.oid abc\n# branch.head main\n# branch.ab +0 -0\n";
+        let m = parse_status_meta(clean);
+        assert_eq!((m.ahead, m.behind, m.dirty), (0, 0, false));
+    }
+
+    #[test]
+    fn parses_last_commit_line() {
+        let (ts, msg) = parse_last_commit("1722500000\tfix: tab\tin message\n");
+        assert_eq!(ts, 1722500000);
+        assert_eq!(msg, "fix: tab\tin message", "only the first tab splits");
+        assert_eq!(parse_last_commit(""), (0, String::new()));
+    }
 }

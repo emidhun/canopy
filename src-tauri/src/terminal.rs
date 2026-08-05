@@ -426,6 +426,19 @@ pub fn sweep_orphans(app: &AppHandle) {
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+/// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
+/// child makes its reader hit EOF, which removes the session and emits
+/// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
+/// waiting for the user, and killing it would lose work.
+pub fn sweep_idle(table: &TermTable) {
+    let mut sessions = table.sessions.lock().unwrap();
+    for (id, sess) in sessions.iter_mut() {
+        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
+            let _ = sess.child.kill();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::kind_of;
@@ -441,18 +454,5 @@ mod tests {
         assert_eq!(kind_of("/Users/me/wt/feature::agent"), "agent");
         assert_eq!(kind_of("/Users/me/wt/feature::shell"), "shell");
         assert_eq!(kind_of("nonsense"), "nonsense");
-    }
-}
-
-/// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
-/// child makes its reader hit EOF, which removes the session and emits
-/// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
-/// waiting for the user, and killing it would lose work.
-pub fn sweep_idle(table: &TermTable) {
-    let mut sessions = table.sessions.lock().unwrap();
-    for (id, sess) in sessions.iter_mut() {
-        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
-            let _ = sess.child.kill();
-        }
     }
 }
