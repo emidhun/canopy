@@ -3,7 +3,7 @@
    issue text into it; the runtime strip below is what the agent inherits
    whether or not anything is typed here. */
 import { useState } from "react";
-import { Copy, Doc, Info, Link, Plus, Sparkle } from "../../icons";
+import { Copy, Doc, Info, Link, Plus, Sparkle, X } from "../../icons";
 import { useStore } from "../../store";
 import type { RepoNode, WorktreeNode } from "../../types";
 import { composeContextMd, mdRender, runtimeFor, useWtContext } from "../WorktreeContext";
@@ -23,6 +23,8 @@ export default function ContextModal({
   const showToast = useStore((s) => s.showToast);
   const [ctx, setCtx] = useWtContext(wt.wtKey);
   const [tab, setTab] = useState<"write" | "preview">("write");
+  /** the inline add-a-link field; null when the affordance is at rest */
+  const [draftLink, setDraftLink] = useState<string | null>(null);
   const runtime = runtimeFor(repo, wt);
 
   return (
@@ -149,29 +151,68 @@ export default function ContextModal({
         </div>
       </div>
 
-      {ctx.links.length > 0 && (
-        <div className="cxm-fld">
-          <div className="cxm-flab">
-            <Link size={11} />
-            Links
-          </div>
-          <div className="cxm-links">
-            {ctx.links.map((l) => (
-              <span key={l.label} className="cxm-brc">
-                <Link size={10} />
-                <span className="n">{l.label}</span>
+      {/* Always rendered. Gating this on a non-empty list meant a fresh
+          context could never gain its first link — the add affordance was
+          hidden behind the thing it exists to create. */}
+      <div className="cxm-fld">
+        <div className="cxm-flab">
+          <Link size={11} />
+          Links
+        </div>
+        <div className="cxm-links">
+          {ctx.links.map((l) => (
+            <span key={l.label} className="cxm-brc" title={l.label}>
+              <Link size={10} />
+              <span className="n">{l.label}</span>
+              <span
+                className="x"
+                role="button"
+                tabIndex={0}
+                title={`Remove ${l.label}`}
+                onClick={() => setCtx({ ...ctx, links: ctx.links.filter((x) => x.label !== l.label) })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setCtx({ ...ctx, links: ctx.links.filter((x) => x.label !== l.label) });
+                  }
+                }}
+              >
+                <X size={9} />
               </span>
-            ))}
-            <span
-              className="cxm-brc cxm-brc--add"
-              onClick={() => showToast("Paste an issue or PR link into References above")}
-            >
+            </span>
+          ))}
+
+          {draftLink === null ? (
+            <button className="cxm-brc cxm-brc--add" onClick={() => setDraftLink("")}>
               <Plus size={10} />
               <span className="n">Add link</span>
-            </span>
-          </div>
+            </button>
+          ) : (
+            <input
+              className="cx-input cxm-linkin"
+              autoFocus
+              value={draftLink}
+              spellCheck={false}
+              placeholder="Paste an issue or PR link, then ⏎"
+              onChange={(e) => setDraftLink(e.target.value)}
+              onBlur={() => setDraftLink(null)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setDraftLink(null);
+                }
+                if (e.key === "Enter") {
+                  const v = draftLink.trim();
+                  if (!v) return setDraftLink(null);
+                  if (!ctx.links.some((l) => l.label === v))
+                    setCtx({ ...ctx, links: [...ctx.links, { label: v, kind: "link" }] });
+                  setDraftLink(null);
+                }
+              }}
+            />
+          )}
         </div>
-      )}
+      </div>
     </Modal>
   );
 }

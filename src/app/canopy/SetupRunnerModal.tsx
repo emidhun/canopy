@@ -66,7 +66,14 @@ export default function SetupRunnerModal({
     return { steps: seen, current: seen.length ? seen[seen.length - 1].n : 0, total };
   }, [op]);
 
+  // Optimistic for DISPLAY: before the first worktree:op event there is
+  // nothing to show but "running".
   const running = op?.running ?? true;
+  // Authoritative for DISMISSAL. Defaulting `busy` to true refused Escape and
+  // scrim-dismiss before any event arrived — and if the run never started
+  // (no backend, or the backend never emitted), the dialog could not be
+  // closed by keyboard at all.
+  const inFlight = op?.running === true;
   const done = !running && !failed && steps.length > 0;
   const errored = failed || (op?.lines ?? []).some((l) => l.lv === "err");
   const elapsed = ((Date.now() - startedAt.current) / 1000).toFixed(1);
@@ -76,7 +83,7 @@ export default function SetupRunnerModal({
       icon={Cube}
       title={errored ? "Setup failed" : done ? "Setup complete" : "Running setup"}
       sub={wt.branch}
-      busy={running && !errored}
+      busy={inFlight && !errored}
       onClose={onClose}
       foot={
         <>

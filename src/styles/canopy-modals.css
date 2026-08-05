@@ -462,3 +462,22 @@
   border-radius: var(--r-xs);
   color: var(--action-primary);
 }
+
+/* the inline add-a-link field — sized to sit in the chip row it replaces */
+.cxm-linkin {
+  width: auto;
+  flex: 1 1 220px;
+  min-width: 180px;
+  height: var(--h-control-sm);
+  font-size: var(--fs-small);
+}
+.cxm-brc .x {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  border-radius: var(--r-tiny);
+  margin-right: calc(var(--sp-micro) * -1);
+}
+.cxm-brc .x:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}
