@@ -256,7 +256,7 @@
   gap: var(--sp-4);
   width: 100%;
   text-align: left;
-  padding: var(--sp-3) 11px;
+  padding: var(--sp-3) var(--sp-pop-lg);
   border: 0;
   border-bottom: var(--border-w) solid var(--divider);
   background: none;
@@ -1094,8 +1094,8 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-4);
-  margin: var(--sp-2) var(--gutter) 2px;
-  padding: var(--sp-3) 10px;
+  margin: var(--sp-2) var(--gutter) var(--sp-1);
+  padding: var(--sp-3) var(--sp-pop);
   border: var(--border-w) solid var(--red-border);
   border-radius: var(--r-lg);
   background: var(--red-dim);
@@ -1232,7 +1232,7 @@
   --tblmin: 760px;
 }
 .cxs-ovsec {
-  padding: 11px var(--sp-5) 4px;
+  padding: var(--sp-pop-lg) var(--sp-5) var(--sp-xs);
 }
 .cxs-ovlabel {
   font-size: var(--fs-label);
@@ -1240,7 +1240,7 @@
   letter-spacing: 0.11em;
   text-transform: uppercase;
   color: var(--text-tertiary);
-  margin: 0 0 var(--sp-3) 2px;
+  margin: 0 0 var(--sp-3) var(--sp-1);
 }
 /* Every section's table shares ONE geometry so columns align down the page.
    Column 1 (the branch — each row's identity) is sized explicitly and widest;

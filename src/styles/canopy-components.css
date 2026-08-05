@@ -195,3 +195,19 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-kv dt{color:var(--text-tertiary)}
 .cx-kv dd{margin:0;font:var(--fs-small) var(--mono);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cx-kv dd em{font-style:normal;color:var(--action-primary)}
+
+/* ── Coming soon ───────────────────────────────────────────────────
+   For designed surfaces whose backend does not exist yet. A whole screen
+   gets the banner; a single control gets .cx-soon plus a "Coming soon"
+   title and disabled state. Amber, because this is a pending state rather
+   than a failure — red would say something is broken. */
+.cx-banner{display:flex;align-items:center;gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-bottom:var(--border-w) solid var(--amber-border);background:var(--warn-dim);color:var(--amber-text);font-size:var(--fs-small);line-height:var(--lh-body);flex:none}
+.cx-banner__ic{color:var(--state-attention);display:inline-flex;flex:none}
+.cx-banner b{color:var(--state-attention);font-weight:var(--fw-semi)}
+.cx-banner__link{margin-left:auto;flex:none;font-size:var(--fs-micro);color:var(--text-tertiary);white-space:nowrap}
+/* the inline marker on a control that is drawn but not yet wired */
+.cx-soon{font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--state-attention);background:var(--warn-dim);padding:var(--sp-1) var(--sp-tight);border-radius:var(--r-xs);flex:none}
+/* these must out-specify .cx-btn:disabled / .cx-ib:disabled above, which
+   otherwise win and restore `cursor: default` and a hover background */
+[data-soon],.cx-btn[data-soon]:disabled,.cx-ib[data-soon]:disabled{cursor:not-allowed}
+[data-soon]:hover,.cx-btn[data-soon]:disabled:hover,.cx-ib[data-soon]:disabled:hover{background:none}
