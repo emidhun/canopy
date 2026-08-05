@@ -501,7 +501,7 @@ pub async fn create_worktree(
         // discards local commits; a diverged branch simply stays put.
         if let Some(b) = base.map(str::trim).filter(|b| !b.is_empty()) {
             if let Err(e) = run_git(wt_path, &["merge", "--ff-only", b]).await {
-                progress(format!("note: {branch} is not a fast-forward of {b} — left as-is ({e})"));
+                progress(format!("note: could not fast-forward {branch} to {b} — left as-is ({e})"));
             }
         }
     }
