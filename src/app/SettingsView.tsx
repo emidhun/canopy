@@ -13,11 +13,12 @@
 // is a static reference of the real keybindings.
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { getVersion } from "@tauri-apps/api/app";
 import { hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import {
-  Bell, Braces, Check, ChevRight, Chevron, Copy, Cube, Doc, Fork, Keyboard,
-  Play, Plus, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
+  Bell, Braces, Check, ChevRight, Chevron, Copy, Cube, Doc, Download, Finder, Fork, Keyboard,
+  Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
   Spinner, Terminal, Trash, X,
 } from "../icons";
 
@@ -385,6 +386,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
                 <span className="gr" />
                 <span className="mono" style={{ maxWidth: 250 }}>{c.command}</span>
                 <span className="oacts">
+                  <span className="ico" title="Run once to test" onClick={(e) => { e.stopPropagation(); setOpen(i); test(i, c.command); }}>{ran && ran.i === i && ran.state === "running" ? <Spinner size={11} /> : <Play size={10} />}</span>
                   <span className="ico" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }}><Rot deg={180}><Chevron size={11} /></Rot></span>
                   <span className="ico" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }}><Chevron size={11} /></span>
                   <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.concat([{ ...c, label: c.label + " copy" }]) }); markDirty("commands"); }}><Copy size={11} /></span>
@@ -478,12 +480,31 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
             <div className="sbody">
               <div className="row">
                 <input className="inp mono gr" value={sel.from} placeholder="same path in the repo root" onChange={(e) => patch({ from: e.target.value })} />
+                <button className="ico" title="Browse for a source file (coming soon)" onClick={() => flash("Choosing a source file isn't wired yet")}><Finder size={12} /></button>
               </div>
               <div className="hint">Leave empty to read the same path from the repo root.</div>
             </div>
 
+            <div className="stp done"><span className="num">3</span><span className="st"><b>Strategy</b><span>how it is applied</span></span></div>
+            <div className="sbody">
+              {/* the backend derives strategy from the format (keyed → upsert,
+                  text → copy + interpolate); an independent mode isn't stored yet */}
+              <div className="strat">
+                {([["seed", "Seed if missing", "create only when the file does not exist"], ["upsert", "Upsert keys", "add or update named keys, leave the rest alone"], ["replace", "Copy + interpolate", "overwrite the whole file from source"]] as [string, string, string][]).map(([v, t, d]) => {
+                  const cur = sel.format === "text" ? "replace" : "upsert";
+                  return (
+                    <label key={v} className={cur === v ? "on" : ""}>
+                      <input type="radio" name={"mode-" + sel.id} checked={cur === v} disabled readOnly />
+                      <b>{t}</b><span>{d}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="hint">Derived from the format for now — an independent strategy isn't stored yet.</div>
+            </div>
+
             <div className={"stp" + ((sel.format === "text" ? sel.interpolate : sel.keys.length) ? " done" : "")}>
-              <span className="num">3</span><span className="st"><b>Values</b><span>{sel.format === "text" ? "interpolate the copy" : "keys to set (upsert)"}</span></span>
+              <span className="num">4</span><span className="st"><b>Values</b><span>{sel.format === "text" ? "interpolate the copy" : "keys to set (upsert)"}</span></span>
             </div>
             <div className="sbody">
               {sel.format === "text" ? (
@@ -521,6 +542,14 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
               )}
             </div>
           </div>
+          <Adv n="not wired yet">
+            <Soon>The on-conflict policy, when-to-apply trigger and file mode aren't stored yet — keys are upserted on create and reset.</Soon>
+            <div className="soonwrap fgrid">
+              <span className="lb">On conflict</span><select className="inp" disabled><option>Keep existing value</option></select>
+              <span className="lb">Apply on</span><select className="inp" disabled><option>Create and reset</option></select>
+              <span className="lb">File mode</span><input className="inp mono" disabled defaultValue="0644" style={{ width: 90 }} />
+            </div>
+          </Adv>
         </div>
       )}
     </>
@@ -528,7 +557,7 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
 }
 
 /* ══════════════════════════ real: Setup ════════════════════════════════ */
-function SetupPage({ setup, setSetup, markDirty }: PageProps) {
+function SetupPage({ setup, setSetup, markDirty, flash }: PageProps) {
   const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= setup.length) return; const n = setup.slice(); [n[i], n[j]] = [n[j], n[i]]; setSetup(n); markDirty("setup"); };
   return (
     <div className="sec">
@@ -543,6 +572,7 @@ function SetupPage({ setup, setSetup, markDirty }: PageProps) {
               <div className="ohead" style={{ cursor: "default" }}>
                 <span className="num" style={{ width: 16, height: 16, borderRadius: 4, display: "grid", placeItems: "center", font: "var(--fw-bold) var(--fs-label) var(--sans)", background: "var(--btn)", color: "var(--text-tertiary)", flex: "none" }}>{i + 1}</span>
                 <input className="inp mono gr" value={t} style={{ height: 25 }} placeholder="pnpm install" onChange={(e) => { setSetup(setup.map((x, j) => (j === i ? e.target.value : x))); markDirty("setup"); }} />
+                <Toggle on disabled />
                 <span className="oacts" style={{ opacity: 1 }}>
                   <span className="ico" title="Move up" onClick={() => move(i, -1)}><Rot deg={180}><Chevron size={11} /></Rot></span>
                   <span className="ico" title="Move down" onClick={() => move(i, 1)}><Chevron size={11} /></span>
@@ -555,16 +585,21 @@ function SetupPage({ setup, setSetup, markDirty }: PageProps) {
       )}
       <div className="row" style={{ marginTop: 8 }}>
         <button className="btn" onClick={() => { setSetup(setup.concat([""])); markDirty("setup"); }}><Plus size={11} />Add task</button>
+        <button className="btn" title="Dry run (coming soon)" onClick={() => flash("Dry-running setup isn't wired yet")}><Play size={11} />Dry run</button>
       </div>
       <Adv n="not wired yet">
-        <Soon>Per-task working directory, enable/disable and the on-failure/timeout policy aren't stored yet — every task runs, in order, from the worktree root.</Soon>
+        <Soon>The per-task enable toggle, working directory and the on-failure/timeout policy aren't stored yet — every task runs, in order, from the worktree root.</Soon>
+        <div className="soonwrap fgrid">
+          <span className="lb">On failure</span><select className="inp" disabled><option>Stop and report</option></select>
+          <span className="lb">Timeout</span><input className="inp mono" disabled defaultValue="600" style={{ width: 80 }} />
+        </div>
       </Adv>
     </div>
   );
 }
 
 /* ══════════════════════════ real: Repository ═══════════════════════════ */
-function RepoGeneralPage({ repo, patchRepo, markDirty, onRemoveRepo }: PageProps) {
+function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo }: PageProps) {
   if (!repo) return null;
   return (
     <>
@@ -573,8 +608,11 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, onRemoveRepo }: PageProps
         <div className="fgrid">
           <span className="lb">Name</span><input className="inp" value={repo.name} onChange={(e) => { patchRepo({ name: e.target.value }); markDirty("repo-general"); }} />
           <span className="lb">Path</span>
-          <div className="row"><input className="inp mono gr" value={repo.path} readOnly /></div>
+          <div className="row"><input className="inp mono gr" value={repo.path} readOnly />
+            <button className="ico" title="Reveal in Finder (coming soon)" onClick={() => flash("Revealing a repo in Finder isn't wired yet")}><Finder size={12} /></button></div>
           <span className="lb">Worktree root</span><input className="inp mono" value={repo.worktreeDir} placeholder=".worktrees" onChange={(e) => { patchRepo({ worktreeDir: e.target.value }); markDirty("repo-general"); }} />
+          <span className="lb">Default base</span>
+          <select className="inp" disabled title="Not stored per repo yet"><option>main</option></select>
         </div>
       </div>
       <div className="sec">
@@ -584,6 +622,13 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, onRemoveRepo }: PageProps
           <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created." on disabled />
           <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes." on={false} disabled />
           <TRow title="Create an isolated database" hint="One database per worktree, named from the branch slug." on disabled />
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Configuration file</div>
+        <div className="row">
+          <button className="btn" title="Export .worktreemanager.json (coming soon)" onClick={() => flash("Exporting the config file isn't wired yet")}><Download size={11} />Export config</button>
+          <button className="btn" title="Import a config file (coming soon)" onClick={() => flash("Importing a config file isn't wired yet")}><Pull size={11} />Import config</button>
         </div>
       </div>
       <Adv label="Danger zone">
@@ -699,14 +744,25 @@ function ShortcutsPage() {
 }
 
 function AdvancedPage({ flash }: PageProps) {
+  const [ver, setVer] = useState("—");
+  useEffect(() => {
+    if (hasBackend()) getVersion().then(setVer).catch(() => setVer("—"));
+    else setVer("dev");
+  }, []);
   return (
     <>
       <div className="sec">
         <div className="slab">Diagnostics</div>
         <div className="fgrid">
+          <span className="lb">Version</span>
+          <span style={{ font: "var(--fs-small) var(--mono)", color: "var(--text-secondary)" }}>{ver}</span>
           <span className="lb">Config</span>
           <div className="row"><input className="inp mono gr" value="~/Library/Application Support/Canopy/settings.json" readOnly />
             <button className="ico" title="Copy path" onClick={() => { navigator.clipboard?.writeText("~/Library/Application Support/Canopy/settings.json").then(() => flash("Path copied"), () => flash("Copy failed")); }}><Copy size={12} /></button></div>
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="btn" title="Copy diagnostics (coming soon)" onClick={() => flash("Diagnostics export isn't wired yet")}><Copy size={11} />Copy diagnostics</button>
+          <button className="btn" title="Open logs (coming soon)" onClick={() => flash("Opening the log directory isn't wired yet")}><Logs size={11} />Open logs</button>
         </div>
       </div>
       <div className="sec">
@@ -717,6 +773,13 @@ function AdvancedPage({ flash }: PageProps) {
           <TRow title="Predictive worktree warmup" hint="Pre-install dependencies for branches you open often." on={false} disabled />
         </div>
       </div>
+      <Adv label="Reset">
+        <div className="row">
+          <button className="btn" title="Clear caches (coming soon)" onClick={() => flash("Clearing caches isn't wired yet")}><Refresh size={11} />Clear caches</button>
+          <span style={{ flex: 1 }} />
+          <button className="btn danger" title="Reset all settings (coming soon)" onClick={() => flash("Resetting all settings isn't wired yet")}>Reset all settings</button>
+        </div>
+      </Adv>
     </>
   );
 }
@@ -1088,12 +1151,13 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
                 {isRepoPage && repo && <span className="sub">{repo.name}</span>}
                 {dirty.has(page) && <span className="dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--action-primary)" }} title="Unsaved changes" />}
               </h2>
-              <p>{p.blurb}</p>
+              <p>{p.blurb} {isRepoPage && <a onClick={() => flash("Documentation isn't wired yet")}>Learn more</a>}</p>
             </div>
             <div className="pa">
               {isRepoPage && repo && (
                 <button className={"btn sm" + (preview ? " pri" : "")} onClick={() => setPreview((v) => !v)}><Braces size={11} />{preview ? "Hide" : "Preview"} JSON<span className="k">⌘P</span></button>
               )}
+              <button className="ib" title="More — import, export, reveal config (coming soon)" onClick={() => flash("Import · Export · Reveal config — coming soon")}><More size={15} /></button>
             </div>
           </div>
           <div className="pbody">
