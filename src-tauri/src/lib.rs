@@ -8,6 +8,7 @@ mod settings;
 mod setup;
 mod state;
 mod stats;
+#[cfg(feature = "devtools")]
 mod suite;
 mod terminal;
 mod toolchain;
@@ -87,13 +88,14 @@ pub fn run() {
             });
 
             // headless end-to-end suite: WTM_SUITE=<repoId>
+            #[cfg(feature = "devtools")]
             if let Ok(repo_id) = std::env::var("WTM_SUITE") {
                 suite::run(app.handle().clone(), repo_id);
             }
 
             // headless smoke test of the process layer: WTM_SELFTEST=<svcKey>
             // (Unix-only: it pokes pgids with killpg to verify the group died)
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "devtools"))]
             if let Ok(key) = std::env::var("WTM_SELFTEST") {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -126,11 +128,16 @@ pub fn run() {
                 });
             }
             // headless create+start test: WTM_SELFTEST_CREATE="repoId|branch|serviceId"
+            #[cfg(feature = "devtools")]
             if let Ok(spec) = std::env::var("WTM_SELFTEST_CREATE") {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let parts: Vec<&str> = spec.split('|').collect();
+                    if parts.len() != 3 {
+                        eprintln!("[ct] FAIL: WTM_SELFTEST_CREATE wants repoId|branch|serviceId, got {spec:?}");
+                        return;
+                    }
                     let (repo_id, branch, service_id) = (parts[0], parts[1], parts[2]);
                     eprintln!("[ct] create_worktree repo={repo_id} branch={branch}");
                     match commands::create_worktree(
