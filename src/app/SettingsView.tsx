@@ -698,7 +698,8 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
           <span className="lb">Theme</span><select className="inp" disabled><option>Dark</option></select>
           <span className="lb">Density</span><select className="inp" disabled><option>Comfortable</option></select>
           <span className="lb">Accent</span>
-          <div className="row">{["#5cc7cd", "#4cc266", "#e6ad5f", "#c77ecd"].map((c, i) => (
+          {/* violet has no token yet; the other three come from tokens.css */}
+          <div className="row">{["var(--teal)", "var(--green)", "var(--amber)", "#c77ecd"].map((c, i) => (
             <button key={c} className="ico" disabled style={{ background: c, borderColor: i === 0 ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
         </div>
       </div>
@@ -992,15 +993,19 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (!repoMenu) return;
     const d = (e: MouseEvent) => { if (repoMenuRef.current && !repoMenuRef.current.contains(e.target as Node)) setRepoMenu(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setRepoMenu(false); };
     document.addEventListener("mousedown", d);
-    return () => document.removeEventListener("mousedown", d);
+    document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", d); document.removeEventListener("keydown", k); };
   }, [repoMenu]);
 
   useEffect(() => {
     if (!moreMenu) return;
     const d = (e: MouseEvent) => { if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreMenu(false); };
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") setMoreMenu(false); };
     document.addEventListener("mousedown", d);
-    return () => document.removeEventListener("mousedown", d);
+    document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", d); document.removeEventListener("keydown", k); };
   }, [moreMenu]);
 
   if (!settings) return <div className="cxset-root" />;
@@ -1257,7 +1262,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
                 {isRepoPage && repo && <span className="sub">{repo.name}</span>}
                 {dirty.has(page) && <span className="dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--action-primary)" }} title="Unsaved changes" />}
               </h2>
-              <p>{p.blurb} {isRepoPage && <a onClick={() => flash("Documentation isn't wired yet")}>Learn more</a>}</p>
+              <p>{p.blurb} {isRepoPage && <a role="button" tabIndex={0} onClick={() => flash("Documentation isn't wired yet")} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flash("Documentation isn't wired yet"); } }}>Learn more</a>}</p>
             </div>
             <div className="pa">
               {isRepoPage && repo && (
