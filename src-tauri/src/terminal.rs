@@ -35,7 +35,10 @@ const READ_CHUNK: usize = 32 * 1024;
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Behind its own Arc<Mutex> so a write blocked by a stalled child (full
+    /// PTY buffer) doesn't hold the sessions table lock — the reader thread
+    /// needs that lock to drain the master, which is what unblocks the write.
+    writer: std::sync::Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     /// raw byte scrollback, capped at SCROLLBACK_CAP
     scrollback: VecDeque<u8>,
@@ -191,7 +194,9 @@ pub fn open(
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("reader clone failed: {e}"))?;
-    let writer = pair.master.take_writer().map_err(|e| format!("writer failed: {e}"))?;
+    let writer = std::sync::Arc::new(Mutex::new(
+        pair.master.take_writer().map_err(|e| format!("writer failed: {e}"))?,
+    ));
 
     // the child is its own session leader (the pty setsid's it), so pid == pgid
     let pgid = child.process_id().unwrap_or(0) as i32;
@@ -295,11 +300,17 @@ pub fn open(
 /// Write user input (keystrokes, or a command the UI injects such as the agent
 /// CLI) to a session.
 pub fn write(table: &TermTable, id: &str, data: &str) -> Result<(), String> {
-    let mut sessions = table.sessions.lock();
-    let sess = sessions.get_mut(id).ok_or("no such terminal")?;
-    sess.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    sess.last_activity = Instant::now();
-    sess.writer.flush().map_err(|e| e.to_string())
+    // clone the writer handle out, then release the table lock BEFORE the
+    // (potentially blocking) write — see the field comment on `writer`.
+    let writer = {
+        let mut sessions = table.sessions.lock();
+        let sess = sessions.get_mut(id).ok_or("no such terminal")?;
+        sess.last_activity = Instant::now();
+        sess.writer.clone()
+    };
+    let mut w = writer.lock();
+    w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())
 }
 
 /// Resize a session's PTY (xterm's fit addon drives this).

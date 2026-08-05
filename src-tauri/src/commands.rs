@@ -259,8 +259,12 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
 
 // ── embedded terminals (agent lane) ──
 
+// async so they run on the runtime thread pool: open does openpty + spawn,
+// get_buffer base64-encodes up to 256KB, and write can block on a stalled
+// child — none of that belongs on the main (UI) thread.
+
 #[tauri::command]
-pub fn terminal_open(
+pub async fn terminal_open(
     app: AppHandle,
     table: State<'_, TermTable>,
     id: String,
@@ -273,23 +277,24 @@ pub fn terminal_open(
 }
 
 #[tauri::command]
-pub fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
+pub async fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
     terminal::write(&table, &id, &data).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
-pub fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), CanopyError> {
+pub async fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), CanopyError> {
     terminal::resize(&table, &id, cols, rows).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
-pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<terminal::BufferSnapshot> {
-    terminal::get_buffer(&table, &id)
+pub async fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Result<Option<terminal::BufferSnapshot>, CanopyError> {
+    Ok(terminal::get_buffer(&table, &id))
 }
 
 #[tauri::command]
-pub fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) {
+pub async fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) -> Result<(), CanopyError> {
     terminal::close_and_persist(&app, &table, &id);
+    Ok(())
 }
 
 /// Ensure a worktree's `.canopy/` exists with a self-ignoring `.gitignore`, then
