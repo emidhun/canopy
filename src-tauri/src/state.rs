@@ -2,7 +2,7 @@ use crate::git::{self, GitMeta};
 use crate::settings::{RepoCfg, RuntimeState, Settings};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,7 +103,7 @@ impl AppState {
 
     /// Resolve a worktree key to its owning repo.
     pub fn wt_context(&self, wt_key: &str) -> Option<WtContext> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read();
         for r in tree.iter() {
             for w in r.worktrees.iter() {
                 if w.wt_key == wt_key {
@@ -121,7 +121,7 @@ impl AppState {
 
     /// Resolve a service key to `(wt_key, repo_id, repo_path)`.
     pub fn service_context(&self, svc_key: &str) -> Option<(String, String, String)> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read();
         for r in tree.iter() {
             for w in r.worktrees.iter() {
                 if w.services.iter().any(|s| s.svc_key == svc_key) {
@@ -134,7 +134,7 @@ impl AppState {
 
     /// All service keys of one worktree.
     pub fn wt_service_keys(&self, wt_key: &str) -> Vec<String> {
-        let tree = self.tree.read().unwrap();
+        let tree = self.tree.read();
         tree.iter()
             .flat_map(|r| r.worktrees.iter())
             .filter(|w| w.wt_key == wt_key)
@@ -144,7 +144,7 @@ impl AppState {
 
     /// A registered repo's path by id.
     pub fn repo_path_by_id(&self, repo_id: &str) -> Option<String> {
-        let s = self.settings.read().unwrap();
+        let s = self.settings.read();
         s.repos.iter().find(|r| r.id == repo_id).map(|r| r.path.clone())
     }
 }
@@ -188,11 +188,11 @@ pub fn effective_port(overrides: &HashMap<String, u32>, svc_key: &str, base_port
 pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool) -> HashMap<String, String> {
     let state = app.state::<AppState>();
     let idx = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         port_index(&mut rt, repo_id, wt_key, is_main)
     };
     {
-        let rt = state.runtime.read().unwrap().clone();
+        let rt = state.runtime.read().clone();
         let _ = crate::settings::save_runtime(app, &rt);
     }
     let slug = crate::setup::wt_slug(wt_key);
@@ -207,8 +207,8 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
     m.insert("WT_DB_NAME".into(), format!("{repo_slug}_{slug}"));
     m.insert("WM_WT_SLUG".into(), slug); // back-compat alias
 
-    let overrides = state.runtime.read().unwrap().port_overrides.clone();
-    let settings = state.settings.read().unwrap();
+    let overrides = state.runtime.read().port_overrides.clone();
+    let settings = state.settings.read();
     if let Some(repo) = settings.repos.iter().find(|r| r.id == repo_id) {
         for s in &repo.services {
             if let Some(bp) = s.base_port {
@@ -227,13 +227,12 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
 /// refreshed separately. Emits `tree:changed`.
 pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
     let state = app.state::<AppState>();
-    let repos_cfg: Vec<RepoCfg> = state.settings.read().unwrap().repos.clone();
+    let repos_cfg: Vec<RepoCfg> = state.settings.read().repos.clone();
 
     // previous git meta, preserved across rebuilds
     let prev_git: HashMap<String, GitMeta> = state
         .tree
         .read()
-        .unwrap()
         .iter()
         .flat_map(|r| r.worktrees.iter())
         .filter_map(|w| w.git.clone().map(|g| (w.wt_key.clone(), g)))
@@ -252,11 +251,11 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         let mut worktrees = Vec::new();
         for wt in wts {
             let (idx, overrides) = {
-                let mut runtime = state.runtime.write().unwrap();
+                let mut runtime = state.runtime.write();
                 let idx = port_index(&mut runtime, &repo.id, &wt.path, wt.is_main);
                 (idx, runtime.port_overrides.clone())
             };
-            let statuses = state.statuses.read().unwrap();
+            let statuses = state.statuses.read();
             let services = repo
                 .services
                 .iter()
@@ -292,9 +291,9 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         });
     }
 
-    *state.tree.write().unwrap() = tree.clone();
+    *state.tree.write() = tree.clone();
     {
-        let runtime = state.runtime.read().unwrap().clone();
+        let runtime = state.runtime.read().clone();
         let _ = crate::settings::save_runtime(app, &runtime);
     }
     let _ = app.emit("tree:changed", &tree);
@@ -307,7 +306,7 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
         let state = app.state::<AppState>();
         let mut changed = false;
         {
-            let mut tree = state.tree.write().unwrap();
+            let mut tree = state.tree.write();
             for r in tree.iter_mut() {
                 for w in r.worktrees.iter_mut() {
                     if w.wt_key == wt_path && w.git.as_ref() != Some(&meta) {
@@ -334,7 +333,7 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
 pub async fn refresh_all_git_meta(app: &AppHandle) {
     let paths: Vec<String> = {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
+        let tree = state.tree.read();
         tree.iter()
             .flat_map(|r| r.worktrees.iter().map(|w| w.wt_key.clone()))
             .collect()

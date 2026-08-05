@@ -107,19 +107,19 @@ pub fn run() {
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                             let (running, pgid) = {
                                 let table = handle.state::<ProcTable>();
-                                let procs = table.procs.lock().unwrap();
+                                let procs = table.procs.lock();
                                 (procs.contains_key(&key), procs.get(&key).map(|p| crate::proc::group_key(&p.group) as i32))
                             };
                             let log_len = {
                                 let table = handle.state::<ProcTable>();
-                                let logs = table.logs.lock().unwrap();
+                                let logs = table.logs.lock();
                                 logs.get(&key).map(|b| b.len()).unwrap_or(0)
                             };
                             eprintln!("[selftest] running={running} pgid={pgid:?} log_lines={log_len}");
                             let _ = services::stop_service(&handle, &key).await;
                             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
                             let table = handle.state::<ProcTable>();
-                            let gone = table.procs.lock().unwrap().is_empty();
+                            let gone = table.procs.lock().is_empty();
                             let pg_dead = pgid.map(|p| unsafe { libc::killpg(p, 0) != 0 }).unwrap_or(true);
                             eprintln!("[selftest] after stop: table_empty={gone} pgid_dead={pg_dead}");
                             eprintln!("[selftest] {}", if running && gone && pg_dead && log_len > 0 { "PASS" } else { "FAIL" });
@@ -156,7 +156,7 @@ pub fn run() {
                             // confirm the new service is in the tree
                             let in_tree = {
                                 let st = handle.state::<state::AppState>();
-                                let tree = st.tree.read().unwrap();
+                                let tree = st.tree.read();
                                 tree.iter().flat_map(|r| r.worktrees.iter()).flat_map(|w| w.services.iter()).any(|s| s.svc_key == svc_key)
                             };
                             eprintln!("[ct] service {svc_key} in tree: {in_tree}");
@@ -166,7 +166,7 @@ pub fn run() {
                                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     let running = {
                                         let t = handle.state::<services::ProcTable>();
-                                        let p = t.procs.lock().unwrap();
+                                        let p = t.procs.lock();
                                         p.contains_key(&svc_key)
                                     };
                                     eprintln!("[ct] running={running}");

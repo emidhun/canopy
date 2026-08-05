@@ -3,7 +3,7 @@ use crate::state::{AppState, SvcStatus};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -57,7 +57,7 @@ pub struct ProcTable {
 
 impl ProcTable {
     fn next_gen(&self) -> u64 {
-        let mut g = self.generation.lock().unwrap();
+        let mut g = self.generation.lock();
         *g += 1;
         *g
     }
@@ -76,10 +76,10 @@ struct StatusEvent<'a> {
 
 pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Option<u64>, exit_code: Option<i32>) {
     let state = app.state::<AppState>();
-    state.statuses.write().unwrap().insert(key.to_string(), status);
+    state.statuses.write().insert(key.to_string(), status);
     // patch cached tree so late get_tree calls see fresh statuses
     {
-        let mut tree = state.tree.write().unwrap();
+        let mut tree = state.tree.write();
         for r in tree.iter_mut() {
             for w in r.worktrees.iter_mut() {
                 for s in w.services.iter_mut() {
@@ -96,7 +96,7 @@ pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Opt
 pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
     let table = app.state::<ProcTable>();
     {
-        let mut logs = table.logs.lock().unwrap();
+        let mut logs = table.logs.lock();
         let buf = logs.entry(key.to_string()).or_default();
         buf.push_back(line.clone());
         while buf.len() > LOG_CAP {
@@ -155,7 +155,6 @@ fn persist_orphans(app: &AppHandle) {
     let orphans: Vec<OrphanProc> = table
         .procs
         .lock()
-        .unwrap()
         .iter()
         .map(|(k, p)| OrphanProc {
             svc_key: k.clone(),
@@ -165,7 +164,7 @@ fn persist_orphans(app: &AppHandle) {
         .collect();
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.orphans = orphans;
         rt.clone()
     };
@@ -178,12 +177,12 @@ fn persist_orphans(_app: &AppHandle) {}
 /// Resolve a service's config + worktree env (PORT etc.) from settings.
 fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, HashMap<String, String>), String> {
     let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
+    let tree = state.tree.read();
     for r in tree.iter() {
         for w in r.worktrees.iter() {
             for s in w.services.iter() {
                 if s.svc_key == key {
-                    let settings = state.settings.read().unwrap();
+                    let settings = state.settings.read();
                     let repo = settings.repos.iter().find(|rc| rc.id == r.repo_id).ok_or("repo gone")?;
                     let cfg = repo
                         .services
@@ -218,7 +217,7 @@ fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, Ha
 pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     {
         let table = app.state::<ProcTable>();
-        if table.procs.lock().unwrap().contains_key(key) {
+        if table.procs.lock().contains_key(key) {
             return Ok(()); // already running
         }
     }
@@ -277,7 +276,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     let generation = {
         let table = app.state::<ProcTable>();
         let generation = table.next_gen();
-        table.procs.lock().unwrap().insert(
+        table.procs.lock().insert(
             key.to_string(),
             ProcEntry { pid, group, started_at: Instant::now(), started_unix, generation },
         );
@@ -341,7 +340,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
             let status = child.wait().await;
             let table = app.state::<ProcTable>();
             {
-                let mut procs = table.procs.lock().unwrap();
+                let mut procs = table.procs.lock();
                 match procs.get(&key) {
                     Some(p) if p.generation == generation => {
                         procs.remove(&key);
@@ -376,7 +375,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
 fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
     let table = app.state::<ProcTable>();
     {
-        let mut logs = table.logs.lock().unwrap();
+        let mut logs = table.logs.lock();
         let buf = logs.entry(key.to_string()).or_default();
         for l in batch.iter() {
             buf.push_back(l.clone());
@@ -415,7 +414,7 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     // generation so a restart during the grace window isn't hard-killed by us.
     let generation = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         match procs.get(key) {
             Some(p) => {
                 crate::proc::terminate_group(&p.group);
@@ -433,7 +432,7 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STOP_GRACE).await;
         let table = app2.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         if let Some(p) = procs.get(&key2) {
             if p.generation == generation {
                 crate::proc::kill_group(&p.group);
@@ -448,7 +447,7 @@ async fn wait_reaped(app: &AppHandle, key: &str, ticks: u32) -> bool {
     for _ in 0..ticks {
         tokio::time::sleep(Duration::from_millis(150)).await;
         let table = app.state::<ProcTable>();
-        if !table.procs.lock().unwrap().contains_key(key) {
+        if !table.procs.lock().contains_key(key) {
             return true;
         }
     }
@@ -458,7 +457,7 @@ async fn wait_reaped(app: &AppHandle, key: &str, ticks: u32) -> bool {
 pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
     let was_running = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         procs.contains_key(key)
     };
     if was_running {
@@ -469,7 +468,7 @@ pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
         if !wait_reaped(app, key, 40).await {
             {
                 let table = app.state::<ProcTable>();
-                let procs = table.procs.lock().unwrap();
+                let procs = table.procs.lock();
                 if let Some(p) = procs.get(key) {
                     crate::proc::kill_group(&p.group);
                 }
@@ -492,7 +491,7 @@ pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
 pub async fn stop_all(app: &AppHandle) {
     let keys: Vec<String> = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         procs.keys().cloned().collect()
     };
     for k in &keys {
@@ -500,7 +499,7 @@ pub async fn stop_all(app: &AppHandle) {
     }
     for _ in 0..40 {
         let table = app.state::<ProcTable>();
-        let empty = table.procs.lock().unwrap().is_empty();
+        let empty = table.procs.lock().is_empty();
         if empty {
             break;
         }
@@ -518,8 +517,8 @@ pub fn worktree_svc_keys(app: &AppHandle, wt_key: &str) -> Vec<String> {
 pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
     let (cmd_str, log_key) = {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let settings = state.settings.read().unwrap();
+        let tree = state.tree.read();
+        let settings = state.settings.read();
         let mut found = None;
         for r in tree.iter() {
             for w in r.worktrees.iter() {
@@ -543,7 +542,7 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
 
     {
         let table = app.state::<ProcTable>();
-        let mut resetting = table.resetting.lock().unwrap();
+        let mut resetting = table.resetting.lock();
         if resetting.get(wt_key).copied().unwrap_or(false) {
             return Err("Reset already in progress".into());
         }
@@ -574,7 +573,7 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
 
     {
         let table = app.state::<ProcTable>();
-        table.resetting.lock().unwrap().remove(wt_key);
+        table.resetting.lock().remove(wt_key);
     }
 
     match out {
@@ -611,7 +610,7 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
-        let rt = state.runtime.read().unwrap();
+        let rt = state.runtime.read();
         rt.orphans.clone()
     };
     for o in &orphans {
@@ -628,7 +627,7 @@ pub fn sweep_orphans(app: &AppHandle) {
     }
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.orphans.clear();
         rt.clone()
     };

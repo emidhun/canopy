@@ -414,6 +414,7 @@ dependencies = [
  "fix-path-env",
  "libc",
  "log",
+ "parking_lot",
  "portable-pty",
  "serde",
  "serde_json",

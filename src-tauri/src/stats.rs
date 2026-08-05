@@ -32,7 +32,7 @@ pub fn spawn_stats_task(app: AppHandle) {
 
             let tracked: Vec<(String, u32, u64)> = {
                 let table = app.state::<ProcTable>();
-                let procs = table.procs.lock().unwrap();
+                let procs = table.procs.lock();
                 procs
                     .iter()
                     .map(|(k, p)| (k.clone(), p.pid, p.started_at.elapsed().as_secs()))

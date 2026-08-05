@@ -18,7 +18,7 @@ use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -131,13 +131,13 @@ pub fn open(
     rows: u16,
     command: Option<String>,
 ) -> Result<(), String> {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     if sessions.contains_key(id) {
         return Ok(()); // already running — idempotent attach
     }
     // A restart reuses the id; the previous run's retained output would
     // otherwise be replayed as though the new process had printed it.
-    table.exited.lock().unwrap().remove(id);
+    table.exited.lock().remove(id);
 
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -230,7 +230,7 @@ pub fn open(
                     let mut seq = 0;
                     let mut ours = false;
                     if let Some(table) = app.try_state::<TermTable>() {
-                        if let Some(sess) = table.sessions.lock().unwrap().get_mut(&id) {
+                        if let Some(sess) = table.sessions.lock().get_mut(&id) {
                             // Same generation guard the exit path uses: a restart
                             // reopens this id, and bytes this (now stale) reader
                             // drains afterwards must not be appended to — or
@@ -259,14 +259,14 @@ pub fn open(
         // hasn't already replaced this id (fast reopen), else we'd delete the
         // replacement and emit a false exit.
         let removed = if let Some(table) = app.try_state::<TermTable>() {
-            let mut sessions = table.sessions.lock().unwrap();
+            let mut sessions = table.sessions.lock();
             match sessions.get(&id) {
                 Some(s) if s.generation == generation => {
                     // Keep what it printed: the UI shows an exited tab read-only
                     // until it's closed or restarted, and without this the output
                     // would die with the session the moment the process ended.
                     let sess = sessions.remove(&id).unwrap();
-                    let mut exited = table.exited.lock().unwrap();
+                    let mut exited = table.exited.lock();
                     if exited.len() >= EXITED_CAP {
                         if let Some(oldest) = exited.iter().min_by_key(|(_, b)| b.at).map(|(k, _)| k.clone()) {
                             exited.remove(&oldest);
@@ -295,7 +295,7 @@ pub fn open(
 /// Write user input (keystrokes, or a command the UI injects such as the agent
 /// CLI) to a session.
 pub fn write(table: &TermTable, id: &str, data: &str) -> Result<(), String> {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     let sess = sessions.get_mut(id).ok_or("no such terminal")?;
     sess.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
     sess.last_activity = Instant::now();
@@ -304,7 +304,7 @@ pub fn write(table: &TermTable, id: &str, data: &str) -> Result<(), String> {
 
 /// Resize a session's PTY (xterm's fit addon drives this).
 pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-    let sessions = table.sessions.lock().unwrap();
+    let sessions = table.sessions.lock();
     let sess = sessions.get(id).ok_or("no such terminal")?;
     sess.master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -316,14 +316,13 @@ pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), S
 /// while its worktree wasn't selected can still be read. `None` only when the id
 /// was never opened (or has since been closed).
 pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
-    if let Some(s) = table.sessions.lock().unwrap().get(id) {
+    if let Some(s) = table.sessions.lock().get(id) {
         let bytes: Vec<u8> = s.scrollback.iter().copied().collect();
         return Some(BufferSnapshot { buffer: b64(&bytes), seq: s.seq });
     }
     table
         .exited
         .lock()
-        .unwrap()
         .get(id)
         .map(|b| BufferSnapshot { buffer: b64(&b.scrollback), seq: b.seq })
 }
@@ -331,10 +330,10 @@ pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
 /// Kill and drop a session, including any retained output — closing a tab is the
 /// point at which the user is done with it.
 pub fn close(table: &TermTable, id: &str) {
-    if let Some(mut sess) = table.sessions.lock().unwrap().remove(id) {
+    if let Some(mut sess) = table.sessions.lock().remove(id) {
         let _ = sess.child.kill();
     }
-    table.exited.lock().unwrap().remove(id);
+    table.exited.lock().remove(id);
 }
 
 /// Close a session and refresh the persisted orphan list (command path).
@@ -347,11 +346,11 @@ pub fn close_and_persist(app: &AppHandle, table: &TermTable, id: &str) {
 /// no shell/agent lingers with no UI to stop it).
 pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
     let prefix = format!("{wt_key}::");
-    let ids: Vec<String> = table.sessions.lock().unwrap().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+    let ids: Vec<String> = table.sessions.lock().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
     for id in &ids {
         close(table, id);
     }
-    table.exited.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
+    table.exited.lock().retain(|k, _| !k.starts_with(&prefix));
     if !ids.is_empty() {
         persist_orphans(app);
     }
@@ -359,11 +358,11 @@ pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
 
 /// Kill every session (app quit).
 pub fn close_all(table: &TermTable) {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
     }
-    table.exited.lock().unwrap().clear();
+    table.exited.lock().clear();
 }
 
 /// Snapshot live sessions' pgids into persisted runtime state, so a crash can be
@@ -375,13 +374,12 @@ fn persist_orphans(app: &AppHandle) {
     let orphans: Vec<TermOrphan> = table
         .sessions
         .lock()
-        .unwrap()
         .iter()
         .map(|(id, s)| TermOrphan { id: id.clone(), pgid: s.pgid, spawn_time_secs: s.started_unix })
         .collect();
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.terminal_orphans = orphans;
         rt.clone()
     };
@@ -402,7 +400,7 @@ pub fn sweep_orphans(_app: &AppHandle) {}
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
-        let rt = state.runtime.read().unwrap();
+        let rt = state.runtime.read();
         rt.terminal_orphans.clone()
     };
     for o in &orphans {
@@ -419,7 +417,7 @@ pub fn sweep_orphans(app: &AppHandle) {
     }
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.terminal_orphans.clear();
         rt.clone()
     };
@@ -431,7 +429,7 @@ pub fn sweep_orphans(app: &AppHandle) {
 /// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
 /// waiting for the user, and killing it would lose work.
 pub fn sweep_idle(table: &TermTable) {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     for (id, sess) in sessions.iter_mut() {
         if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
             let _ = sess.child.kill();

@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, State};
 pub async fn get_tree(app: AppHandle) -> Result<Vec<RepoNode>, CanopyError> {
     let cached = {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
+        let tree = state.tree.read();
         tree.clone()
     };
     if cached.is_empty() {
@@ -34,14 +34,14 @@ pub async fn refresh(app: AppHandle, wt_key: Option<String>) -> Result<(), Canop
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings.read().unwrap().clone()
+    state.settings.read().clone()
 }
 
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(), CanopyError> {
     {
         let state = app.state::<AppState>();
-        *state.settings.write().unwrap() = new_settings.clone();
+        *state.settings.write() = new_settings.clone();
     }
     settings::save_settings(&app, &new_settings).map_err(CanopyError::config)?;
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
@@ -73,7 +73,7 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
 
     let updated = {
         let state = app.state::<AppState>();
-        let mut s = state.settings.write().unwrap();
+        let mut s = state.settings.write();
         if s.repos.iter().any(|r| r.path == repo.path) {
             return Err(CanopyError::conflict("Repository already registered"));
         }
@@ -183,7 +183,7 @@ pub async fn detect_repo(path: String) -> Result<RepoDetection, CanopyError> {
 pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyError> {
     let updated = {
         let state = app.state::<AppState>();
-        let mut s = state.settings.write().unwrap();
+        let mut s = state.settings.write();
         s.repos.retain(|r| r.id != repo_id);
         s.clone()
     };
@@ -252,7 +252,6 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
     table
         .logs
         .lock()
-        .unwrap()
         .get(&svc_key)
         .map(|b| b.iter().cloned().collect())
         .unwrap_or_default()
@@ -314,7 +313,7 @@ pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> Stri
     const DEFAULT_AGENT: &str = "claude";
     let repo_id = state.wt_context(&wt_key).map(|c| c.repo_id);
     let cmd = repo_id.and_then(|id| {
-        let settings = state.settings.read().unwrap();
+        let settings = state.settings.read();
         settings
             .repos
             .iter()
@@ -386,7 +385,7 @@ pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), CanopyE
     // prefer the Settings "Migrate cmd"; fall back to .worktreemanager.json `migrate`
     let settings_cmd = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.repos.iter().find(|r| r.id == repo_id).map(|r| r.migrate_db.clone()).unwrap_or_default()
     };
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
@@ -450,7 +449,7 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
 pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let editor = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.editor.command.clone()
     };
     let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
@@ -476,7 +475,7 @@ pub async fn open_file_in_editor(app: AppHandle, wt_key: String, path: String) -
     }
     let editor = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.editor.command.clone()
     };
     let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
@@ -525,7 +524,7 @@ pub fn reveal_in_finder(wt_key: String) -> Result<(), CanopyError> {
 pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let term = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.terminal.clone()
     };
 
@@ -643,7 +642,7 @@ pub async fn create_worktree(
 ) -> Result<String, CanopyError> {
     let repo = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.repos
             .iter()
             .find(|r| r.id == repo_id)
@@ -804,7 +803,7 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
 
 fn is_running(app: &AppHandle, key: &str) -> bool {
     let table = app.state::<services::ProcTable>();
-    let procs = table.procs.lock().unwrap();
+    let procs = table.procs.lock();
     procs.contains_key(key)
 }
 
@@ -933,7 +932,7 @@ pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Res
     // check cross-worktree conflicts: another service already on this port
     {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
+        let tree = state.tree.read();
         for r in tree.iter() {
             for w in r.worktrees.iter() {
                 for s in w.services.iter() {
@@ -955,8 +954,8 @@ pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Res
     // record the override + persist
     {
         let state = app.state::<AppState>();
-        state.runtime.write().unwrap().port_overrides.insert(svc_key.clone(), port);
-        let rt = state.runtime.read().unwrap().clone();
+        state.runtime.write().port_overrides.insert(svc_key.clone(), port);
+        let rt = state.runtime.read().clone();
         let _ = settings::save_runtime(&app, &rt);
     }
 

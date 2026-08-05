@@ -28,12 +28,12 @@ fn port_bound(port: u32) -> bool {
 
 fn proc_running(app: &AppHandle, key: &str) -> bool {
     let t = app.state::<services::ProcTable>();
-    let p = t.procs.lock().unwrap();
+    let p = t.procs.lock();
     p.contains_key(key)
 }
 fn log_count(app: &AppHandle, key: &str) -> usize {
     let t = app.state::<services::ProcTable>();
-    let l = t.logs.lock().unwrap();
+    let l = t.logs.lock();
     l.get(key).map(|b| b.len()).unwrap_or(0)
 }
 
@@ -46,7 +46,7 @@ pub fn run(app: AppHandle, repo_id: String) {
         // ── Case 1: discovery + git meta ──
         let (repo_path, worktrees): (String, Vec<(String, String, bool, bool)>) = {
             let st = app.state::<state::AppState>();
-            let tree = st.tree.read().unwrap();
+            let tree = st.tree.read();
             match tree.iter().find(|r| r.repo_id == repo_id) {
                 None => {
                     fail("discovery", format!("repo '{repo_id}' not in tree"));
@@ -88,7 +88,7 @@ pub fn run(app: AppHandle, repo_id: String) {
             .find(|w| {
                 let port = {
                     let st = app.state::<state::AppState>();
-                    let tree = st.tree.read().unwrap();
+                    let tree = st.tree.read();
                     tree.iter()
                         .flat_map(|r| r.worktrees.iter())
                         .filter(|x| x.wt_key == w.0)
@@ -109,7 +109,7 @@ pub fn run(app: AppHandle, repo_id: String) {
                 let svc_key = format!("{wt_key}::frontend");
                 let port = {
                     let st = app.state::<state::AppState>();
-                    let tree = st.tree.read().unwrap();
+                    let tree = st.tree.read();
                     tree.iter()
                         .flat_map(|r| r.worktrees.iter())
                         .flat_map(|w| w.services.iter())
@@ -221,7 +221,7 @@ pub fn run(app: AppHandle, repo_id: String) {
                         let gone = !std::path::Path::new(wt_path).exists();
                         let in_tree = {
                             let st = app.state::<state::AppState>();
-                            let tree = st.tree.read().unwrap();
+                            let tree = st.tree.read();
                             tree.iter().flat_map(|r| r.worktrees.iter()).any(|w| &w.wt_key == wt_path)
                         };
                         if gone && !in_tree {
@@ -265,7 +265,7 @@ pub fn run(app: AppHandle, repo_id: String) {
                     let svc_key = format!("{wt_path}::frontend");
                     let port = {
                         let st = app.state::<state::AppState>();
-                        let tree = st.tree.read().unwrap();
+                        let tree = st.tree.read();
                         tree.iter().flat_map(|r| r.worktrees.iter()).flat_map(|w| w.services.iter())
                             .find(|s| s.svc_key == svc_key).and_then(|s| s.port).unwrap_or(0)
                     };
