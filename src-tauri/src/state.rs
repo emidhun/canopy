@@ -73,6 +73,16 @@ pub struct AppState {
     pub statuses: RwLock<HashMap<String, SvcStatus>>,
 }
 
+/// A worktree resolved to its owning repo — the answer every command needs
+/// before it can act on a `wt_key`.
+#[derive(Debug, Clone)]
+pub struct WtContext {
+    pub repo_id: String,
+    pub repo_path: String,
+    pub branch: String,
+    pub is_main: bool,
+}
+
 impl AppState {
     pub fn new(settings: Settings, runtime: RuntimeState) -> Self {
         Self {
@@ -81,6 +91,61 @@ impl AppState {
             tree: RwLock::new(Vec::new()),
             statuses: RwLock::new(HashMap::new()),
         }
+    }
+
+    // ── tree queries ──
+    //
+    // The tree is the single navigable model (repos → worktrees → services);
+    // every command used to hand-roll the same triple-nested loop with subtly
+    // different miss behavior. These are the only sanctioned lookups — they
+    // take the tree read lock briefly and return owned data, so callers never
+    // hold a lock across an await point.
+
+    /// Resolve a worktree key to its owning repo.
+    pub fn wt_context(&self, wt_key: &str) -> Option<WtContext> {
+        let tree = self.tree.read().unwrap();
+        for r in tree.iter() {
+            for w in r.worktrees.iter() {
+                if w.wt_key == wt_key {
+                    return Some(WtContext {
+                        repo_id: r.repo_id.clone(),
+                        repo_path: r.path.clone(),
+                        branch: w.branch.clone(),
+                        is_main: w.is_main,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve a service key to `(wt_key, repo_id, repo_path)`.
+    pub fn service_context(&self, svc_key: &str) -> Option<(String, String, String)> {
+        let tree = self.tree.read().unwrap();
+        for r in tree.iter() {
+            for w in r.worktrees.iter() {
+                if w.services.iter().any(|s| s.svc_key == svc_key) {
+                    return Some((w.wt_key.clone(), r.repo_id.clone(), r.path.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// All service keys of one worktree.
+    pub fn wt_service_keys(&self, wt_key: &str) -> Vec<String> {
+        let tree = self.tree.read().unwrap();
+        tree.iter()
+            .flat_map(|r| r.worktrees.iter())
+            .filter(|w| w.wt_key == wt_key)
+            .flat_map(|w| w.services.iter().map(|s| s.svc_key.clone()))
+            .collect()
+    }
+
+    /// A registered repo's path by id.
+    pub fn repo_path_by_id(&self, repo_id: &str) -> Option<String> {
+        let s = self.settings.read().unwrap();
+        s.repos.iter().find(|r| r.id == repo_id).map(|r| r.path.clone())
     }
 }
 

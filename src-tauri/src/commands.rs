@@ -312,12 +312,7 @@ pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), C
 #[tauri::command]
 pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> String {
     const DEFAULT_AGENT: &str = "claude";
-    let repo_id = {
-        let tree = state.tree.read().unwrap();
-        tree.iter()
-            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-            .map(|r| r.repo_id.clone())
-    };
+    let repo_id = state.wt_context(&wt_key).map(|c| c.repo_id);
     let cmd = repo_id.and_then(|id| {
         let settings = state.settings.read().unwrap();
         settings
@@ -723,16 +718,11 @@ pub async fn create_worktree(
 /// setup was configured, or to retry after a failure.
 #[tauri::command]
 pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
-    let (repo_path, repo_id, is_main) = {
-        let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let r = tree
-            .iter()
-            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-            .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
-        let is_main = r.worktrees.iter().find(|w| w.wt_key == wt_key).map(|w| w.is_main).unwrap_or(false);
-        (r.path.clone(), r.repo_id.clone(), is_main)
-    };
+    let ctx = app
+        .state::<AppState>()
+        .wt_context(&wt_key)
+        .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
+    let (repo_path, repo_id, is_main) = (ctx.repo_path, ctx.repo_id, ctx.is_main);
     if !crate::setup::has_config(&wt_key, &repo_path) {
         return Err(CanopyError::invalid_input(
             "Nothing to run — add provisioned files or setup commands in .worktreemanager.json",
@@ -766,19 +756,11 @@ pub async fn worktree_dirty_report(wt_key: String) -> git::DirtyReport {
 #[tauri::command]
 pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
     // never remove a main checkout; find owning repo + branch
-    let (repo_path, repo_id, branch, is_main) = {
-        let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let mut found = None;
-        for r in tree.iter() {
-            for w in r.worktrees.iter() {
-                if w.wt_key == wt_key {
-                    found = Some((r.path.clone(), r.repo_id.clone(), w.branch.clone(), w.is_main));
-                }
-            }
-        }
-        found.ok_or_else(|| CanopyError::not_found("unknown worktree"))?
-    };
+    let ctx = app
+        .state::<AppState>()
+        .wt_context(&wt_key)
+        .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
+    let (repo_path, repo_id, branch, is_main) = (ctx.repo_path, ctx.repo_id, ctx.branch, ctx.is_main);
     if is_main {
         return Err(CanopyError::invalid_input("Refusing to remove the main checkout"));
     }
@@ -830,11 +812,9 @@ fn is_running(app: &AppHandle, key: &str) -> bool {
 
 /// repo path + repo_id for a worktree key.
 fn repo_for_wt(app: &AppHandle, wt_key: &str) -> Result<(String, String), CanopyError> {
-    let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
-    tree.iter()
-        .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-        .map(|r| (r.path.clone(), r.repo_id.clone()))
+    app.state::<AppState>()
+        .wt_context(wt_key)
+        .map(|c| (c.repo_path, c.repo_id))
         .ok_or_else(|| CanopyError::not_found("unknown worktree"))
 }
 
@@ -921,18 +901,13 @@ pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Res
     if !(1024..=65535).contains(&port) {
         return Err(CanopyError::invalid_input("Port must be between 1024 and 65535"));
     }
-    // locate the worktree + repo for this service, and check for conflicts
-    let (wt_key, repo_id, repo_path) = {
+    // check cross-worktree conflicts: another service already on this port
+    {
         let state = app.state::<AppState>();
         let tree = state.tree.read().unwrap();
-        let mut found = None;
         for r in tree.iter() {
             for w in r.worktrees.iter() {
                 for s in w.services.iter() {
-                    if s.svc_key == svc_key {
-                        found = Some((w.wt_key.clone(), r.repo_id.clone(), r.path.clone()));
-                    }
-                    // conflict: another service already uses this effective port
                     if s.svc_key != svc_key && s.port == Some(port) {
                         return Err(CanopyError::conflict(format!(
                             "Port {port} is already used by {} ({})",
@@ -942,8 +917,11 @@ pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Res
                 }
             }
         }
-        found.ok_or_else(|| CanopyError::not_found("unknown service"))?
-    };
+    }
+    let (wt_key, repo_id, repo_path) = app
+        .state::<AppState>()
+        .service_context(&svc_key)
+        .ok_or_else(|| CanopyError::not_found("unknown service"))?;
 
     // record the override + persist
     {
@@ -975,12 +953,8 @@ pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Res
 }
 
 fn repo_path(app: &AppHandle, repo_id: &str) -> Result<String, CanopyError> {
-    let state = app.state::<AppState>();
-    let s = state.settings.read().unwrap();
-    s.repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .map(|r| r.path.clone())
+    app.state::<AppState>()
+        .repo_path_by_id(repo_id)
         .ok_or_else(|| CanopyError::not_found("unknown repo"))
 }
 

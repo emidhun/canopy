@@ -486,13 +486,7 @@ pub async fn stop_all(app: &AppHandle) {
 
 /// Worktree-level: collect svc keys of one worktree.
 pub fn worktree_svc_keys(app: &AppHandle, wt_key: &str) -> Vec<String> {
-    let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
-    tree.iter()
-        .flat_map(|r| r.worktrees.iter())
-        .filter(|w| w.wt_key == wt_key)
-        .flat_map(|w| w.services.iter().map(|s| s.svc_key.clone()))
-        .collect()
+    app.state::<AppState>().wt_service_keys(wt_key)
 }
 
 /// Reset DB: runs the repo's resetDb command in the worktree root; output goes
