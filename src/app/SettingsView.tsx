@@ -1137,6 +1137,21 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     e.target.value = "";
   };
   const triggerImport = () => { if (!hasBackend()) { showToast("Import needs the desktop app"); return; } fileRef.current?.click(); };
+  // read the repo's OWN .worktreemanager.json by its known path — a file picker
+  // can't reach it on macOS (dotfiles are hidden), but the backend reads it
+  // directly, so this imports the hidden config without a picker
+  const reloadFromRepo = async () => {
+    if (!repo) return;
+    if (!hasBackend()) { showToast("Reading the config file needs the desktop app"); return; }
+    try {
+      const c = await ipc.getRepoConfig(repo.id);
+      setCards(toCards(c.provision)); markDirty("files");
+      setSetup(c.setup); markDirty("setup");
+      setExtrasByRepo((m) => ({ ...m, [repo.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
+      setPage("files");
+      showToast(`Loaded ${repo.name}'s .worktreemanager.json — review, then Save`);
+    } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
+  };
 
   const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey };
   const body = () => {
@@ -1251,11 +1266,12 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
               <div style={{ position: "relative" }} ref={moreRef}>
                 <button className={"ib" + (moreMenu ? " on" : "")} title="More — the repo's .worktreemanager.json" onClick={() => setMoreMenu((m) => !m)} aria-haspopup="menu" aria-expanded={moreMenu} disabled={!repo}><More size={15} /></button>
                 {moreMenu && repo && (
-                  <div className="varmenu" style={{ top: 30, width: 226 }}>
+                  <div className="varmenu" style={{ top: 30, width: 244 }}>
                     <div className="vh">.worktreemanager.json</div>
                     <button className="vitem" onClick={() => { copyJson(); setMoreMenu(false); }}><Copy size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Copy JSON</span></button>
                     <button className="vitem" onClick={() => { exportJson(); setMoreMenu(false); }}><Download size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Export config…</span></button>
-                    <button className="vitem" onClick={() => { triggerImport(); setMoreMenu(false); }}><Pull size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Import config…</span></button>
+                    <button className="vitem" onClick={() => { reloadFromRepo(); setMoreMenu(false); }} title="Reads the repo's own .worktreemanager.json by path (it's hidden, so a file picker can't see it)"><Refresh size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Load from repo file</span></button>
+                    <button className="vitem" onClick={() => { triggerImport(); setMoreMenu(false); }}><Pull size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Import from file…</span></button>
                   </div>
                 )}
               </div>
