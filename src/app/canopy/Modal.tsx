@@ -34,12 +34,20 @@ export default function Modal({
   foot?: ReactNode;
 }) {
   const card = useRef<HTMLDivElement>(null);
+  // latest props read inside once-subscribed listeners, so the effects below
+  // never need `busy`/`onClose` in their deps (callers pass a fresh inline
+  // `onClose` every render — keying the effect on it re-ran the initial-focus
+  // step on every re-render and yanked focus back to the first field/button)
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  // keyboard: focus trap + Escape — subscribed once for the dialog's lifetime
   useEffect(() => {
     // aria-modal="true" promises focus cannot leave the dialog. Without a trap
     // Tab walks straight into the app behind the scrim, so the promise was
     // false for assistive tech and keyboard users alike.
-    const opener = document.activeElement as HTMLElement | null;
     const FOCUSABLE =
       'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
     const trap = (e: KeyboardEvent) => {
@@ -57,28 +65,35 @@ export default function Modal({
         first.focus();
       }
     };
-    document.addEventListener("keydown", trap, true);
-
     const k = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) {
+      if (e.key === "Escape" && !busyRef.current) {
         // capture phase + stopPropagation: the app-level Escape handler would
         // otherwise also close the palette or attention queue behind us
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
+    document.addEventListener("keydown", trap, true);
     document.addEventListener("keydown", k, true);
+    return () => {
+      document.removeEventListener("keydown", trap, true);
+      document.removeEventListener("keydown", k, true);
+    };
+  }, []);
+
+  // initial focus + restore — runs ONCE per open, never on a re-render, so
+  // typing in a field can't be interrupted by a re-focus of the first control
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
     const first = card.current?.querySelector<HTMLElement>("input,textarea,select,button.cx-btn--primary");
     const t = setTimeout(() => first?.focus(), 40);
     return () => {
-      document.removeEventListener("keydown", k, true);
-      document.removeEventListener("keydown", trap, true);
       clearTimeout(t);
       // hand focus back to whatever opened us, so the keyboard doesn't reset
       // to the top of the document
       opener?.focus?.();
     };
-  }, [busy, onClose]);
+  }, []);
 
   return (
     <div
