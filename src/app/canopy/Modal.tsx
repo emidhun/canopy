@@ -8,6 +8,9 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from "react";
 import { Cube, X } from "../../icons";
 
+const FOCUSABLE =
+  'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+
 export default function Modal({
   icon: Icon = Cube,
   danger,
@@ -48,8 +51,6 @@ export default function Modal({
     // aria-modal="true" promises focus cannot leave the dialog. Without a trap
     // Tab walks straight into the app behind the scrim, so the promise was
     // false for assistive tech and keyboard users alike.
-    const FOCUSABLE =
-      'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
     const trap = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !card.current) return;
       const items = [...card.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
@@ -57,10 +58,14 @@ export default function Modal({
       const first = items[0];
       const last = items[items.length - 1];
       const active = document.activeElement;
-      if (e.shiftKey && (active === first || !card.current.contains(active))) {
+      const outside = !card.current.contains(active);
+      // both directions recover from focus that has escaped the card (e.g. a
+      // focused child was removed and focus fell to <body>), so Tab can't walk
+      // into the app behind the scrim
+      if (e.shiftKey && (active === first || outside)) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && active === last) {
+      } else if (!e.shiftKey && (active === last || outside)) {
         e.preventDefault();
         first.focus();
       }
@@ -94,6 +99,19 @@ export default function Modal({
       opener?.focus?.();
     };
   }, []);
+
+  // Recovery after re-renders: some modals swap their content in place (e.g.
+  // DatabaseModal's snapshot prompt) rather than remounting. If that removes
+  // the focused element, focus falls to <body> and Tab could escape behind the
+  // scrim. Pull it back into the card — but ONLY when focus has actually
+  // orphaned, never while the user is typing in a still-present field, so this
+  // can't reintroduce the focus-stealing this component was fixed to avoid.
+  useEffect(() => {
+    const active = document.activeElement;
+    if (card.current && (active === document.body || active === document.documentElement || active === null)) {
+      card.current.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    }
+  });
 
   return (
     <div
