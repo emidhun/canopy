@@ -6,6 +6,17 @@ use crate::state::{refresh_all_git_meta, refresh_git_meta, refresh_tree, AppStat
 use crate::terminal::{self, TermTable};
 use tauri::{AppHandle, Manager, State};
 
+/// Uniform containment: commands that act on a `wt_key` only accept keys the
+/// tree actually knows. Without this, a compromised webview could point
+/// git/db/terminal operations at arbitrary filesystem paths.
+fn ensure_known_worktree(app: &AppHandle, wt_key: &str) -> Result<(), CanopyError> {
+    if app.state::<AppState>().wt_context(wt_key).is_some() {
+        Ok(())
+    } else {
+        Err(CanopyError::not_found("unknown worktree"))
+    }
+}
+
 #[tauri::command]
 pub async fn get_tree(app: AppHandle) -> Result<Vec<RepoNode>, CanopyError> {
     let cached = {
@@ -225,6 +236,7 @@ pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyEr
 
 #[tauri::command]
 pub async fn git_pull(app: AppHandle, wt_key: String) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     let summary = git::pull(&wt_key).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(summary)
@@ -233,12 +245,14 @@ pub async fn git_pull(app: AppHandle, wt_key: String) -> Result<String, CanopyEr
 // ── submodules ──
 
 #[tauri::command]
-pub async fn submodule_status(wt_key: String) -> Result<Vec<git::SubmoduleStatus>, CanopyError> {
+pub async fn submodule_status(app: AppHandle, wt_key: String) -> Result<Vec<git::SubmoduleStatus>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     Ok(git::submodule_status(&wt_key).await)
 }
 
 #[tauri::command]
 pub async fn pull_submodule(app: AppHandle, wt_key: String, path: String) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     let summary = git::pull_submodule(&wt_key, &path).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(summary)
@@ -246,18 +260,21 @@ pub async fn pull_submodule(app: AppHandle, wt_key: String, path: String) -> Res
 
 #[tauri::command]
 pub async fn switch_submodule_branch(app: AppHandle, wt_key: String, path: String, branch: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     git::switch_submodule_branch(&wt_key, &path, &branch).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_submodule_branches(wt_key: String, path: String) -> Result<git::Branches, CanopyError> {
+pub async fn list_submodule_branches(app: AppHandle, wt_key: String, path: String) -> Result<git::Branches, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     git::list_submodule_branches(&wt_key, &path).await.map_err(CanopyError::git)
 }
 
 #[tauri::command]
-pub async fn fetch_submodules(wt_key: String) -> Result<usize, CanopyError> {
+pub async fn fetch_submodules(app: AppHandle, wt_key: String) -> Result<usize, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     Ok(git::fetch_submodules(&wt_key).await)
 }
 
@@ -270,6 +287,7 @@ pub async fn switch_worktree_branch(
     create: bool,
     base: Option<String>,
 ) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     git::switch_branch(&wt_key, &branch, create, base.as_deref()).await.map_err(CanopyError::git)?;
     let _ = refresh_tree(&app).await;
     refresh_git_meta(&app, &wt_key).await;
@@ -304,6 +322,7 @@ pub async fn terminal_open(
     rows: u16,
     command: Option<String>,
 ) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &cwd)?;
     terminal::open(&app, &table, &id, &cwd, cols, rows, command).map_err(CanopyError::terminal)
 }
 
@@ -331,7 +350,8 @@ pub async fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: Str
 /// Ensure a worktree's `.canopy/` exists with a self-ignoring `.gitignore`, then
 /// write `context.md`. Never truncates an existing `.gitignore`.
 #[tauri::command]
-pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), CanopyError> {
+pub fn write_worktree_context(app: AppHandle, wt_path: String, contents: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_path)?;
     let dir = std::path::Path::new(&wt_path).join(".canopy");
     std::fs::create_dir_all(&dir).map_err(|e| CanopyError::setup(format!("mkdir {}: {e}", dir.display())))?;
     let ignore = dir.join(".gitignore");
@@ -796,7 +816,8 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
 }
 
 #[tauri::command]
-pub async fn worktree_dirty_report(wt_key: String) -> Result<git::DirtyReport, CanopyError> {
+pub async fn worktree_dirty_report(app: AppHandle, wt_key: String) -> Result<git::DirtyReport, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     git::dirty_report(&wt_key).await.map_err(CanopyError::git)
 }
 
@@ -871,13 +892,15 @@ fn repo_for_wt(app: &AppHandle, wt_key: &str) -> Result<(String, String), Canopy
 }
 
 #[tauri::command]
-pub async fn list_databases(wt_key: String) -> Result<Vec<String>, CanopyError> {
+pub async fn list_databases(app: AppHandle, wt_key: String) -> Result<Vec<String>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     crate::db::list_databases(&wt_key).await.map_err(CanopyError::db)
 }
 
 #[tauri::command]
-pub fn current_database(wt_key: String) -> Option<String> {
-    crate::db::current_db(&wt_key)
+pub fn current_database(app: AppHandle, wt_key: String) -> Result<Option<String>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    Ok(crate::db::current_db(&wt_key))
 }
 
 #[tauri::command]
@@ -886,6 +909,7 @@ pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> 
     if name.is_empty() {
         return Err(CanopyError::invalid_input("Snapshot name is required"));
     }
+    ensure_known_worktree(&app, &wt_key)?;
     let _lease = crate::state::try_lease(&app, &wt_key, "snapshot")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
@@ -898,6 +922,7 @@ pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> 
 
 #[tauri::command]
 pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     let _lease = crate::state::try_lease(&app, &wt_key, "export")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
@@ -910,6 +935,7 @@ pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) 
 
 #[tauri::command]
 pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     let _lease = crate::state::try_lease(&app, &wt_key, "restore")?;
     // quiesce: a live connection pool holds locks against --clean drops and
     // can observe (or block) a half-restored schema. Stop the worktree's
