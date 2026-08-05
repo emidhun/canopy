@@ -12,7 +12,7 @@
 // "coming soon" banner with disabled controls rather than fake ones. Shortcuts
 // is a static reference of the real keybindings.
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
@@ -236,6 +236,9 @@ type PageProps = {
   setup: string[];
   setSetup: (s: string[]) => void;
   onRemoveRepo: () => void;
+  onExportJson: () => void;
+  onImportJson: () => void;
+  onCopyJson: () => void;
   selKey: string | null;
 };
 
@@ -600,7 +603,7 @@ function SetupPage({ setup, setSetup, markDirty, flash }: PageProps) {
 }
 
 /* ══════════════════════════ real: Repository ═══════════════════════════ */
-function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo }: PageProps) {
+function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onExportJson, onImportJson }: PageProps) {
   const [confirm, setConfirm] = useState(false);
   if (!repo) return null;
   return (
@@ -629,8 +632,9 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo }: Pa
       <div className="sec">
         <div className="slab">Configuration file</div>
         <div className="row">
-          <button className="btn" title="Export .worktreemanager.json (coming soon)" onClick={() => flash("Exporting the config file isn't wired yet")}><Download size={11} />Export config</button>
-          <button className="btn" title="Import a config file (coming soon)" onClick={() => flash("Importing a config file isn't wired yet")}><Pull size={11} />Import config</button>
+          <button className="btn" title="Export .worktreemanager.json" onClick={onExportJson}><Download size={11} />Export config</button>
+          <button className="btn" title="Import a .worktreemanager.json" onClick={onImportJson}><Pull size={11} />Import config</button>
+          <span className="hint" style={{ marginTop: 0 }}>Import replaces this repo's provisioned files and setup — review, then Save.</span>
         </div>
       </div>
       <Adv label="Danger zone">
@@ -937,6 +941,9 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const [extrasByRepo, setExtrasByRepo] = useState<Record<string, { teardown: string[]; migrate: string[] }>>({});
   const dirtyRepos = useRef<Set<string>>(new Set());
   const repoMenuRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [moreMenu, setMoreMenu] = useState(false);
 
   const flash = (m: string) => showToast(m);
   const markDirty = (id: PageId) => {
@@ -988,6 +995,13 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     document.addEventListener("mousedown", d);
     return () => document.removeEventListener("mousedown", d);
   }, [repoMenu]);
+
+  useEffect(() => {
+    if (!moreMenu) return;
+    const d = (e: MouseEvent) => { if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreMenu(false); };
+    document.addEventListener("mousedown", d);
+    return () => document.removeEventListener("mousedown", d);
+  }, [moreMenu]);
 
   if (!settings) return <div className="cxset-root" />;
 
@@ -1077,7 +1091,54 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     showToast(`Jumped to ${r.label}`);
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, selKey };
+  /* ── .worktreemanager.json import / export (mirrors the previous repo
+        config editor: native save + backend write out, FileReader in) ── */
+  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+  const copyJson = () => {
+    if (!repo) return;
+    navigator.clipboard?.writeText(configJson()).then(() => showToast("Copied .worktreemanager.json"), () => showToast("Copy failed"));
+  };
+  const exportJson = async () => {
+    if (!repo) return;
+    if (!hasBackend()) { showToast("Export needs the desktop app"); return; }
+    try {
+      const path = await saveDialog({ title: "Export repo config", defaultPath: `${repo.path || ""}/.worktreemanager.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path) return;
+      await ipc.saveTextFile(path, configJson() + "\n");
+      showToast(`Exported ${path}`);
+    } catch (e) { showToast(`Export failed: ${e}`); }
+  };
+  const importJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f || !repo) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const parsed = JSON.parse(String(r.result));
+        const list: ProvisionEntry[] = Array.isArray(parsed.provision)
+          ? parsed.provision.map((o: Record<string, unknown>) => ({
+              path: String(o.path || ""),
+              format: (["dotenv", "json", "yaml", "text"].includes(o.format as string) ? o.format : "dotenv") as ProvisionFormat,
+              from: String(o.from || ""),
+              interpolate: !!o.interpolate,
+              keys: o.keys && typeof o.keys === "object" ? Object.entries(o.keys as object).map(([k, v]) => [k, String(v)] as [string, string]) : [],
+            }))
+          : [];
+        setCards(toCards(list));
+        markDirty("files");
+        if (Array.isArray(parsed.setup)) { setSetup(parsed.setup.filter((x: unknown) => typeof x === "string")); markDirty("setup"); }
+        setPage("files");
+        showToast(list.length ? `Imported ${list.length} file${list.length > 1 ? "s" : ""} — review, then Save` : "No provision entries found");
+      } catch {
+        showToast(`Couldn't parse ${f.name} — invalid JSON`);
+      }
+    };
+    r.readAsText(f);
+    e.target.value = "";
+  };
+  const triggerImport = () => { if (!hasBackend()) { showToast("Import needs the desktop app"); return; } fileRef.current?.click(); };
+
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey };
   const body = () => {
     if (isRepoPage && !repo) {
       return (
@@ -1187,7 +1248,17 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
               {isRepoPage && repo && (
                 <button className={"btn sm" + (preview ? " pri" : "")} onClick={() => setPreview((v) => !v)}><Braces size={11} />{preview ? "Hide" : "Preview"} JSON<span className="k">⌘P</span></button>
               )}
-              <button className="ib" title="More — import, export, reveal config (coming soon)" onClick={() => flash("Import · Export · Reveal config — coming soon")}><More size={15} /></button>
+              <div style={{ position: "relative" }} ref={moreRef}>
+                <button className={"ib" + (moreMenu ? " on" : "")} title="More — the repo's .worktreemanager.json" onClick={() => setMoreMenu((m) => !m)} aria-haspopup="menu" aria-expanded={moreMenu} disabled={!repo}><More size={15} /></button>
+                {moreMenu && repo && (
+                  <div className="varmenu" style={{ top: 30, width: 226 }}>
+                    <div className="vh">.worktreemanager.json</div>
+                    <button className="vitem" onClick={() => { copyJson(); setMoreMenu(false); }}><Copy size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Copy JSON</span></button>
+                    <button className="vitem" onClick={() => { exportJson(); setMoreMenu(false); }}><Download size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Export config…</span></button>
+                    <button className="vitem" onClick={() => { triggerImport(); setMoreMenu(false); }}><Pull size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Import config…</span></button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
           <div className="pbody">
@@ -1217,6 +1288,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
+      <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={importJson} />
       {search && <SearchOverlay onClose={() => setSearch(false)} onGo={goTo} />}
     </div>
   );
