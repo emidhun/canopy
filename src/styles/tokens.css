@@ -187,6 +187,11 @@
   --h-ib-tab: 21px; /* icon button inside a pane tab strip */
   --h-ib-tool: 22px; /* icon button inside a toolbar */
   --h-ib: 26px; /* the standard icon button, and segmented-control segments */
+  --h-divider: 16px; /* the topbar's vertical hairline */
+  --sz-attn-ic: 20px; /* the attention row's icon tile */
+  --sz-svc-act: 16px; /* the start/stop affordance inside a service chip */
+  --h-divider-sm: 15px; /* the worktree bar's shorter hairline */
+  --w-branch-min: 44px; /* the branch headline never ellipses below this */
 
   /* status dots — 6px reads only because of the halo; 5px is the inline
      variant used inside rows and tables where a halo would crowd. */
@@ -200,6 +205,7 @@
   --w-rail-collapsed: 52px;
 
   /* floating-surface widths */
+  --w-command: 360px; /* the ⌘K field's track in the topbar grid */
   --w-palette: 592px;
   --w-pullpop: 346px;
   --w-attnpop: 306px;

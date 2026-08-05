@@ -38,6 +38,7 @@ export default function StatusBar({
   const sessions = useStore((s) => (wt ? (s.sessions[wt.wtKey] ?? EMPTY) : EMPTY));
   const gitPull = useStore((s) => s.gitPull);
   const [pullOpen, setPullOpen] = useState(false);
+  const caretRef = useRef<HTMLButtonElement>(null);
 
   if (view === "overview" || !wt) {
     return (
@@ -98,6 +99,7 @@ export default function StatusBar({
             Pull
           </button>
           <button
+            ref={caretRef}
             className={"cxs-sb cxs-pullcaret" + (pullOpen ? " is-on" : "")}
             title="Pull individual submodules"
             aria-haspopup="menu"
@@ -107,7 +109,7 @@ export default function StatusBar({
             <Chevron size={9} />
           </button>
         </span>
-        {pullOpen && <PullPop wt={wt} onClose={() => setPullOpen(false)} />}
+        {pullOpen && <PullPop wt={wt} anchor={caretRef} onClose={() => setPullOpen(false)} />}
       </span>
 
       {agents.length > 0 && (
@@ -132,7 +134,7 @@ export default function StatusBar({
 
 /* ── the welded pull popover ──────────────────────────────────────── */
 
-function PullPop({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
+function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => void; anchor?: React.RefObject<HTMLElement | null> }) {
   const showToast = useStore((s) => s.showToast);
   const [subs, setSubs] = useState<SubmoduleStatus[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -160,7 +162,11 @@ function PullPop({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
 
   useEffect(() => {
     const d = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      // the caret is outside this ref; without this the listener closes the
+      // popover and the caret's click reopens it, so it can never dismiss
+      if (anchor?.current?.contains(t)) return;
+      if (ref.current && !ref.current.contains(t)) onClose();
     };
     const k = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();

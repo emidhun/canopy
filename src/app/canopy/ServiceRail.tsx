@@ -59,6 +59,10 @@ export default function ServiceRail({
             tabIndex={0}
             title={`${s.name} — ${s.status}`}
             onKeyDown={(e) => {
+              // only when the CHIP itself has focus — this also receives keys
+              // bubbling from the nested start/stop button, and preventDefault
+              // there would suppress that button's own activation
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onOpenService(s);

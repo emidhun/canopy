@@ -4,7 +4,7 @@
    the one runner that turns a NextAction into work. Everything that offers
    "the next thing" routes through `runNext`, so the worktree bar's button,
    ⌘K's Suggested row, ⏎, and the overview's row action stay in lockstep. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { hasBackend, ipc } from "../ipc";
 import { initSync, useStore } from "../store";
 import type { RepoNode, WorktreeNode } from "../types";
@@ -63,6 +63,7 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
   const [, setTick] = useState(0);
+  const attnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => initSync(), []);
   // uptime / relative-time re-render
@@ -241,6 +242,7 @@ export default function App() {
         onOverview={() => setView("overview")}
         onRefresh={refresh}
         onSettings={() => setShowSettings(true)}
+        attnRef={attnRef}
       />
 
       <div className="cxs-body">
@@ -320,6 +322,7 @@ export default function App() {
 
       {attnOpen && (
         <AttentionPop
+          anchor={attnRef}
           items={attn}
           onClose={() => setAttnOpen(false)}
           onPick={(a) => {
@@ -338,6 +341,7 @@ export default function App() {
           onSelect={(k) => goto(k)}
           onOverview={() => setView("overview")}
           onAction={(a) => runNext(a)}
+          onRunFor={(k) => runNext(null, k)}
           onLayout={(l) => {
             setLayout(l);
             setView("wt");

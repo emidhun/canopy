@@ -249,28 +249,34 @@ function Pane({
                   <span
                     key={s.id}
                     className={"cxs-sc" + (active?.id === s.id ? " is-on" : "")}
-                    onClick={() => setActiveTerm(wt.wtKey, s.id)}
-                    role="button"
-                    tabIndex={0}
+                    onClick={(e) => {
+                      // the close button lives inside; don't re-select on its click
+                      if ((e.target as HTMLElement).closest(".x")) return;
+                      setActiveTerm(wt.wtKey, s.id);
+                    }}
                     onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return;
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         setActiveTerm(wt.wtKey, s.id);
                       }
                     }}
+                    role="button"
+                    tabIndex={0}
                   >
                     <span className={"d " + (st === "waiting" ? "wait" : st === "busy" ? "run" : "")} />
                     {s.title}
-                    <span
+                    <button
                       className="x"
-                      title="Close session"
+                      aria-label={`Close ${s.title}`}
+                      title={`Close ${s.title}`}
                       onClick={(e) => {
                         e.stopPropagation();
                         closeSession(s.id);
                       }}
                     >
                       <X size={9} />
-                    </span>
+                    </button>
                   </span>
                 );
               })}
