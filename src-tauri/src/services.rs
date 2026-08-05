@@ -51,7 +51,6 @@ pub struct ProcEntry {
 pub struct ProcTable {
     pub procs: Mutex<HashMap<String, ProcEntry>>,
     pub logs: Mutex<HashMap<String, VecDeque<LogLine>>>,
-    pub resetting: Mutex<HashMap<String, bool>>,
     generation: Mutex<u64>,
 }
 
@@ -540,14 +539,8 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
         found.ok_or("unknown worktree")?
     };
 
-    {
-        let table = app.state::<ProcTable>();
-        let mut resetting = table.resetting.lock();
-        if resetting.get(wt_key).copied().unwrap_or(false) {
-            return Err("Reset already in progress".into());
-        }
-        resetting.insert(wt_key.to_string(), true);
-    }
+    // concurrency guard: the command layer holds the per-worktree OpLease
+    // (state::try_lease) for the whole reset — no separate flag needed.
 
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
@@ -570,11 +563,6 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
         .current_dir(wt_key)
         .output()
         .await;
-
-    {
-        let table = app.state::<ProcTable>();
-        table.resetting.lock().remove(wt_key);
-    }
 
     match out {
         Ok(o) if o.status.success() => {

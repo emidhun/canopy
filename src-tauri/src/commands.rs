@@ -380,6 +380,7 @@ pub async fn worktree_stop_all(app: AppHandle, wt_key: String) -> Result<(), Can
 
 #[tauri::command]
 pub async fn reset_db(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+    let _lease = crate::state::try_lease(&app, &wt_key, "reset db")?;
     services::reset_db(&app, &wt_key).await.map_err(CanopyError::db)
 }
 
@@ -387,6 +388,7 @@ pub async fn reset_db(app: AppHandle, wt_key: String) -> Result<(), CanopyError>
 #[tauri::command]
 pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let (repo_path, repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "migrate")?;
     // prefer the Settings "Migrate cmd"; fall back to .worktreemanager.json `migrate`
     let settings_cmd = {
         let state = app.state::<AppState>();
@@ -428,6 +430,7 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
         return Err(CanopyError::invalid_input("Empty command"));
     }
     let (repo_path, repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "command")?;
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
     let app2 = app.clone();
     let wt2 = wt_key.clone();
@@ -664,6 +667,8 @@ pub async fn create_worktree(
         return Err(CanopyError::conflict(format!("Path already exists: {wt_path}")));
     }
 
+    let _lease = crate::state::try_lease(&app, &wt_path, "create")?;
+
     emit_op(&app, &wt_path, "create", "progress", format!("creating worktree for {branch}…"));
 
     // Refresh remote-tracking refs (and submodule objects) BEFORE `git worktree
@@ -732,6 +737,7 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
             "Nothing to run — add provisioned files or setup commands in .worktreemanager.json",
         ));
     }
+    let _lease = crate::state::try_lease(&app, &wt_key, "setup")?;
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, is_main);
     let app3 = app.clone();
     let wt3 = wt_key.clone();
@@ -768,6 +774,7 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
     if is_main {
         return Err(CanopyError::invalid_input("Refusing to remove the main checkout"));
     }
+    let _lease = crate::state::try_lease(&app, &wt_key, "remove")?;
 
     // stop its services first
     for key in services::worktree_svc_keys(&app, &wt_key) {
@@ -838,6 +845,7 @@ pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> 
     if name.is_empty() {
         return Err(CanopyError::invalid_input("Snapshot name is required"));
     }
+    let _lease = crate::state::try_lease(&app, &wt_key, "snapshot")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
     crate::db::clone_database(&wt_key, &name, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line))
@@ -849,6 +857,7 @@ pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> 
 
 #[tauri::command]
 pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    let _lease = crate::state::try_lease(&app, &wt_key, "export")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
     crate::db::export_database(&wt_key, &file_path, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line))
@@ -860,6 +869,7 @@ pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) 
 
 #[tauri::command]
 pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    let _lease = crate::state::try_lease(&app, &wt_key, "restore")?;
     // quiesce: a live connection pool holds locks against --clean drops and
     // can observe (or block) a half-restored schema. Stop the worktree's
     // running services, restore, then bring the same ones back.
@@ -901,6 +911,7 @@ pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String)
 #[tauri::command]
 pub async fn switch_database(app: AppHandle, wt_key: String, db_name: String) -> Result<(), CanopyError> {
     let (repo_path, _repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "switch database")?;
     // repoint PG_DB in the worktree's root .env AND in any provisioned dotenv
     // file (e.g. server/.env) that declares it
     let pairs = [("PG_DB".to_string(), db_name.clone())];

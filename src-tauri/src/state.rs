@@ -2,7 +2,7 @@ use crate::git::{self, GitMeta};
 use crate::settings::{RepoCfg, RuntimeState, Settings};
 use serde::Serialize;
 use std::collections::HashMap;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -71,6 +71,40 @@ pub struct AppState {
     pub tree: RwLock<Vec<RepoNode>>,
     /// svcKey -> current status (process table lands here in Phase 4)
     pub statuses: RwLock<HashMap<String, SvcStatus>>,
+    /// wt_key -> label of the mutating operation currently holding the lease
+    /// (see `try_lease`)
+    pub ops: Mutex<HashMap<String, &'static str>>,
+}
+
+/// RAII lease for a mutating per-worktree operation. Exactly one of
+/// create/setup/remove/migrate/snapshot/restore/switch may run per worktree at
+/// a time — without this, `remove_worktree` could race `run_worktree_setup`,
+/// two creates could TOCTOU the same path, and a restore could race a
+/// snapshot. Dropped (including on panic/early return) it frees the slot.
+pub struct OpLease {
+    app: AppHandle,
+    key: String,
+}
+
+impl Drop for OpLease {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        state.ops.lock().remove(&self.key);
+    }
+}
+
+/// Take the operation lease for `wt_key`, or fail with a conflict naming the
+/// operation already running.
+pub fn try_lease(app: &AppHandle, wt_key: &str, op: &'static str) -> Result<OpLease, crate::error::CanopyError> {
+    let state = app.state::<AppState>();
+    let mut ops = state.ops.lock();
+    if let Some(existing) = ops.get(wt_key) {
+        return Err(crate::error::CanopyError::conflict(format!(
+            "'{existing}' is already running on this worktree — wait for it to finish"
+        )));
+    }
+    ops.insert(wt_key.to_string(), op);
+    Ok(OpLease { app: app.clone(), key: wt_key.to_string() })
 }
 
 /// A worktree resolved to its owning repo — the answer every command needs
@@ -90,6 +124,7 @@ impl AppState {
             runtime: RwLock::new(runtime),
             tree: RwLock::new(Vec::new()),
             statuses: RwLock::new(HashMap::new()),
+            ops: Mutex::new(HashMap::new()),
         }
     }
 
