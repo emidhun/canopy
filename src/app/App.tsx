@@ -98,6 +98,14 @@ export default function App() {
 
   const launch = useLaneLaunch(sel?.repo ?? EMPTY_REPO, sel?.wt ?? EMPTY_WT);
 
+  /** Resolve a launch target by key. `select()` does not update this render's
+      closure, so anything launching for a worktree other than the currently
+      selected one has to say which one explicitly. */
+  const targetFor = (wtKey: string) => {
+    for (const r of tree) for (const w of r.worktrees) if (w.wtKey === wtKey) return { repo: r, wt: w };
+    return undefined;
+  };
+
   /* ── the one action ───────────────────────────────────────────────
      Every surface that offers "the next thing" calls this. */
   const runNext = (action?: NextAction | null, forKey?: string) => {
@@ -145,7 +153,7 @@ export default function App() {
         select(key);
         setView("wt");
         setLayout("agent");
-        launch.startAgent();
+        launch.startAgent(targetFor(key));
         break;
     }
   };
@@ -155,22 +163,17 @@ export default function App() {
     setView("wt");
     if (want === "terminal") {
       setLayout("shell");
-      launch.startShell();
+      launch.startShell(targetFor(wtKey));
     }
   };
 
   const openTerminalFor = (wtKey: string) => {
-    if (wtKey === sel?.wt.wtKey) {
-      setView("wt");
-      setLayout("shell");
-      if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell();
-      return;
-    }
-    // a different worktree: select it first — its launcher belongs to that
-    // worktree's context, so the shell opens on the next render
     select(wtKey);
     setView("wt");
     setLayout("shell");
+    // open one only if that worktree has none — naming the target means this
+    // works for any worktree, not just the one already selected
+    if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell(targetFor(wtKey));
   };
 
   const refresh = () => {
@@ -345,7 +348,7 @@ export default function App() {
           onStartAgent={() => {
             setView("wt");
             setLayout("agent");
-            launch.startAgent();
+            launch.startAgent(sel ? { repo: sel.repo, wt: sel.wt } : undefined);
           }}
         />
       )}
@@ -367,7 +370,7 @@ export default function App() {
           onStartAgent={() => {
             setView("wt");
             setLayout("agent");
-            launch.startAgent();
+            launch.startAgent(sel ? { repo: sel.repo, wt: sel.wt } : undefined);
           }}
         />
       )}
