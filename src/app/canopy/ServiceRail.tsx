@@ -9,6 +9,7 @@ import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { isLive } from "../../types";
 import { svcDotClass } from "../nextAction";
+import CommandButtons from "./CommandButtons";
 
 export default function ServiceRail({
   wt,
@@ -25,13 +26,7 @@ export default function ServiceRail({
   const restartService = useStore((s) => s.restartService);
   const openPort = useStore((s) => s.openPort);
 
-  if (wt.services.length === 0 && !wt.dbName) {
-    return (
-      <div className="cxs-rail">
-        <span className="cxs-railempty">No services configured for this worktree.</span>
-      </div>
-    );
-  }
+  const empty = wt.services.length === 0 && !wt.dbName;
 
   const action = (s: ServiceNode) => {
     if (s.status === "error") return { title: `Restart ${s.name}`, icon: <Restart size={11} />, run: () => restartService(s.svcKey) };
@@ -42,7 +37,9 @@ export default function ServiceRail({
 
   return (
     <div className="cxs-rail">
-      {wt.services.map((s) => {
+      <div className="cxs-railscroll">
+        {empty && <span className="cxs-railempty">No services configured for this worktree.</span>}
+        {wt.services.map((s) => {
         const st = stats[s.svcKey];
         const live = s.status === "running";
         const act = action(s);
@@ -112,12 +109,17 @@ export default function ServiceRail({
         );
       })}
 
-      {wt.dbName && (
-        <div className="cxs-svc cxs-svc--off cxs-svc--db" onClick={onDatabase} role="button" tabIndex={0} title="Database tools">
-          <Database size={11} />
-          <span className="nm">{wt.dbName}</span>
-        </div>
-      )}
+        {wt.dbName && (
+          <div className="cxs-svc cxs-svc--off cxs-svc--db" onClick={onDatabase} role="button" tabIndex={0} title="Database tools">
+            <Database size={11} />
+            <span className="nm">{wt.dbName}</span>
+          </div>
+        )}
+      </div>
+
+      {/* custom commands sit beside the runtime they operate on; the rail is
+          overflow-visible so this menu can escape it, unlike the scroll area */}
+      <CommandButtons wt={wt} />
     </div>
   );
 }
