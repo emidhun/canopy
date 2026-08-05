@@ -7,6 +7,7 @@ use tauri::{
 // ── macOS: the popover is a non-activating NSPanel (floats over full-screen
 //    apps, hides on blur). Elsewhere it's a regular borderless top window. ──
 #[cfg(target_os = "macos")]
+#[allow(clippy::unused_unit)] // tauri_panel!'s grammar requires `-> ()`
 mod macos_panel {
     use super::*;
     use tauri_nspanel::{

@@ -34,7 +34,9 @@ serde = { version = "1", features = ["derive"] }
 # order the user wrote them instead of being alphabetized
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt-multi-thread"] }
-fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs" }
+# rev-pinned: an unpinned git dependency isn't reproducible and a force-push
+# upstream would silently change what we ship
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 sysinfo = "0.39.3"
 # non-poisoning locks: with std, one panic while holding a lock poisons it and
 # every later .unwrap() panics forever — the app survives as a zombie window.
@@ -68,4 +70,4 @@ windows = { version = "0.62", features = [
 # macOS-only: the tray popover is a non-activating NSPanel. Other platforms fall
 # back to a plain borderless window (see src/tray.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1", version = "2.1.0" }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e894383aa068ec5365a42994e3ac94ba1b6", version = "2.1.0" }

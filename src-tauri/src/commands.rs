@@ -580,6 +580,7 @@ pub fn reveal_in_finder(wt_key: String) -> Result<(), CanopyError> {
 /// Open a terminal at the worktree root. macOS uses the configured terminal app;
 /// Linux tries the user's preference then common emulators.
 #[tauri::command]
+#[allow(clippy::needless_return)] // cfg-gated per-OS tails; return keeps them uniform
 pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let term = {
         let state = app.state::<AppState>();

@@ -33,6 +33,9 @@ jobs:
       - run: npm run build
       - run: cargo check --locked
         working-directory: src-tauri
+      # warnings are errors in CI — the branch is clippy-clean; keep it that way
+      - run: cargo clippy --all-targets --features devtools --locked -- -D warnings
+        working-directory: src-tauri
       - run: cargo test --locked
         working-directory: src-tauri
 
@@ -52,6 +55,9 @@ jobs:
       - run: npm run build
       - run: cargo check --locked
         working-directory: src-tauri
+      # warnings are errors in CI — the branch is clippy-clean; keep it that way
+      - run: cargo clippy --all-targets --features devtools --locked -- -D warnings
+        working-directory: src-tauri
       - run: cargo test --locked
         working-directory: src-tauri
 
@@ -69,6 +75,9 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: cargo check --locked
+        working-directory: src-tauri
+      # warnings are errors in CI — the branch is clippy-clean; keep it that way
+      - run: cargo clippy --all-targets --features devtools --locked -- -D warnings
         working-directory: src-tauri
       - run: cargo test --locked
         working-directory: src-tauri

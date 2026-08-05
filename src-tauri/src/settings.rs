@@ -220,8 +220,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
 
-        let mut s = Settings::default();
-        s.terminal = "iTerm".into();
+        let s = Settings { terminal: "iTerm".into(), ..Default::default() };
         save_json(&path, &s).unwrap();
         let loaded: Settings = load_json(&path);
         assert_eq!(loaded.terminal, "iTerm", "round-trips");
