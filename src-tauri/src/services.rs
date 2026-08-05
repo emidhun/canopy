@@ -443,6 +443,18 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Wait up to `ticks * 150ms` for the waiter task to reap `key`.
+async fn wait_reaped(app: &AppHandle, key: &str, ticks: u32) -> bool {
+    for _ in 0..ticks {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let table = app.state::<ProcTable>();
+        if !table.procs.lock().unwrap().contains_key(key) {
+            return true;
+        }
+    }
+    false
+}
+
 pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
     let was_running = {
         let table = app.state::<ProcTable>();
@@ -452,12 +464,24 @@ pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
     if was_running {
         push_log(app, key, LogLine::now("warn", "restarting…"));
         stop_service(app, key).await?;
-        // wait for the waiter to reap (status -> stopped/error)
-        for _ in 0..40 {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            let table = app.state::<ProcTable>();
-            if !table.procs.lock().unwrap().contains_key(key) {
-                break;
+        // stop() SIGTERMs now and SIGKILLs at the 3s grace mark; give the
+        // waiter up to 6s to reap before escalating ourselves.
+        if !wait_reaped(app, key, 40).await {
+            {
+                let table = app.state::<ProcTable>();
+                let procs = table.procs.lock().unwrap();
+                if let Some(p) = procs.get(key) {
+                    crate::proc::kill_group(&p.group);
+                }
+            }
+            if !wait_reaped(app, key, 20).await {
+                // start_service would see the stale entry and return Ok(())
+                // doing nothing — the restart MUST fail loudly instead, or a
+                // port/database change reports applied while the old process
+                // keeps serving the old config.
+                let msg = "restart failed: previous process did not exit (SIGKILL sent) — try again";
+                push_log(app, key, LogLine::now("err", msg));
+                return Err(msg.into());
             }
         }
     }
