@@ -634,6 +634,15 @@ pub async fn create_worktree(
 
     emit_op(&app, &wt_path, "create", "progress", format!("creating worktree for {branch}…"));
 
+    // Refresh remote-tracking refs (and submodule objects) BEFORE `git worktree
+    // add`, so a worktree made from an origin branch — and the submodule commits
+    // it pins — reflects the remote rather than a stale local ref. Best-effort:
+    // an offline or remote-less repo still creates from whatever it has locally.
+    emit_op(&app, &wt_path, "create", "progress", "fetching origin…");
+    if let Err(e) = git::fetch_all(&repo.path).await {
+        emit_op(&app, &wt_path, "create", "progress", format!("fetch skipped — {e}"));
+    }
+
     let app2 = app.clone();
     let wt_path2 = wt_path.clone();
     let result = git::create_worktree(
