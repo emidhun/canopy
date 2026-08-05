@@ -765,6 +765,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* bound the labelled command so an unrestricted label from Settings ellipsizes
+   instead of ballooning .cxs-cmds and squeezing the service scroller to zero */
+.cxs-cmdb--run1 {
+  max-width: 160px;
+}
 .cxs-cmdpop {
   position: absolute;
   top: calc(var(--h-control-sm) + var(--sp-row));
@@ -829,11 +834,9 @@
     display: none;
   }
 }
-@container pane (max-width: 440px) {
-  .cxs-cmds .cxs-cmdb--run1 {
-    display: none;
-  }
-}
+/* the direct command button stays visible at every width — the "Commands"
+   menu only holds cmds[1..], so hiding it would make the first command (and,
+   when it's the only one, all commands) unreachable */
 /* running services read as filled tokens; idle ones recede to text */
 .cxs-svc {
   display: inline-flex;
