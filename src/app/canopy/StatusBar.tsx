@@ -4,7 +4,7 @@
    text plus one welded control: the word "Pull" pulls everything, the ▾ opens
    per-submodule control. Anchored to the control that opened it, not centred. */
 import { useEffect, useRef, useState } from "react";
-import { Bell, Chevron, Fork, Info, Pull, Single, Sparkle, Split, Spinner } from "../../icons";
+import { Bell, Chevron, Fork, Info, Pull, Search, Single, Sparkle, Split, Spinner } from "../../icons";
 import { hasBackend, ipc, type Branches } from "../../ipc";
 import { useStore, type LaneSession } from "../../store";
 import type { SubmoduleStatus, WorktreeNode } from "../../types";
@@ -290,6 +290,7 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
 
 function SubBranches({ wtKey, sub, onPick }: { wtKey: string; sub: SubmoduleStatus; onPick: (b: string) => void }) {
   const [branches, setBranches] = useState<Branches | null>(null);
+  const [q, setQ] = useState("");
   useEffect(() => {
     let alive = true;
     ipc
@@ -301,18 +302,45 @@ function SubBranches({ wtKey, sub, onPick }: { wtKey: string; sub: SubmoduleStat
     };
   }, [wtKey, sub.path]);
 
-  const names = branches ? [...new Set([...branches.local, ...branches.remote])] : [];
+  const all = branches ? [...new Set([...branches.local, ...branches.remote])] : [];
+  const t = q.trim().toLowerCase();
+  const names = t ? all.filter((b) => b.toLowerCase().includes(t)) : all;
+  // a search box earns its space once the list is long enough to scroll
+  const showSearch = all.length > 6;
   return (
     <div className="cxs-pp-brl">
-      {!branches && <div className="cxs-pp-empty">Loading branches…</div>}
-      {branches && names.length === 0 && <div className="cxs-pp-empty">No branches found.</div>}
-      {names.map((b) => (
-        <button key={b} className={"cxs-pp-bri" + (b === sub.branch ? " is-current" : "")} onClick={() => onPick(b)}>
-          <Fork size={10} />
-          <span className="n">{b}</span>
-          {b === sub.branch && <span className="cx-tag">current</span>}
-        </button>
-      ))}
+      {showSearch && (
+        <div className="cxs-pp-search">
+          <Search size={11} />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search branches…"
+            spellCheck={false}
+            autoFocus
+            // Escape clears the query first; an empty query lets it bubble to
+            // the popover's own Escape-to-close handler
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && q) {
+                e.stopPropagation();
+                setQ("");
+              }
+            }}
+          />
+        </div>
+      )}
+      <div className="cxs-pp-brscroll">
+        {!branches && <div className="cxs-pp-empty">Loading branches…</div>}
+        {branches && all.length === 0 && <div className="cxs-pp-empty">No branches found.</div>}
+        {branches && all.length > 0 && names.length === 0 && <div className="cxs-pp-empty">No branches match “{q}”.</div>}
+        {names.map((b) => (
+          <button key={b} className={"cxs-pp-bri" + (b === sub.branch ? " is-current" : "")} onClick={() => onPick(b)}>
+            <Fork size={10} />
+            <span className="n">{b}</span>
+            {b === sub.branch && <span className="cx-tag">current</span>}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
