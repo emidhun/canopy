@@ -30,6 +30,13 @@ pub fn spawn_stats_task(app: AppHandle) {
         loop {
             tokio::time::sleep(POLL).await;
 
+            // enumerating every process on the machine 30×/min is the app's
+            // steady-state CPU cost — skip it while nothing is on screen
+            // (the stats card can't be seen from the tray)
+            if !crate::any_window_visible(&app) {
+                continue;
+            }
+
             let tracked: Vec<(String, u32, u64)> = {
                 let table = app.state::<ProcTable>();
                 let procs = table.procs.lock();
