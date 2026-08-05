@@ -171,6 +171,19 @@ pub fn toggle_popover(app: &AppHandle, tray_pos: PhysicalPosition<f64>, tray_siz
     macos_panel::toggle(app, tray_pos, tray_size);
     #[cfg(not(target_os = "macos"))]
     window_popover::toggle(app, tray_pos, tray_size);
+    // if the toggle just made the popover visible, catch up on the git refresh
+    // that pauses while every window is hidden
+    let visible = app
+        .get_webview_window("popover")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = crate::state::refresh_tree(&app).await;
+            crate::state::refresh_all_git_meta(&app).await;
+        });
+    }
 }
 
 /// Center the popover window under the tray icon, hanging below the menu/task

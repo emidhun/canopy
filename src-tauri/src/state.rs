@@ -386,7 +386,10 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
     }
 }
 
-/// Refresh git meta for every worktree (sequential; git calls are cheap).
+/// Refresh git meta for every worktree. Worktrees are independent, so the
+/// per-worktree refreshes run concurrently (chunked so a many-worktree setup
+/// doesn't fork dozens of git processes at once) — the old sequential loop
+/// could take longer than the 60s refresh interval on large repos.
 pub async fn refresh_all_git_meta(app: &AppHandle) {
     let paths: Vec<String> = {
         let state = app.state::<AppState>();
@@ -395,8 +398,18 @@ pub async fn refresh_all_git_meta(app: &AppHandle) {
             .flat_map(|r| r.worktrees.iter().map(|w| w.wt_key.clone()))
             .collect()
     };
-    for p in paths {
-        refresh_git_meta(app, &p).await;
+    for chunk in paths.chunks(6) {
+        let handles: Vec<_> = chunk
+            .iter()
+            .map(|p| {
+                let app = app.clone();
+                let p = p.clone();
+                tauri::async_runtime::spawn(async move { refresh_git_meta(&app, &p).await })
+            })
+            .collect();
+        for h in handles {
+            let _ = h.await;
+        }
     }
 }
 

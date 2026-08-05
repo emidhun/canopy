@@ -19,6 +19,14 @@ use state::AppState;
 use tauri::Manager;
 use terminal::TermTable;
 
+/// Is any Canopy window (main / popover / detached terminal) on screen?
+/// Gates the background refresh + stats loops — work nobody can see.
+pub(crate) fn any_window_visible(app: &tauri::AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|w| w.is_visible().unwrap_or(false))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // GUI apps on macOS get a bare PATH; fix it so git/node/nvm resolve.
@@ -89,12 +97,18 @@ pub fn run() {
                 });
             }
 
-            // initial scan + 60s background git refresh
+            // initial scan + 60s background git refresh. The app lives in the
+            // tray — while no window is visible nobody can see git meta, so
+            // the periodic tick is skipped (show_main_window / the popover
+            // toggle kick an immediate refresh when a window comes back).
             tauri::async_runtime::spawn(async move {
                 let _ = state::refresh_tree(&handle).await;
                 state::refresh_all_git_meta(&handle).await;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    if !any_window_visible(&handle) {
+                        continue;
+                    }
                     let _ = state::refresh_tree(&handle).await;
                     state::refresh_all_git_meta(&handle).await;
                 }
