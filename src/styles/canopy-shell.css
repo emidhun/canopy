@@ -1715,8 +1715,38 @@
   border-radius: var(--r-xl);
   background: var(--surface-well);
   padding: var(--sp-xs);
+  overflow: hidden;
+}
+/* search box pinned above the scrolling branch list */
+.cxs-pp-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  height: var(--h-control-sm);
+  margin-bottom: var(--sp-xs);
+  border-radius: var(--r-sm);
+  background: var(--surface-app);
+  border: var(--border-w) solid var(--border);
+  color: var(--text-tertiary);
+}
+.cxs-pp-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  color: var(--text-primary);
+  font: var(--fs-small) var(--sans);
+}
+.cxs-pp-search input::placeholder {
+  color: var(--text-tertiary);
+}
+.cxs-pp-brscroll {
   max-height: 190px;
   overflow-y: auto;
+  /* breathing room so the last row isn't flush against the frame */
+  padding-bottom: var(--sp-2);
 }
 .cxs-pp-bri {
   display: flex;
