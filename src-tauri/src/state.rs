@@ -15,7 +15,7 @@ pub enum SvcStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceNode {
     pub svc_key: String,
@@ -26,7 +26,7 @@ pub struct ServiceNode {
     pub status: SvcStatus,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeNode {
     pub wt_key: String,
@@ -56,7 +56,7 @@ fn env_value(wt_path: &str, key: &str) -> Option<String> {
     None
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoNode {
     pub repo_id: String,
@@ -348,12 +348,22 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         });
     }
 
-    *state.tree.write() = tree.clone();
+    // swap in the new tree; emit only when something actually changed — the
+    // unconditional broadcast forced every window through a full JSON
+    // serialize + React reconcile once a minute even when nothing moved
+    let changed = {
+        let mut cached = state.tree.write();
+        let changed = *cached != tree;
+        *cached = tree.clone();
+        changed
+    };
     {
         let runtime = state.runtime.read().clone();
         let _ = crate::settings::save_runtime(app, &runtime);
     }
-    let _ = app.emit("tree:changed", &tree);
+    if changed {
+        let _ = app.emit("tree:changed", &tree);
+    }
     Ok(tree)
 }
 
