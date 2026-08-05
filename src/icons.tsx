@@ -364,6 +364,19 @@ export const Bell = ({ size = 13 }: P) => (
   </svg>
 );
 
+export const Keyboard = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <rect x="2.5" y="6" width="19" height="12" rx="2" />
+    <path d="M6 10.5v.01M10 10.5v.01M14 10.5v.01M18 10.5v.01M8 14.5h8" />
+  </svg>
+);
+
+export const Shield = ({ size = 14 }: P) => (
+  <svg {...isvg(size, 1.8)}>
+    <path d="M12 3l7 3v5c0 4.5 -3 7.6 -7 9c-4 -1.4 -7 -4.5 -7 -9V6z" />
+  </svg>
+);
+
 export const Pin = ({ size = 12 }: P) => (
   <svg {...isvg(size, 1.8)}>
     <path d="M9 4h6l-1 6l3 3v2H7v-2l3-3l-1-6z" />
