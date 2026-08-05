@@ -92,6 +92,14 @@ pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Opt
     let _ = app.emit("service:status", &StatusEvent { svc_key: key, status, started_at, exit_code });
 }
 
+
+/// Deliver to the main window's listeners only — the popover subscribes to the
+/// shared store but renders no logs/stats, and log bursts are the hottest
+/// event in the app.
+fn main_window_only(t: &tauri::EventTarget) -> bool {
+    matches!(t, tauri::EventTarget::WebviewWindow { label } if label == "main")
+}
+
 pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
     let table = app.state::<ProcTable>();
     {
@@ -109,7 +117,7 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: vec![line] });
+    let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: vec![line] }, main_window_only);
 }
 
 /// Cap for one on-disk service log before it rolls to `<name>.1.log`.
@@ -390,7 +398,7 @@ fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) });
+    let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) }, main_window_only);
 }
 
 fn classify_line(text: &str, from_stderr: bool) -> &'static str {

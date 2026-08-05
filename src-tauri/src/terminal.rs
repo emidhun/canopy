@@ -105,6 +105,14 @@ pub struct BufferSnapshot {
     pub seq: u64,
 }
 
+
+/// Terminal bytes go to the windows that render terminals: the main window
+/// and detached `term-*` windows — never the popover.
+fn terminal_windows(t: &tauri::EventTarget) -> bool {
+    matches!(t, tauri::EventTarget::WebviewWindow { label }
+        if label == "main" || label.starts_with("term-"))
+}
+
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -254,7 +262,7 @@ pub fn open(
                         }
                     }
                     if ours {
-                        let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                        let _ = app.emit_filter("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq }, terminal_windows);
                     }
                 }
                 Err(_) => break,
@@ -290,7 +298,7 @@ pub fn open(
         };
         if removed {
             persist_orphans(&app);
-            let _ = app.emit("terminal:exit", &ExitEvent { id: &id });
+            let _ = app.emit_filter("terminal:exit", &ExitEvent { id: &id }, terminal_windows);
         }
     });
 

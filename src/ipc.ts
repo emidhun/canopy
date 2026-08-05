@@ -1,7 +1,15 @@
 // Typed IPC surface — invoke wrappers + event payloads, mirroring src-tauri.
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { GitMeta, LogLine, RepoNode, SubmoduleStatus, SvcStatus } from "./types";
+
+/** Window-scoped listen: registers with THIS window as the event target, so
+ * the backend can `emit_filter` high-volume events (terminal:data,
+ * service:log, service:stats) to only the windows that consume them. A
+ * broadcast `emit` still reaches window-scoped listeners. */
+const listen = <T,>(event: string, cb: (e: { payload: T }) => void): Promise<UnlistenFn> =>
+  getCurrentWebviewWindow().listen<T>(event, cb);
 
 export interface ServiceCfg {
   id: string;

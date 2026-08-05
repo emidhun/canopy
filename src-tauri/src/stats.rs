@@ -78,7 +78,9 @@ pub fn spawn_stats_task(app: AppHandle) {
                     uptime_sec: uptime,
                 });
             }
-            let _ = app.emit("service:stats", &StatsEvent { entries });
+            let _ = app.emit_filter("service:stats", &StatsEvent { entries }, |t| {
+                matches!(t, tauri::EventTarget::WebviewWindow { label } if label == "main")
+            });
         }
     });
 }
