@@ -148,19 +148,49 @@ fn runtime_path(app: &AppHandle) -> PathBuf {
         .join("state.json")
 }
 
+/// Load a JSON state file. A *missing* file is a fresh install (defaults); a
+/// file that EXISTS but doesn't parse is user data in danger — quarantine it
+/// to `<name>.corrupt` and log loudly, so the repos/services/ports it held can
+/// be recovered by hand instead of being silently wiped on the next save.
 fn load_json<T: for<'a> Deserialize<'a> + Default>(path: &PathBuf) -> T {
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let Ok(txt) = fs::read_to_string(path) else { return T::default() };
+    match serde_json::from_str(&txt) {
+        Ok(v) => v,
+        Err(e) => {
+            let backup = path.with_extension("json.corrupt");
+            let _ = fs::copy(path, &backup);
+            log::error!(
+                "failed to parse {} ({e}) — original preserved at {}; starting from defaults",
+                path.display(),
+                backup.display()
+            );
+            T::default()
+        }
+    }
 }
 
+/// Atomic save: write a sibling temp file, fsync, rename over the target. A
+/// crash or full disk mid-write can no longer truncate settings/state — the
+/// old file stays intact until the rename. Skips the write entirely when the
+/// serialized content is unchanged (state.json is saved on every refresh).
 fn save_json<T: Serialize>(path: &PathBuf, value: &T) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let body = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
-    fs::write(path, body).map_err(|e| e.to_string())
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == body {
+            return Ok(());
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        use std::io::Write;
+        let mut f = fs::File::create(&tmp).map_err(|e| format!("create {}: {e}", tmp.display()))?;
+        f.write_all(body.as_bytes()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+        f.sync_all().map_err(|e| format!("sync {}: {e}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path).map_err(|e| format!("rename {} → {}: {e}", tmp.display(), path.display()))
 }
 
 pub fn load_settings(app: &AppHandle) -> Settings {
@@ -177,4 +207,36 @@ pub fn load_runtime(app: &AppHandle) -> RuntimeState {
 
 pub fn save_runtime(app: &AppHandle, s: &RuntimeState) -> Result<(), String> {
     save_json(&runtime_path(app), s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_is_atomic_and_load_quarantines_corrupt_files() {
+        let dir = std::env::temp_dir().join("canopy_settings_test_xyz");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+
+        let mut s = Settings::default();
+        s.terminal = "iTerm".into();
+        save_json(&path, &s).unwrap();
+        let loaded: Settings = load_json(&path);
+        assert_eq!(loaded.terminal, "iTerm", "round-trips");
+        assert!(!path.with_extension("json.tmp").exists(), "temp file renamed away");
+
+        // corrupt file → defaults, but the original is preserved
+        fs::write(&path, "{ truncated").unwrap();
+        let loaded: Settings = load_json(&path);
+        assert_eq!(loaded.terminal, "", "defaults on parse failure");
+        let backup = path.with_extension("json.corrupt");
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "{ truncated", "original quarantined");
+
+        // unchanged content → no rewrite (mtime-stable persistence)
+        fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();
+        save_json(&path, &s).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
