@@ -103,6 +103,7 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
             buf.pop_front();
         }
     }
+    persist_log_lines(app, key, std::slice::from_ref(&line));
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
     struct LogEvent<'a> {
@@ -110,6 +111,38 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
         lines: Vec<LogLine>,
     }
     let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: vec![line] });
+}
+
+/// Cap for one on-disk service log before it rolls to `<name>.1.log`.
+const SVC_LOG_ROTATE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Append log lines to a per-service file under `<app-log-dir>/services/`.
+/// The in-memory ring keeps only LOG_CAP lines — a crash 500 lines in would
+/// otherwise lose its own cause. Best-effort: log I/O never fails a service op.
+fn persist_log_lines(app: &AppHandle, key: &str, lines: &[LogLine]) {
+    use std::io::Write;
+    let Ok(dir) = app.path().app_log_dir().map(|d| d.join("services")) else { return };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // svc_key is `<wt path>::<service id>` — flatten to a safe filename
+    let name: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .collect();
+    let path = dir.join(format!("{name}.log"));
+    // size-capped: roll the current file to `.1.log` (replacing the previous roll)
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > SVC_LOG_ROTATE_BYTES {
+            let _ = std::fs::rename(&path, dir.join(format!("{name}.1.log")));
+        }
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+    let mut out = String::new();
+    for l in lines {
+        out.push_str(&format!("{} [{}] {}\n", l.t, l.lv, l.text));
+    }
+    let _ = f.write_all(out.as_bytes());
 }
 
 /// Persist live service pgids so a crash can be swept on next launch. Unix-only:
@@ -352,6 +385,7 @@ fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
             buf.pop_front();
         }
     }
+    persist_log_lines(app, key, batch);
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
     struct LogEvent<'a> {
@@ -568,7 +602,7 @@ pub fn sweep_orphans(app: &AppHandle) {
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
         if alive && proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
-            eprintln!("[wtm] sweeping orphan pgid {} ({})", o.pgid, o.svc_key);
+            log::warn!("sweeping orphan pgid {} ({})", o.pgid, o.svc_key);
             unsafe {
                 libc::killpg(o.pgid, libc::SIGTERM);
             }

@@ -24,6 +24,21 @@ pub fn run() {
     let _ = fix_path_env::fix();
 
     let builder = tauri::Builder::default()
+        .plugin(
+            // rolling log file in the platform log dir (~/Library/Logs/… on
+            // macOS) + stderr echo for dev. INFO default; RUST_LOG overrides.
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("canopy".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
+                ])
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_dialog::init());

@@ -411,7 +411,7 @@ pub fn sweep_orphans(app: &AppHandle) {
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
         if alive && crate::services::proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
-            eprintln!("[wtm] sweeping terminal orphan pgid {} ({})", o.pgid, o.id);
+            log::warn!("sweeping terminal orphan pgid {} ({})", o.pgid, o.id);
             unsafe {
                 libc::killpg(o.pgid, libc::SIGTERM);
             }

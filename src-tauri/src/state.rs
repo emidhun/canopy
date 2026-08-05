@@ -179,7 +179,7 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         let wts = match git::list_worktrees(&repo.path).await {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("[wtm] list_worktrees failed for {}: {e}", repo.path);
+                log::warn!("list_worktrees failed for {}: {e}", repo.path);
                 Vec::new()
             }
         };
