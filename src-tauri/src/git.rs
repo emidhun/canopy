@@ -494,6 +494,16 @@ pub async fn create_worktree(
         run_git(repo_path, &["worktree", "add", wt_path, "-b", branch, base]).await?;
     } else {
         run_git(repo_path, &["worktree", "add", wt_path, branch]).await?;
+        // A remote pick reusing an existing local branch passes the origin ref
+        // as `base`. Fast-forward the checkout to it so the worktree (and the
+        // submodule commits it pins) reflect origin rather than a stale local
+        // branch — the "created before pulling" regression. ff-only never
+        // discards local commits; a diverged branch simply stays put.
+        if let Some(b) = base.map(str::trim).filter(|b| !b.is_empty()) {
+            if let Err(e) = run_git(wt_path, &["merge", "--ff-only", b]).await {
+                progress(format!("note: {branch} is not a fast-forward of {b} — left as-is ({e})"));
+            }
+        }
     }
 
     let subs = submodule_paths(wt_path).await;
