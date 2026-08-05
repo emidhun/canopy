@@ -7,6 +7,7 @@ import { genLine, logTime, mockTree } from "./mock";
 import { hasBackend, ipc, on } from "./ipc";
 
 const LOG_CAP = 160;
+const CPU_SAMPLES = 7; // the service-detail sparkline shows seven slots
 const OP_LOG_CAP = 300;
 
 /** Buffered progress of a worktree-level operation (setup / create / custom cmd). */
@@ -80,6 +81,13 @@ interface State {
   logs: Record<string, LogLine[]>;
   ops: Record<string, OpLog>;
   stats: Record<string, SvcStats>;
+  /** rolling CPU samples per service — the service-detail sparkline. Kept
+      client-side because the backend streams point-in-time stats and has no
+      reason to retain history for a modal that may never open. */
+  cpuHistory: Record<string, number[]>;
+  /** last non-zero exit code per service. service:status already carries it;
+      it was previously dropped on the floor. */
+  exitCodes: Record<string, number>;
   resetting: Record<string, boolean>;
   toast: string | null;
   flash: "manager" | "quit" | null;
@@ -257,6 +265,8 @@ export const useStore = create<State>((set, get) => {
     logs: seedLogs(mock),
     ops: {},
     stats: seedStats(mock),
+    cpuHistory: {},
+    exitCodes: {},
     resetting: {},
     toast: null,
     flash: null,
@@ -566,6 +576,8 @@ export function initSync(): () => void {
       useStore.setState((st) => ({ tree: patchStatus(st.tree, e.svcKey, e.status) }));
       if (e.status === "running" && e.startedAt) startedAt[e.svcKey] = e.startedAt * 1000;
       if (e.status === "stopped" || e.status === "error") delete startedAt[e.svcKey];
+      if (e.exitCode != null)
+        useStore.setState((st) => ({ exitCodes: { ...st.exitCodes, [e.svcKey]: e.exitCode as number } }));
     }),
   );
 
@@ -602,8 +614,12 @@ export function initSync(): () => void {
     on.serviceStats((e) => {
       useStore.setState((st) => {
         const stats = { ...st.stats };
-        for (const s of e.entries) stats[s.svcKey] = { cpu: s.cpu, memMb: s.memMb, uptimeSec: s.uptimeSec };
-        return { stats };
+        const cpuHistory = { ...st.cpuHistory };
+        for (const s of e.entries) {
+          stats[s.svcKey] = { cpu: s.cpu, memMb: s.memMb, uptimeSec: s.uptimeSec };
+          cpuHistory[s.svcKey] = [...(cpuHistory[s.svcKey] ?? []), s.cpu].slice(-CPU_SAMPLES);
+        }
+        return { stats, cpuHistory };
       });
     }),
   );
@@ -652,7 +668,15 @@ export function startMockTick() {
         uptimeSec: getUptimeSec(s.svcKey) ?? 0,
       };
     });
-    useStore.setState({ stats });
+    // mirror the event path so the service-detail sparkline has samples in a
+    // plain browser too, not only under the Tauri backend
+    useStore.setState((st) => {
+      const cpuHistory = { ...st.cpuHistory };
+      running.forEach((s) => {
+        cpuHistory[s.svcKey] = [...(cpuHistory[s.svcKey] ?? []), stats[s.svcKey]?.cpu ?? 0].slice(-CPU_SAMPLES);
+      });
+      return { stats, cpuHistory };
+    });
 
     running.forEach((s) => {
       if (s.svcKey === st.tabSvcKey || Math.random() < 0.18) {

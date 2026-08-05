@@ -3,15 +3,39 @@
    The bar is ONE line: the branch is the only elastic item, and the actions
    never shrink — a shrinking action group just clips its own button. The
    reason rides in front of the next action and is the first thing to yield. */
-import { useEffect, useRef, useState } from "react";
-import { Cube, Editor, Finder, Fork, More, SidebarIcon, Terminal, Trash } from "../../icons";
-import { hasBackend, ipc } from "../../ipc";
+import { useEffect, useRef, useState, type ComponentType } from "react";
+import { Copy, Cube, Database, Doc, Editor, Finder, Fork, More, Pull, SidebarIcon, Swap, Trash } from "../../icons";
 import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { nextClass, type NextAction } from "../nextAction";
+import AnchoredMenu from "./AnchoredMenu";
 import ServiceRail from "./ServiceRail";
 import WorkSurface, { type PaneKind } from "./WorkSurface";
 import type { LaneLaunch } from "./laneLaunch";
+
+function MenuItem({
+  icon: Icon,
+  label,
+  k,
+  danger,
+  onPick,
+}: {
+  icon: ComponentType<{ size?: number }>;
+  label: string;
+  k?: string;
+  danger?: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button className={"cx-pop__item" + (danger ? " cx-pop__item--danger" : "")} onClick={onPick} role="menuitem">
+      <span className="cx-pop__ic">
+        <Icon size={13} />
+      </span>
+      {label}
+      {k && <span className="cx-k">{k}</span>}
+    </button>
+  );
+}
 
 export default function WorktreeView({
   wt,
@@ -24,6 +48,10 @@ export default function WorktreeView({
   onShowSide,
   onRemove,
   onDatabase,
+  onSetup,
+  onOpenService,
+  onEditContext,
+  onSwitchBranch,
 }: {
   wt: WorktreeNode;
   na: NextAction;
@@ -35,36 +63,27 @@ export default function WorktreeView({
   onShowSide: () => void;
   onRemove: () => void;
   onDatabase: () => void;
+  onSetup: () => void;
+  onOpenService: (s: ServiceNode) => void;
+  onEditContext: () => void;
+  onSwitchBranch: () => void;
 }) {
   const openWorktree = useStore((s) => s.openWorktree);
-  const restartService = useStore((s) => s.restartService);
+  const gitPull = useStore((s) => s.gitPull);
   const showToast = useStore((s) => s.showToast);
+  const restartService = useStore((s) => s.restartService);
   const [filter, setFilter] = useState("all");
   const [menu, setMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLButtonElement>(null);
   const NaIcon = na.icon;
 
   // a filter naming a service that no longer exists would silently hide
   // everything, so fall back to "all" when the worktree changes
   useEffect(() => setFilter("all"), [wt.wtKey]);
 
-  useEffect(() => {
-    if (!menu) return;
-    const d = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false);
-    };
-    document.addEventListener("mousedown", d);
-    return () => document.removeEventListener("mousedown", d);
-  }, [menu]);
-
   const runSetup = () => {
     setMenu(false);
-    if (!hasBackend()) {
-      showToast("Setup runs in the desktop app");
-      return;
-    }
-    showToast(`Running setup — ${wt.branch}…`);
-    ipc.runWorktreeSetup(wt.wtKey).catch((e) => showToast(`Setup failed — ${String(e)}`));
+    onSetup();
   };
 
   return (
@@ -96,53 +115,39 @@ export default function WorktreeView({
           <button className="cx-ib" title="Open in editor" onClick={() => openWorktree(wt.wtKey, "editor")}>
             <Editor size={14} />
           </button>
-          <button className="cx-ib" title="Reveal in Finder" onClick={() => openWorktree(wt.wtKey, "finder")}>
-            <Finder size={14} />
+          {/* Reveal in Finder lives in the ⋯ menu — one route, not two. */}
+          <button className="cx-ib" title="More" onClick={() => setMenu((m) => !m)} ref={moreRef} aria-haspopup="menu" aria-expanded={menu}>
+            <More size={15} />
           </button>
-          <div style={{ position: "relative", display: "inline-flex" }} ref={menuRef}>
-            <button className="cx-ib" title="More" onClick={() => setMenu((m) => !m)}>
-              <More size={15} />
-            </button>
-            {menu && (
-              <div className="cx-pop cxs-moremenu">
-                <button className="cx-pop__item" onClick={runSetup}>
-                  <span className="cx-pop__ic">
-                    <Cube size={13} />
-                  </span>
-                  Run setup
-                </button>
-                <button
-                  className="cx-pop__item"
-                  onClick={() => {
-                    setMenu(false);
-                    openWorktree(wt.wtKey, "terminal");
-                  }}
-                >
-                  <span className="cx-pop__ic">
-                    <Terminal size={13} />
-                  </span>
-                  Open in Terminal
-                </button>
-                {!wt.isMain && (
-                  <>
-                    <div className="cx-pop__sep" />
-                    <button
-                      className="cx-pop__item cx-pop__item--danger"
-                      onClick={() => {
-                        setMenu(false);
-                        onRemove();
-                      }}
-                    >
-                      <span className="cx-pop__ic">
-                        <Trash size={13} />
-                      </span>
-                      Remove worktree…
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          {menu && (
+            <AnchoredMenu anchor={moreRef} onClose={() => setMenu(false)} width={246}>
+              <MenuItem icon={Swap} label="Switch branch…" k="⌘\" onPick={() => { setMenu(false); onSwitchBranch(); }} />
+              <MenuItem icon={Pull} label="Pull" onPick={() => { setMenu(false); gitPull(wt.wtKey); }} />
+              <MenuItem icon={Cube} label="Run setup…" onPick={runSetup} />
+              <div className="cx-pop__sep" />
+              <MenuItem icon={Database} label="Database…" onPick={() => { setMenu(false); onDatabase(); }} />
+              <MenuItem icon={Doc} label="Context…" onPick={() => { setMenu(false); onEditContext(); }} />
+              <div className="cx-pop__sep" />
+              <MenuItem icon={Finder} label="Reveal in Finder" onPick={() => { setMenu(false); openWorktree(wt.wtKey, "finder"); }} />
+              <MenuItem
+                icon={Copy}
+                label="Copy path"
+                onPick={() => {
+                  setMenu(false);
+                  navigator.clipboard?.writeText(wt.path).then(
+                    () => showToast("Path copied"),
+                    () => showToast("Could not copy to the clipboard"),
+                  );
+                }}
+              />
+              {!wt.isMain && (
+                <>
+                  <div className="cx-pop__sep" />
+                  <MenuItem icon={Trash} label="Remove worktree…" danger onPick={() => { setMenu(false); onRemove(); }} />
+                </>
+              )}
+            </AnchoredMenu>
+          )}
 
           <span className="cxs-actdiv" />
 
@@ -156,7 +161,7 @@ export default function WorktreeView({
         </div>
       </div>
 
-      <ServiceRail wt={wt} filter={filter} onFilter={setFilter} onDatabase={onDatabase} />
+      <ServiceRail wt={wt} onOpenService={onOpenService} onDatabase={onDatabase} />
 
       <WorkSurface
         wt={wt}
@@ -168,6 +173,7 @@ export default function WorktreeView({
         onNext={onNext}
         onRestart={(s: ServiceNode) => restartService(s.svcKey)}
         launch={launch}
+        onEditContext={onEditContext}
       />
     </div>
   );

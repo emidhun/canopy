@@ -7,7 +7,22 @@
 
    Narrow behaviour keys off the PANE, not the viewport — panes resize
    independently of the window, so @media cannot see them. Hence
-   container-type/container-name on .cxs-shell and .cxs-main. */
+   container-type/container-name on .cxs-shell and .cxs-main.
+
+   WHAT IS TOKENIZED: everything drawn from the design system's shared
+   vocabulary — spacing steps, the type ramp, weights, radii, colours,
+   shadows, chrome heights and the surfaces' widths. If a value is one the
+   system has an opinion about, it resolves from tokens.css.
+
+   WHAT IS NOT, and why: one-off element geometry. A 7px submodule dot, a 13px
+   checkbox, a 34px empty-state tile, a 25×23 pull button, the overview
+   table's nine column tracks, flex bases and max-heights. These are drawn
+   once, belong to a single element, and are the same category as a
+   grid-template value. Minting a token per one would add dozens of names with
+   a single call site each, which obscures the scale rather than expressing
+   it. Also literal by necessity: @media/@container conditions (custom
+   properties are not valid there — a language limit, not a choice) and a
+   #000 mask stop, which is luminance rather than colour. */
 
 .cxs-shell {
   height: 100%;
@@ -26,7 +41,7 @@
   height: var(--h-topbar);
   flex: none;
   display: grid;
-  grid-template-columns: minmax(min-content, 1fr) minmax(0, 360px) minmax(min-content, 1fr);
+  grid-template-columns: minmax(min-content, 1fr) minmax(0, var(--w-command)) minmax(min-content, 1fr);
   align-items: center;
   gap: var(--sp-pop);
   padding: 0 var(--sp-pop) 0 var(--sp-5);
@@ -65,7 +80,7 @@
 /* command field: centred, the one global entry point */
 .cxs-gsearch {
   width: 100%;
-  max-width: 360px;
+  max-width: var(--w-command);
   min-width: 0;
   display: flex;
   align-items: center;
@@ -115,8 +130,8 @@
   display: inline-flex;
 }
 .cxs-tdiv {
-  width: 1px;
-  height: 16px;
+  width: var(--border-w);
+  height: var(--h-divider);
   background: var(--divider);
   flex: none;
 }
@@ -362,7 +377,7 @@
   gap: var(--sp-row);
   width: 100%;
   text-align: left;
-  height: 28px;
+  height: var(--h-control);
   padding: 0 var(--sp-row);
   border: 0;
   border-radius: var(--r-md);
@@ -456,9 +471,9 @@
   content: "";
   position: absolute;
   left: 0;
-  top: 5px;
-  bottom: 5px;
-  width: 2px;
+  top: var(--sp-2);
+  bottom: var(--sp-2);
+  width: var(--r-indicator);
   border-radius: var(--r-indicator);
   background: var(--action-primary);
 }
@@ -515,8 +530,13 @@
   flex: none;
   margin-right: calc(var(--sp-micro) * -1);
 }
-.cxs-wtr:hover .cxs-qa {
+.cxs-wtr:hover .cxs-qa,
+.cxs-qa:focus-within {
   display: flex;
+}
+/* a focused quick action must also displace the meta it overlays */
+.cxs-wtr:has(.cxs-qa:focus-within) .meta {
+  display: none;
 }
 .cxs-qa .qb {
   width: var(--h-quickact);
@@ -621,7 +641,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 0 1 auto;
-  min-width: 44px;
+  min-width: var(--w-branch-min);
 }
 .cxs-gitchips {
   display: flex;
@@ -634,7 +654,7 @@
   align-items: center;
   gap: var(--sp-micro);
   height: var(--h-gitchip);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-sm);
   background: var(--surface-well);
   border: var(--border-w) solid var(--divider);
@@ -662,8 +682,8 @@
   margin-left: auto;
 }
 .cxs-actdiv {
-  width: 1px;
-  height: 15px;
+  width: var(--border-w);
+  height: var(--h-divider-sm);
   background: var(--divider);
   margin: 0 var(--sp-2);
   flex: none;
@@ -690,7 +710,7 @@
 .cxs-svc {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-row);
   height: var(--h-control-xs);
   padding: 0 var(--sp-4);
   border-radius: var(--r-md);
@@ -735,8 +755,8 @@
   font-variant-numeric: tabular-nums;
 }
 .cxs-svc .act {
-  width: 16px;
-  height: 16px;
+  width: var(--sz-svc-act);
+  height: var(--sz-svc-act);
   border: 0;
   border-radius: var(--r-xs);
   background: none;
@@ -783,7 +803,7 @@
 }
 .cxs-vdiv {
   flex: none;
-  width: 1px;
+  width: var(--border-w);
   background: var(--divider);
   cursor: col-resize;
   position: relative;
@@ -798,6 +818,17 @@
 .cxs-vdiv.is-on {
   background: var(--action-primary);
 }
+/* The pane tab strip joins the main pane's shared left gutter. The .cx-tabs
+   primitive sits on --sp-3, but inside the pane the worktree bar, service
+   rail, log toolbar and log lines all align on --gutter — the strip has to
+   join that edge or it is the one row that doesn't line up. */
+.cxs-main .cx-tabs {
+  padding-inline: var(--gutter);
+}
+.cxs-main .cx-tab {
+  padding-inline: var(--sp-row);
+}
+
 /* pane tabs: Logs / Terminal / Agent live TOGETHER — the integration fix.
    The tab group scrolls horizontally instead of overflowing, and the trailing
    control lives OUTSIDE the scroller so it stays reachable however many
@@ -906,7 +937,7 @@
 }
 .cxs-fchip {
   height: var(--h-control-sm);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-md);
   border: var(--border-w) solid transparent;
   background: none;
@@ -1364,7 +1395,8 @@
   opacity: 0;
   transition: opacity var(--dur-fast);
 }
-.cxs-tbl tbody tr:hover .cxs-rowact {
+.cxs-tbl tbody tr:hover .cxs-rowact,
+.cxs-rowact:focus-within {
   opacity: 1;
 }
 .cxs-ovempty {
@@ -1393,7 +1425,7 @@
   align-items: center;
   gap: var(--sp-2);
   height: var(--h-statusact);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-tight);
   border-radius: var(--r-xs);
   border: 0;
   background: none;
@@ -2031,9 +2063,53 @@
   color: var(--text-secondary);
 }
 
-/* the worktree bar's More menu, anchored under its trigger */
-.cxs-moremenu {
-  top: var(--h-control-xs);
-  right: 0;
-  min-width: 216px;
+
+/* ── the agent pane's context bar ──────────────────────────────────
+   What the agent was seeded with, always visible above the session so it is
+   never a mystery what it was told. Clicking it opens the context editor. */
+.cxs-ctxbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  padding: var(--sp-tight) var(--sp-pop);
+  border-bottom: var(--border-w) solid var(--divider);
+  background: var(--surface-app);
+  cursor: pointer;
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  width: 100%;
+  text-align: left;
+  font-family: var(--sans);
+  transition: background var(--dur-fast);
+}
+.cxs-ctxbar:hover {
+  background: var(--surface);
+}
+.cxs-ctxbar .lb {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  flex: none;
+}
+.cxs-ctxbar .ti {
+  font-size: var(--fs-small);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+.cxs-ctxbar .ti.is-empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.cxs-ctxbar .lk {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  flex: none;
 }

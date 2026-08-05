@@ -1,0 +1,483 @@
+/* Canopy dialog layer — form primitives and the pickers the modals share.
+
+   The modal card itself, its header/body/footer, buttons, inputs, alerts,
+   steps, key-value lists and tags all come from canopy-components.css. Only
+   what the dialogs add lives here.
+
+   The card floats, so it gets radius and shadow — but its INTERIOR is flat:
+   hairline-divided rows, never a stack of bordered pills. A bordered box
+   inside a bordered box is the bug this rule exists to prevent. */
+
+/* ── field scaffolding ─────────────────────────────────────────────── */
+.cxm-fld {
+  margin-bottom: var(--sp-pop-lg);
+}
+.cxm-fld:last-child {
+  margin-bottom: 0;
+}
+.cxm-sfld {
+  margin-top: var(--sp-4);
+}
+.cxm-sfld:first-child {
+  margin-top: 0;
+}
+.cxm-grid2 {
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  gap: var(--sp-4);
+  align-items: center;
+}
+/* an uppercase section label; `--f` is the quieter per-field variant */
+.cxm-flab {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: var(--sp-tight);
+}
+.cxm-flab--f {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-medium);
+  color: var(--text-secondary);
+  margin-bottom: var(--sp-2);
+}
+.cxm-opt {
+  margin-left: auto;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-micro);
+}
+.cxm-fhint {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  margin-top: var(--sp-tight);
+  line-height: var(--lh-body);
+}
+.cxm-fhint--bad {
+  color: var(--red-text);
+}
+.cxm-fhint--warn {
+  color: var(--state-attention);
+}
+
+/* ── checkbox row — a hairline-divided row, not a bordered pill ────── */
+.cxm-chk {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-pop);
+  margin: 0 calc(var(--sp-6) * -1);
+  padding: var(--sp-pop) var(--sp-6);
+  border: 0;
+  border-bottom: var(--border-w) solid var(--divider);
+  background: none;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.cxm-chk:hover {
+  background: var(--wash-pop-soft);
+}
+.cxm-chk input {
+  margin: var(--sp-hair) 0 0;
+  accent-color: var(--action-primary);
+  cursor: pointer;
+  flex: none;
+}
+.cxm-chk__tx {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-micro);
+}
+.cxm-chk__tx b {
+  font: var(--fw-medium) var(--fs-body) var(--sans);
+  color: var(--text-primary);
+}
+.cxm-chk__tx span {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  line-height: var(--lh-tight);
+}
+.cxm-chk__tx .mono {
+  font-family: var(--mono);
+}
+
+/* ── ref picker — shared by New worktree and Switch branch ─────────── */
+.cxm-pick {
+  position: relative;
+}
+.cxm-pick-f {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  height: var(--h-logtool);
+  padding: 0 var(--sp-pop);
+  border-radius: var(--r-md);
+  border: var(--border-w) solid var(--divider);
+  background: var(--surface-well);
+  color: var(--text-tertiary);
+  cursor: text;
+}
+.cxm-pick-f:focus-within {
+  border-color: var(--action-primary);
+  box-shadow: 0 0 0 3px var(--teal-dim);
+}
+.cxm-pick-f input {
+  flex: 1;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--text-primary);
+  font: var(--fs-body) var(--mono);
+  min-width: 0;
+}
+.cxm-pick-f input::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--sans);
+}
+.cxm-pick-l {
+  position: absolute;
+  top: calc(100% + var(--sp-2));
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 196px;
+  overflow-y: auto;
+  padding: var(--sp-xs);
+  background: var(--raised);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-pop);
+}
+.cxm-pick-g {
+  padding: var(--sp-tight) var(--sp-row) var(--sp-micro);
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.cxm-pick-i {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  width: 100%;
+  padding: var(--sp-tight) var(--sp-row);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--text-primary);
+  font: var(--fs-body) var(--mono);
+  cursor: pointer;
+  text-align: left;
+}
+.cxm-pick-i:hover {
+  background: var(--raised-hi);
+}
+.cxm-pick-i.is-on {
+  background: var(--teal-dim);
+}
+.cxm-pick-i:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cxm-pick-i:disabled:hover {
+  background: none;
+}
+.cxm-pick-i .ic {
+  color: var(--text-tertiary);
+  display: inline-flex;
+  flex: none;
+}
+.cxm-pick-i .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* creating a ref is constructive, so it carries the accent */
+.cxm-pick-i--new,
+.cxm-pick-i--new .ic {
+  color: var(--action-primary);
+}
+.cxm-pick-e {
+  padding: var(--sp-6) var(--sp-pop);
+  text-align: center;
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+}
+
+/* ── disclosure (the optional agent handoff) ───────────────────────── */
+.cxm-disc {
+  border: 0;
+  border-top: var(--border-w) solid var(--divider);
+  border-radius: 0;
+  background: none;
+  margin: 0 calc(var(--sp-6) * -1);
+  padding: 0 var(--sp-6);
+}
+.cxm-disc > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: var(--sp-pop) 0;
+  font: var(--fw-medium) var(--fs-body) var(--sans);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+}
+.cxm-disc > summary::-webkit-details-marker {
+  display: none;
+}
+.cxm-disc > summary:hover {
+  color: var(--text-primary);
+}
+.cxm-disc > summary .cv {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+.cxm-disc[open] > summary .cv {
+  transform: rotate(90deg);
+}
+.cxm-disc > summary .sub {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-weight: var(--fw-regular);
+}
+.cxm-disc__body {
+  padding: 0 0 var(--sp-pop-lg);
+}
+
+/* ── inline progress stream (create / setup running) ───────────────── */
+.cxm-prog {
+  display: flex;
+  gap: var(--sp-pop);
+  padding: var(--sp-pop-lg) 0 0;
+  border-top: var(--border-w) solid var(--divider);
+  margin-top: var(--sp-modal-head);
+}
+.cxm-prog__ic {
+  color: var(--action-primary);
+  display: inline-flex;
+  flex: none;
+  margin-top: var(--sp-hair);
+}
+.cxm-prog__lines {
+  min-width: 0;
+  flex: 1;
+  font: var(--fs-small) / 1.65 var(--mono);
+  color: var(--text-tertiary);
+}
+/* the newest line is the one you're actually reading */
+.cxm-prog__lines div:last-child {
+  color: var(--text-secondary);
+}
+
+/* ── service detail: metrics row ───────────────────────────────────── */
+.cxm-mrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+}
+.cxm-met {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-hair);
+  flex: none;
+}
+.cxm-met .v {
+  font: var(--fs-body) var(--mono);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.cxm-met .k {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ── database: switcher list + action rows ─────────────────────────── */
+.cxm-dbl {
+  max-height: 152px;
+  overflow-y: auto;
+  border: var(--border-w) solid var(--divider);
+  border-radius: var(--r-lg);
+  background: var(--surface-well);
+  padding: var(--sp-xs);
+}
+.cxm-dbo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  width: 100%;
+  padding: var(--sp-tight) var(--sp-row);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-primary);
+  font: var(--fs-small) var(--mono);
+  cursor: pointer;
+  text-align: left;
+}
+.cxm-dbo:hover {
+  background: var(--raised-hi);
+}
+.cxm-dbo.is-on {
+  background: var(--teal-dim);
+}
+.cxm-dbo .ic {
+  color: var(--text-tertiary);
+  display: inline-flex;
+  flex: none;
+}
+/* an action row is flat and hairline-divided — the modal is the only float */
+.cxm-act {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+  width: 100%;
+  margin: 0 calc(var(--sp-6) * -1);
+  padding: var(--sp-4) var(--sp-6);
+  border: 0;
+  border-bottom: var(--border-w) solid var(--divider);
+  background: none;
+  color: var(--text-primary);
+  font: var(--fs-body) var(--sans);
+  cursor: pointer;
+  text-align: left;
+  width: calc(100% + var(--sp-6) * 2);
+  transition: background var(--dur-fast);
+}
+.cxm-act:hover {
+  background: var(--wash-pop-soft);
+}
+.cxm-act .ic {
+  color: var(--text-tertiary);
+  display: inline-flex;
+  flex: none;
+}
+.cxm-act .sub {
+  margin-left: auto;
+  font: var(--fs-micro) var(--mono);
+  color: var(--text-tertiary);
+  flex: none;
+}
+.cxm-act--danger {
+  color: var(--red-text);
+}
+.cxm-act--danger .ic {
+  color: var(--red-text);
+}
+
+/* ── context editor ────────────────────────────────────────────────── */
+.cxm-ctxref {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: var(--sp-tight) var(--sp-pop);
+  align-items: start;
+}
+.cxm-ctxref > label {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  padding-top: var(--sp-row);
+}
+.cxm-ctxrt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-tight);
+  font-size: var(--fs-small);
+  color: var(--text-tertiary);
+}
+.cxm-ctxrt > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-gitchip);
+  padding: 0 var(--sp-row);
+  border-radius: var(--r-sm);
+  background: var(--surface-well);
+  border: var(--border-w) solid var(--divider);
+}
+.cxm-ctxrt em {
+  font-style: normal;
+  font-family: var(--mono);
+  color: var(--action-primary);
+}
+/* a link chip — the one place a dashed border means "add another" */
+.cxm-brc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-row);
+  border-radius: var(--r-sm);
+  border: var(--border-w) solid var(--divider);
+  background: var(--surface-well);
+  color: var(--text-secondary);
+  font: var(--fs-small) var(--mono);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast),
+    color var(--dur-fast);
+}
+.cxm-brc:hover {
+  border-color: var(--border-pop);
+  color: var(--text-primary);
+}
+.cxm-brc--add {
+  border-style: dashed;
+  color: var(--text-tertiary);
+  font-family: var(--sans);
+}
+.cxm-links {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.cxm-preview {
+  padding: var(--sp-pop) var(--sp-pop-lg);
+  border: var(--border-w) solid var(--divider);
+  border-radius: var(--r-lg);
+  background: var(--surface-well);
+  min-height: 150px;
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+.cxm-preview code {
+  font-family: var(--mono);
+  font-size: var(--fs-small);
+  background: var(--surface-app);
+  padding: var(--sp-hair) var(--sp-2);
+  border-radius: var(--r-xs);
+  color: var(--action-primary);
+}
+
+/* the inline add-a-link field — sized to sit in the chip row it replaces */
+.cxm-linkin {
+  width: auto;
+  flex: 1 1 220px;
+  min-width: 180px;
+  height: var(--h-control-sm);
+  font-size: var(--fs-small);
+}
+.cxm-brc .x {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  border-radius: var(--r-tiny);
+  margin-right: calc(var(--sp-micro) * -1);
+}
+.cxm-brc .x:hover {
+  background: var(--btn-hover);
+  color: var(--text-primary);
+}

@@ -3,7 +3,7 @@
    Left is identity (brand + which worktree you're in), centre is the one
    global entry point (⌘K), right is the cross-worktree signal — how much is
    running, how many agents, and what needs a human. */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { Bell, Check, ChevRight, Chevron, Cube, Fork, Refresh, Settings, Sparkle, Alert } from "../../icons";
 import type { AttnItem } from "../nextAction";
 import type { RepoNode, WorktreeNode } from "../../types";
@@ -19,6 +19,7 @@ export function TopBar({
   onOverview,
   onRefresh,
   onSettings,
+  attnRef,
 }: {
   repo: RepoNode | null;
   wt: WorktreeNode | null;
@@ -30,6 +31,8 @@ export function TopBar({
   onOverview: () => void;
   onRefresh: () => void;
   onSettings: () => void;
+  /** shared with AttentionPop so the trigger can close its own popover */
+  attnRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const crashes = attn.filter((a) => a.kind === "crash").length;
 
@@ -76,13 +79,13 @@ export function TopBar({
           </button>
         )}
         {attn.length > 0 ? (
-          <button className={"cxs-attn" + (crashes ? " cxs-attn--crash" : "")} onClick={onAttn}>
+          <button ref={attnRef} className={"cxs-attn" + (crashes ? " cxs-attn--crash" : "")} onClick={onAttn}>
             <span className="d" />
             <span>{attn.length}</span>
             <span className="lbl">{`need${attn.length === 1 ? "s" : ""} you`}</span>
           </button>
         ) : (
-          <button className="cxs-attn cxs-attn--clear" onClick={onAttn} title="Nothing needs you">
+          <button ref={attnRef} className="cxs-attn cxs-attn--clear" onClick={onAttn} title="Nothing needs you">
             <Check size={12} />
             <span className="lbl">All clear</span>
           </button>
@@ -100,15 +103,30 @@ export function TopBar({
 }
 
 /** The attention queue — everything needing a human, across worktrees, ranked. */
-export function AttentionPop({ items, onPick, onClose }: { items: AttnItem[]; onPick: (a: AttnItem) => void; onClose: () => void }) {
+export function AttentionPop({
+  items,
+  onPick,
+  onClose,
+  anchor,
+}: {
+  items: AttnItem[];
+  onPick: (a: AttnItem) => void;
+  onClose: () => void;
+  /** the trigger, so its own mousedown isn't treated as "outside" — otherwise
+      the listener closes the popover and the click immediately reopens it,
+      making the trigger unable to dismiss what it opened */
+  anchor?: React.RefObject<HTMLElement | null>;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const d = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const t = e.target as Node;
+      if (anchor?.current?.contains(t)) return;
+      if (ref.current && !ref.current.contains(t)) onClose();
     };
     document.addEventListener("mousedown", d);
     return () => document.removeEventListener("mousedown", d);
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   return (
     <div className="cx-pop cxs-attnpop" ref={ref}>

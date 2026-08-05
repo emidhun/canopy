@@ -30,6 +30,7 @@ export default function Palette({
   onSelect,
   onOverview,
   onAction,
+  onRunFor,
   onLayout,
   onNewWorktree,
   onSettings,
@@ -42,6 +43,8 @@ export default function Palette({
   onSelect: (wtKey: string) => void;
   onOverview: () => void;
   onAction: (a: NextAction) => void;
+  /** run the ranked next action for another worktree, the way the overview does */
+  onRunFor: (wtKey: string) => void;
   onLayout: (l: LayoutId) => void;
   onNewWorktree: () => void;
   onSettings: () => void;
@@ -76,9 +79,12 @@ export default function Palette({
           g: "Suggested",
           icon: a.kind === "crash" ? Alert : a.kind === "wait" ? Sparkle : Cube,
           tone: a.kind === "crash" ? "crash" : "urgent",
+          // The row is labelled with an imperative ("Restart — API crashed"),
+          // so it has to perform it. Selecting and leaving the crash in place
+          // would make ⌘K the one surface that disagrees with the others.
           nm: `${a.act} — ${a.title}`,
           why: a.wt,
-          run: () => onSelect(a.wtKey),
+          run: () => onRunFor(a.wtKey),
         }),
       );
     }
@@ -131,7 +137,7 @@ export default function Palette({
     });
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ql, sel, attn, flat, sessions]);
+  }, [ql, sel, attn, flat, sessions, onRunFor]);
 
   useEffect(() => setI(0), [ql]);
 

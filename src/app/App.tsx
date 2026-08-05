@@ -4,11 +4,11 @@
    the one runner that turns a NextAction into work. Everything that offers
    "the next thing" routes through `runNext`, so the worktree bar's button,
    ⌘K's Suggested row, ⏎, and the overview's row action stay in lockstep. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { hasBackend, ipc } from "../ipc";
 import { initSync, useStore } from "../store";
 import type { RepoNode, WorktreeNode } from "../types";
-import { Plus, X } from "../icons";
+import { Plus } from "../icons";
 import { attentionItems, nextAction, type AttnItem, type NextAction } from "./nextAction";
 import { TopBar, AttentionPop } from "./canopy/TopBar";
 import SidebarNav from "./canopy/SidebarNav";
@@ -18,7 +18,10 @@ import Palette from "./canopy/Palette";
 import StatusBar from "./canopy/StatusBar";
 import { LAYOUT_ORDER, LAYOUTS, panesOf, type LayoutId, type PaneKind } from "./canopy/WorkSurface";
 import { useLaneLaunch } from "./canopy/laneLaunch";
-import DatabaseControl from "./DatabaseControl";
+import DatabaseModal from "./canopy/DatabaseModal";
+import SetupRunnerModal from "./canopy/SetupRunnerModal";
+import ServiceDetailModal from "./canopy/ServiceDetailModal";
+import ContextModal from "./canopy/ContextModal";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
@@ -53,10 +56,14 @@ export default function App() {
   const [showNewWt, setShowNewWt] = useState(false);
   const [showSwitchBranch, setShowSwitchBranch] = useState(false);
   const [showDb, setShowDb] = useState(false);
+  const [showSetup, setShowSetup] = useState(false);
+  const [showCtx, setShowCtx] = useState(false);
+  const [svcDetail, setSvcDetail] = useState<string | null>(null);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
   const [, setTick] = useState(0);
+  const attnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => initSync(), []);
   // uptime / relative-time re-render
@@ -92,6 +99,14 @@ export default function App() {
 
   const launch = useLaneLaunch(sel?.repo ?? EMPTY_REPO, sel?.wt ?? EMPTY_WT);
 
+  /** Resolve a launch target by key. `select()` does not update this render's
+      closure, so anything launching for a worktree other than the currently
+      selected one has to say which one explicitly. */
+  const targetFor = (wtKey: string) => {
+    for (const r of tree) for (const w of r.worktrees) if (w.wtKey === wtKey) return { repo: r, wt: w };
+    return undefined;
+  };
+
   /* ── the one action ───────────────────────────────────────────────
      Every surface that offers "the next thing" calls this. */
   const runNext = (action?: NextAction | null, forKey?: string) => {
@@ -113,9 +128,9 @@ export default function App() {
         if (a.sessionId) setActiveTerm(key, a.sessionId);
         break;
       case "setup":
-        if (!hasBackend()) return showToast("Setup runs in the desktop app");
-        showToast(`Running setup — ${target.branch}…`);
-        ipc.runWorktreeSetup(key).catch((e) => showToast(`Setup failed — ${String(e)}`));
+        select(key);
+        setView("wt");
+        setShowSetup(true);
         break;
       case "starting":
         break; // busy — acting again would double-start
@@ -139,7 +154,7 @@ export default function App() {
         select(key);
         setView("wt");
         setLayout("agent");
-        launch.startAgent();
+        launch.startAgent(targetFor(key));
         break;
     }
   };
@@ -149,22 +164,17 @@ export default function App() {
     setView("wt");
     if (want === "terminal") {
       setLayout("shell");
-      launch.startShell();
+      launch.startShell(targetFor(wtKey));
     }
   };
 
   const openTerminalFor = (wtKey: string) => {
-    if (wtKey === sel?.wt.wtKey) {
-      setView("wt");
-      setLayout("shell");
-      if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell();
-      return;
-    }
-    // a different worktree: select it first — its launcher belongs to that
-    // worktree's context, so the shell opens on the next render
     select(wtKey);
     setView("wt");
     setLayout("shell");
+    // open one only if that worktree has none — naming the target means this
+    // works for any worktree, not just the one already selected
+    if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell(targetFor(wtKey));
   };
 
   const refresh = () => {
@@ -198,6 +208,10 @@ export default function App() {
         e.preventDefault();
         setSideHidden((s) => !s);
       }
+      if (meta && e.key === "\\") {
+        e.preventDefault();
+        if (sel) setShowSwitchBranch(true);
+      }
       if (meta && e.key.toLowerCase() === "o") {
         e.preventDefault();
         setView((v) => (v === "overview" ? "wt" : "overview"));
@@ -228,6 +242,7 @@ export default function App() {
         onOverview={() => setView("overview")}
         onRefresh={refresh}
         onSettings={() => setShowSettings(true)}
+        attnRef={attnRef}
       />
 
       <div className="cxs-body">
@@ -281,6 +296,10 @@ export default function App() {
               onShowSide={() => setSideHidden(false)}
               onRemove={() => setRemoveWtFor(sel.wt)}
               onDatabase={() => setShowDb(true)}
+              onSetup={() => setShowSetup(true)}
+              onOpenService={(s) => setSvcDetail(s.svcKey)}
+              onEditContext={() => setShowCtx(true)}
+              onSwitchBranch={() => setShowSwitchBranch(true)}
             />
           )
         )}
@@ -303,6 +322,7 @@ export default function App() {
 
       {attnOpen && (
         <AttentionPop
+          anchor={attnRef}
           items={attn}
           onClose={() => setAttnOpen(false)}
           onPick={(a) => {
@@ -321,6 +341,7 @@ export default function App() {
           onSelect={(k) => goto(k)}
           onOverview={() => setView("overview")}
           onAction={(a) => runNext(a)}
+          onRunFor={(k) => runNext(null, k)}
           onLayout={(l) => {
             setLayout(l);
             setView("wt");
@@ -331,30 +352,32 @@ export default function App() {
           onStartAgent={() => {
             setView("wt");
             setLayout("agent");
-            launch.startAgent();
+            launch.startAgent(sel ? { repo: sel.repo, wt: sel.wt } : undefined);
           }}
         />
       )}
 
-      {showDb && sel && (
-        <div className="cx-scrim" onMouseDown={() => setShowDb(false)}>
-          <div className="cx-modal" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="cx-modal__head">
-              <div className="cx-modal__title">
-                <b>Database</b>
-                <span>{sel.wt.dbName ?? "not configured"}</span>
-              </div>
-              <button className="cx-ib" onClick={() => setShowDb(false)} title="Close">
-                <X size={13} />
-              </button>
-            </div>
-            <div className="cx-modal__body">
-              <DatabaseControl wt={sel.wt} />
-            </div>
-          </div>
-        </div>
+      {showDb && sel && <DatabaseModal wt={sel.wt} onClose={() => setShowDb(false)} />}
+      {showSetup && sel && (
+        <SetupRunnerModal
+          wt={sel.wt}
+          onClose={() => setShowSetup(false)}
+          onStartServices={() => startAll(sel.wt.wtKey)}
+        />
       )}
-
+      {svcDetail && sel && <ServiceDetailModal wt={sel.wt} svcKey={svcDetail} onClose={() => setSvcDetail(null)} />}
+      {showCtx && sel && (
+        <ContextModal
+          repo={sel.repo}
+          wt={sel.wt}
+          onClose={() => setShowCtx(false)}
+          onStartAgent={() => {
+            setView("wt");
+            setLayout("agent");
+            launch.startAgent(sel ? { repo: sel.repo, wt: sel.wt } : undefined);
+          }}
+        />
+      )}
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
       {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
       {showSwitchBranch && sel && (

@@ -10,6 +10,7 @@ import "./styles/terminal.css";
 // app.css still owns.
 import "./styles/canopy-components.css";
 import "./styles/canopy-shell.css";
+import "./styles/canopy-modals.css";
 
 applyPlatformClass();
 

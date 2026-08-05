@@ -67,7 +67,7 @@ export default function SidebarNav({
   }, [flat, q, attn, pins]);
 
   return (
-    <aside className={"cxs-side" + (hidden ? " is-hidden" : "")}>
+    <aside className={"cxs-side" + (hidden ? " is-hidden" : "")} inert={hidden || undefined} aria-hidden={hidden || undefined}>
       <div className="cxs-shead">
         <div className="cx-search cxs-sfilter">
           <Search size={12} />
@@ -148,6 +148,9 @@ function WorktreeRow({
   const agents = sessions.filter((s) => s.kind === "agent" && s.running);
   const waiting = agents.some((s) => agentState(s) === "waiting");
   const live = wt.services.some((s) => isLive(s.status));
+  // isLive() excludes `stopping`, so a worktree mid-shutdown reads as idle and
+  // the toggle would offer "Start services" — which then races the shutdown.
+  const settling = wt.services.some((s) => s.status === "starting" || s.status === "stopping");
   const pinned = isPinned(wt.wtKey);
 
   return (
@@ -181,9 +184,11 @@ function WorktreeRow({
       <span className="cxs-qa">
         <button
           className={"qb " + (live ? "st" : "go")}
-          title={live ? "Stop services" : "Start services"}
+          disabled={settling}
+          title={settling ? "Waiting for services to settle…" : live ? "Stop services" : "Start services"}
           onClick={(e) => {
             e.stopPropagation();
+            if (settling) return;
             onToggleServices();
           }}
         >

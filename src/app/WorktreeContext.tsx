@@ -72,6 +72,13 @@ function load(key: string): WtContext {
   return EMPTY;
 }
 
+/** Read a worktree's context outside React. Launches use this rather than a
+    hook snapshot: `useWtContext` is per-caller state, so an edit in the
+    context editor would not be visible to a launcher holding its own copy. */
+export function readWtContext(wtKey: string): WtContext {
+  return load(`canopy.ctx.${wtKey}`);
+}
+
 /** Load/save a worktree's context, reloading when the selected worktree changes. */
 export function useWtContext(wtKey: string): [WtContext, (c: WtContext) => void] {
   const key = `canopy.ctx.${wtKey}`;

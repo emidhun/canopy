@@ -176,7 +176,9 @@
   --h-control: 28px;
   --h-control-sm: 22px;
   --h-control-xs: 24px; /* topbar controls, service chips, crumb */
-  --h-input: 32px;
+  /* Both screens draw form inputs at 30px; .cx-input was this token's only
+     consumer, so the token was the outlier rather than the usage. */
+  --h-input: 30px;
   --h-logtool: 30px; /* log filter toolbar */
   --h-session: 20px; /* session chip in a pane's tab strip */
   --h-quickact: 19px; /* sidebar row hover action */
@@ -185,6 +187,11 @@
   --h-ib-tab: 21px; /* icon button inside a pane tab strip */
   --h-ib-tool: 22px; /* icon button inside a toolbar */
   --h-ib: 26px; /* the standard icon button, and segmented-control segments */
+  --h-divider: 16px; /* the topbar's vertical hairline */
+  --sz-attn-ic: 20px; /* the attention row's icon tile */
+  --sz-svc-act: 16px; /* the start/stop affordance inside a service chip */
+  --h-divider-sm: 15px; /* the worktree bar's shorter hairline */
+  --w-branch-min: 44px; /* the branch headline never ellipses below this */
 
   /* status dots — 6px reads only because of the halo; 5px is the inline
      variant used inside rows and tables where a halo would crowd. */
@@ -193,8 +200,12 @@
 
   --w-sidebar: 238px;
   --w-sidebar-narrow: 210px; /* below the 1180px breakpoint */
+  /* Declared by the handoff's layout.css but referenced by none of its
+     screens. Carried for token parity; nothing consumes it yet. */
+  --w-rail-collapsed: 52px;
 
   /* floating-surface widths */
+  --w-command: 360px; /* the ⌘K field's track in the topbar grid */
   --w-palette: 592px;
   --w-pullpop: 346px;
   --w-attnpop: 306px;
