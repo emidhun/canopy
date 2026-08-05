@@ -93,6 +93,28 @@ impl Drop for OpLease {
     }
 }
 
+/// Release everything runtime-side that belongs to a removed worktree: its
+/// port index (so the slot is reclaimed and derived ports stop creeping up),
+/// its port overrides, its statuses, and its in-memory log buffers. Persists
+/// the runtime file. Idempotent.
+pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
+    let state = app.state::<AppState>();
+    let prefix = format!("{wt_key}::");
+    let runtime = {
+        let mut rt = state.runtime.write();
+        if let Some(map) = rt.port_indices.get_mut(repo_id) {
+            map.remove(wt_key);
+        }
+        rt.port_overrides.retain(|k, _| !k.starts_with(&prefix));
+        rt.clone()
+    };
+    let _ = crate::settings::save_runtime(app, &runtime);
+    state.statuses.write().retain(|k, _| !k.starts_with(&prefix));
+    if let Some(table) = app.try_state::<crate::services::ProcTable>() {
+        table.logs.lock().retain(|k, _| !k.starts_with(&prefix));
+    }
+}
+
 /// Take the operation lease for `wt_key`, or fail with a conflict naming the
 /// operation already running.
 pub fn try_lease(app: &AppHandle, wt_key: &str, op: &'static str) -> Result<OpLease, crate::error::CanopyError> {

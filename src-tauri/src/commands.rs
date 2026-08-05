@@ -181,6 +181,23 @@ pub async fn detect_repo(path: String) -> Result<RepoDetection, CanopyError> {
 
 #[tauri::command]
 pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyError> {
+    // Deregistering a repo must not leave its dev servers running untracked
+    // or its runtime state (port indices/overrides, statuses, logs) behind.
+    let wt_keys: Vec<String> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        tree.iter()
+            .filter(|r| r.repo_id == repo_id)
+            .flat_map(|r| r.worktrees.iter().map(|w| w.wt_key.clone()))
+            .collect()
+    };
+    for wt in &wt_keys {
+        for key in services::worktree_svc_keys(&app, wt) {
+            let _ = services::stop_service(&app, &key).await;
+        }
+        terminal::close_worktree(&app, &app.state::<TermTable>(), wt);
+    }
+
     let updated = {
         let state = app.state::<AppState>();
         let mut s = state.settings.write();
@@ -188,6 +205,20 @@ pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyEr
         s.clone()
     };
     settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
+
+    for wt in &wt_keys {
+        crate::state::release_worktree_runtime(&app, &repo_id, wt);
+    }
+    // drop the repo's whole port-index map (covers worktrees no longer listed)
+    {
+        let state = app.state::<AppState>();
+        let runtime = {
+            let mut rt = state.runtime.write();
+            rt.port_indices.remove(&repo_id);
+            rt.clone()
+        };
+        let _ = settings::save_runtime(&app, &runtime);
+    }
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     Ok(())
 }
@@ -802,6 +833,10 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
     emit_op(&app, &wt_key, "remove", "progress", "removing worktree…");
     match git::remove_worktree(&repo_path, &wt_key, Some(&branch), delete_branch).await {
         Ok(()) => {
+            // reclaim the port index + overrides + statuses + log buffers —
+            // without this, months of worktree churn leak indices and derived
+            // ports creep permanently upward
+            crate::state::release_worktree_runtime(&app, &repo_id, &wt_key);
             emit_op(&app, &wt_key, "remove", "done", "worktree removed");
             refresh_tree(&app).await.map_err(CanopyError::internal)?;
             Ok(())
