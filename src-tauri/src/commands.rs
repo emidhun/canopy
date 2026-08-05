@@ -856,13 +856,42 @@ pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) 
 
 #[tauri::command]
 pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    // quiesce: a live connection pool holds locks against --clean drops and
+    // can observe (or block) a half-restored schema. Stop the worktree's
+    // running services, restore, then bring the same ones back.
+    let mut was_running: Vec<String> = Vec::new();
+    for key in services::worktree_svc_keys(&app, &wt_key) {
+        if is_running(&app, &key) {
+            was_running.push(key.clone());
+            let _ = services::stop_service(&app, &key).await;
+        }
+    }
     let app2 = app.clone();
     let wt2 = wt_key.clone();
-    crate::db::restore_database(&wt_key, &file_path, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line))
-        .await
-        .map_err(CanopyError::db)?;
-    emit_op(&app, &wt_key, "snapshot", "done", "restore complete");
-    Ok(())
+    let restore = crate::db::restore_database(&wt_key, &file_path, move |line| {
+        emit_op(&app2, &wt2, "snapshot", "progress", line)
+    })
+    .await;
+
+    // restart what we stopped, whether or not the restore succeeded — the
+    // worktree shouldn't be left dead because a dump file was bad
+    let mut restart_errors: Vec<String> = Vec::new();
+    for key in &was_running {
+        if let Err(e) = services::restart_service(&app, key).await {
+            restart_errors.push(format!("{key}: {e}"));
+        }
+    }
+
+    restore.map_err(CanopyError::db)?;
+    if restart_errors.is_empty() {
+        emit_op(&app, &wt_key, "snapshot", "done", "restore complete");
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!(
+            "restore complete, but restart failed — {}",
+            restart_errors.join("; ")
+        )))
+    }
 }
 
 #[tauri::command]

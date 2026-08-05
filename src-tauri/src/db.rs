@@ -150,9 +150,13 @@ pub async fn clone_database(wt_path: &str, target: &str, mut progress: impl FnMu
     run(wt_path, &c, &format!("createdb {conn_args} {}", q(target))).await?;
     progress(format!("copying {} → {target}…", c.db));
     // custom-format dump piped straight into restore, using binaries matching the
-    // server version so directives/archive format stay compatible on restore
+    // server version so directives/archive format stay compatible on restore.
+    // pipefail: a pipeline's status is otherwise the LAST command's — a failed
+    // pg_dump feeding a tolerant pg_restore would report a truncated copy as ok.
+    // (`|| true` keeps plain sh/dash working, where pipefail doesn't exist —
+    // those shells just keep the old last-command semantics.)
     let line = format!(
-        "{pre}pg_dump {conn_args} -Fc {src} | pg_restore {conn_args} --no-owner --no-acl -d {dst}",
+        "{{ set -o pipefail; }} 2>/dev/null || true; {pre}pg_dump {conn_args} -Fc {src} | pg_restore {conn_args} --no-owner --no-acl -d {dst}",
         pre = pg_path_prefix_for(server_major(wt_path, &c).await),
         src = q(&c.db),
         dst = q(target),
@@ -182,7 +186,9 @@ pub async fn restore_database(wt_path: &str, file_path: &str, mut progress: impl
     let pre = pg_path_prefix_for(server_major(wt_path, &c).await);
     progress(format!("restoring {} from file…", c.db));
     let line = if file_path.to_lowercase().ends_with(".sql") {
-        format!("{pre}psql {conn_args} -d {db} -v ON_ERROR_STOP=0 -f {f}", db = q(&c.db), f = q(file_path))
+        // ON_ERROR_STOP=1: without it psql runs the whole script regardless of
+        // failures and exits 0 — a half-restored database reported as success.
+        format!("{pre}psql {conn_args} -d {db} -v ON_ERROR_STOP=1 -f {f}", db = q(&c.db), f = q(file_path))
     } else {
         format!(
             "{pre}pg_restore {conn_args} --no-owner --no-acl --clean --if-exists -d {db} {f}",
