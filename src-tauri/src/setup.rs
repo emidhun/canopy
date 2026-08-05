@@ -625,26 +625,40 @@ async fn run_commands(
                 last_emit = std::time::Instant::now();
             }
         };
-        let (mut out_done, mut err_done) = (false, false);
-        while !(out_done && err_done) {
-            tokio::select! {
-                l = out_lines.next_line(), if !out_done => match l {
-                    Ok(Some(line)) => emit(&line, progress),
-                    _ => out_done = true,
-                },
-                l = err_lines.next_line(), if !err_done => match l {
-                    Ok(Some(line)) => {
-                        stderr_tail.push_back(line.clone());
-                        if stderr_tail.len() > 64 {
-                            stderr_tail.pop_front();
+        // hard ceiling per command: npm installs legitimately run long, but a
+        // command stuck on a dead registry or waiting for input it can never
+        // get (stdin is null) must not hang setup forever.
+        const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+        let run_fut = async {
+            let (mut out_done, mut err_done) = (false, false);
+            while !(out_done && err_done) {
+                tokio::select! {
+                    l = out_lines.next_line(), if !out_done => match l {
+                        Ok(Some(line)) => emit(&line, progress),
+                        _ => out_done = true,
+                    },
+                    l = err_lines.next_line(), if !err_done => match l {
+                        Ok(Some(line)) => {
+                            stderr_tail.push_back(line.clone());
+                            if stderr_tail.len() > 64 {
+                                stderr_tail.pop_front();
+                            }
+                            emit(&line, progress);
                         }
-                        emit(&line, progress);
-                    }
-                    _ => err_done = true,
-                },
+                        _ => err_done = true,
+                    },
+                }
             }
-        }
-        let status = child.wait().await.map_err(|e| format!("{label} wait failed: {e}"))?;
+            child.wait().await
+        };
+        let status = match tokio::time::timeout(STEP_TIMEOUT, run_fut).await {
+            Ok(res) => res.map_err(|e| format!("{label} wait failed: {e}"))?,
+            Err(_) => {
+                // kills the shell; its own children get EOF on the shared pipes
+                let _ = child.kill().await;
+                return Err(format!("{label} step timed out after {}min: {cmd}", STEP_TIMEOUT.as_secs() / 60));
+            }
+        };
         if !status.success() {
             // surface the first real error line plus the tail, so messages like
             // "Cannot find module" aren't buried under a stack.

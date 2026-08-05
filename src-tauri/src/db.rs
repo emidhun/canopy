@@ -50,15 +50,22 @@ impl PgConn {
     }
 }
 
+/// Cap for one Postgres CLI invocation — dumps/restores of big databases take
+/// a while, but a hung server must not wedge the command forever.
+const PG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
 /// Run a shell command line in the worktree dir with PGPASSWORD set.
 async fn run(wt_path: &str, c: &PgConn, cmdline: &str) -> Result<String, String> {
     let (shell, shargs) = crate::toolchain::shell_argv(cmdline);
     let mut cmd = Command::new(shell);
-    cmd.args(&shargs).current_dir(wt_path);
+    cmd.args(&shargs).current_dir(wt_path).kill_on_drop(true);
     if let Some(p) = &c.pass {
         cmd.env("PGPASSWORD", p);
     }
-    let out = cmd.output().await.map_err(|e| format!("failed to run: {e}"))?;
+    let out = match tokio::time::timeout(PG_TIMEOUT, cmd.output()).await {
+        Ok(res) => res.map_err(|e| format!("failed to run: {e}"))?,
+        Err(_) => return Err(format!("database command timed out after {}s", PG_TIMEOUT.as_secs())),
+    };
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {

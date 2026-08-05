@@ -1,14 +1,40 @@
 use serde::Serialize;
+use std::time::Duration;
 use tokio::process::Command;
 
+/// Local git operations (status, rev-parse, checkout…). Generous — a checkout
+/// on a huge repo takes time — but bounded: an unresponsive git (dead network
+/// mount, wedged index.lock) must not hang a command forever.
+const GIT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Network operations (fetch, pull, submodule clone/update) get longer.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(900);
+
 pub async fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    run_git_with_timeout(cwd, args, GIT_TIMEOUT).await
+}
+
+/// For fetch/pull/submodule-transfer calls — same semantics, longer leash.
+async fn run_git_net(cwd: &str, args: &[&str]) -> Result<String, String> {
+    run_git_with_timeout(cwd, args, GIT_NETWORK_TIMEOUT).await
+}
+
+async fn run_git_with_timeout(cwd: &str, args: &[&str], dur: Duration) -> Result<String, String> {
+    let fut = Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("failed to run git: {e}"))?;
+        .kill_on_drop(true) // a timed-out git must not linger
+        .output();
+    let out = match tokio::time::timeout(dur, fut).await {
+        Ok(res) => res.map_err(|e| format!("failed to run git: {e}"))?,
+        Err(_) => {
+            return Err(format!(
+                "git {} timed out after {}s",
+                args.first().copied().unwrap_or(""),
+                dur.as_secs()
+            ))
+        }
+    };
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -144,7 +170,7 @@ pub async fn pull(wt_path: &str) -> Result<String, String> {
     // Superproject fast-forward. A worktree branch with no upstream (or a
     // non-ff remote) shouldn't block pulling submodules that DO track a branch,
     // so this failure is soft — recorded, then we still update submodules.
-    let super_res = run_git(wt_path, &["pull", "--ff-only"]).await;
+    let super_res = run_git_net(wt_path, &["pull", "--ff-only"]).await;
 
     let mods = submodule_entries(wt_path).await;
     if mods.is_empty() {
@@ -171,16 +197,16 @@ pub async fn pull(wt_path: &str) -> Result<String, String> {
         // -c protocol.file.allow=always: submodules with local/relative URLs
         // would otherwise be blocked by git's file-protocol default
         let result = if on_branch {
-            run_git(&sm_path, &["pull", "--ff-only"]).await.map(|_| pulled += 1)
+            run_git_net(&sm_path, &["pull", "--ff-only"]).await.map(|_| pulled += 1)
         } else if tracks_branch {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--remote", "--recursive", "--", sm],
             )
             .await
             .map(|_| pulled += 1)
         } else {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
             )
@@ -325,17 +351,17 @@ pub async fn pull_submodule(wt_path: &str, sm: &str) -> Result<String, String> {
     .unwrap_or(false);
 
     if on_branch {
-        run_git(&sm_path, &["pull", "--ff-only"]).await?;
+        run_git_net(&sm_path, &["pull", "--ff-only"]).await?;
         Ok("pulled".into())
     } else if tracks_branch {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--remote", "--recursive", "--", sm],
         )
         .await?;
         Ok("pulled".into())
     } else {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
         )
@@ -406,7 +432,7 @@ pub async fn switch_branch(wt_path: &str, branch: &str, create: bool, base: Opti
     // sync submodules to the new branch's pins (no-op when there are none).
     // The branch HAS switched at this point, so a sync failure says so.
     if !submodule_entries(wt_path).await.is_empty() {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"],
         )
@@ -422,7 +448,7 @@ pub async fn fetch_submodules(wt_path: &str) -> usize {
     let mut n = 0usize;
     for (_name, sm) in submodule_entries(wt_path).await {
         let sm_path = format!("{wt_path}/{sm}");
-        if run_git(&sm_path, &["fetch", "--prune"]).await.is_ok() {
+        if run_git_net(&sm_path, &["fetch", "--prune"]).await.is_ok() {
             n += 1;
         }
     }
@@ -440,7 +466,7 @@ pub struct Branches {
 /// `git fetch --all --prune` to refresh remote-tracking branches, recursing
 /// into submodules so their objects are fetched too.
 pub async fn fetch_all(repo_path: &str) -> Result<(), String> {
-    run_git(repo_path, &["fetch", "--all", "--prune", "--recurse-submodules"])
+    run_git_net(repo_path, &["fetch", "--all", "--prune", "--recurse-submodules"])
         .await
         .map(|_| ())
 }
@@ -544,7 +570,7 @@ pub async fn create_worktree(
         // -c protocol.file.allow=always: submodules with relative/local URLs
         // would otherwise be blocked by git's file-protocol default
         let result = if with_ref {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--reference", &reference, "--", sm],
             )
@@ -554,7 +580,7 @@ pub async fn create_worktree(
         };
         if result.is_err() {
             progress(format!("submodule {sm}: falling back to full clone"));
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
             )
