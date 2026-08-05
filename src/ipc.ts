@@ -154,7 +154,7 @@ export const ipc = {
   createWorktree: (args: { repoId: string; branch: string; base?: string; createBranch: boolean }) =>
     invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
   runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),
-  worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[] }>("worktree_dirty_report", { wtKey }),
+  worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
 };

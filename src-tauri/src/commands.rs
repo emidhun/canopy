@@ -749,8 +749,8 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
 }
 
 #[tauri::command]
-pub async fn worktree_dirty_report(wt_key: String) -> git::DirtyReport {
-    git::dirty_report(&wt_key).await
+pub async fn worktree_dirty_report(wt_key: String) -> Result<git::DirtyReport, CanopyError> {
+    git::dirty_report(&wt_key).await.map_err(CanopyError::git)
 }
 
 #[tauri::command]

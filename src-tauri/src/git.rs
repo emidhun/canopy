@@ -568,18 +568,23 @@ pub async fn create_worktree(
 #[serde(rename_all = "camelCase")]
 pub struct DirtyReport {
     pub dirty: bool,
+    /// first entries only (see `total` for the full count)
     pub details: Vec<String>,
+    /// total changed paths — `details` is capped for display
+    pub total: usize,
 }
 
-/// Dirty check covering the worktree AND its submodules.
-pub async fn dirty_report(wt_path: &str) -> DirtyReport {
-    let mut details = Vec::new();
-    if let Ok(out) = run_git(wt_path, &["status", "--porcelain", "--ignore-submodules=none"]).await {
-        for l in out.lines().take(10) {
-            details.push(l.to_string());
-        }
-    }
-    DirtyReport { dirty: !details.is_empty(), details }
+/// Dirty check covering the worktree AND its submodules. A failed `git status`
+/// (index.lock held, corrupt repo, permissions) is an ERROR, never "clean" —
+/// this report is what arms a `worktree remove --force`.
+pub async fn dirty_report(wt_path: &str) -> Result<DirtyReport, String> {
+    let out = run_git(wt_path, &["status", "--porcelain", "--ignore-submodules=none"]).await?;
+    let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+    Ok(DirtyReport {
+        dirty: !lines.is_empty(),
+        details: lines.iter().take(10).map(|l| l.to_string()).collect(),
+        total: lines.len(),
+    })
 }
 
 /// Remove a worktree. `--force` is required for any worktree containing

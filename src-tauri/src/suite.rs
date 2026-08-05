@@ -240,8 +240,10 @@ pub fn run(app: AppHandle, repo_id: String) {
 
         // ── Case 7: dirty report on the main checkout ──
         if let Some((wt_key, branch, _, _)) = worktrees.first() {
-            let report = crate::git::dirty_report(wt_key).await;
-            pass("dirty-report", format!("{branch}: dirty={} ({} entries)", report.dirty, report.details.len()));
+            match crate::git::dirty_report(wt_key).await {
+                Ok(report) => pass("dirty-report", format!("{branch}: dirty={} ({} of {} shown)", report.dirty, report.details.len(), report.total)),
+                Err(e) => fail("dirty-report", format!("{branch}: {e}")),
+            }
         }
 
         // ── Case 8 (WTM_SUITE_FULL=1): the user's exact path —
