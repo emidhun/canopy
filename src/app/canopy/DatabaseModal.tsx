@@ -6,7 +6,7 @@
    tense and unremarkable: "Snapshot … created", "Now using tj_main". */
 import { useEffect, useState } from "react";
 import { Database, Download, Info, Refresh, Restart, Pull } from "../../icons";
-import { hasBackend, ipc } from "../../ipc";
+import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer } from "./Modal";
@@ -42,7 +42,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
       setCurrent(name);
       showToast(`Now using ${name}`);
     } catch (e) {
-      showToast(String(e));
+      showToast(errText(e));
     } finally {
       setBusy(false);
     }
@@ -75,7 +75,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
                   showToast(`Snapshot ${snap.trim()} created`);
                   setSnap(null);
                 } catch (e) {
-                  showToast(String(e));
+                  showToast(errText(e));
                 } finally {
                   setBusy(false);
                 }
@@ -124,7 +124,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
                 showToast("Running migration…");
                 onClose();
               } catch (e) {
-                showToast(String(e));
+                showToast(errText(e));
               }
             }}
           >
@@ -181,7 +181,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
               showToast(`Exported ${current}`);
               onClose();
             } catch (e) {
-              showToast(String(e));
+              showToast(errText(e));
             }
           }}
         >
@@ -203,7 +203,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
               showToast(`Restoring ${current} from file…`);
               onClose();
             } catch (e) {
-              showToast(String(e));
+              showToast(errText(e));
             }
           }}
         >

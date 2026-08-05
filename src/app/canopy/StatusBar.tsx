@@ -5,7 +5,7 @@
    per-submodule control. Anchored to the control that opened it, not centred. */
 import { useEffect, useRef, useState } from "react";
 import { Bell, Chevron, Fork, Info, Pull, Search, Single, Sparkle, Split, Spinner } from "../../icons";
-import { hasBackend, ipc, type Branches } from "../../ipc";
+import { errText, hasBackend, ipc, type Branches } from "../../ipc";
 import { useStore, type LaneSession } from "../../store";
 import type { SubmoduleStatus, WorktreeNode } from "../../types";
 import { fmtRelTime } from "../../types";
@@ -193,7 +193,7 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
         showToast(`✓ ${summary} — ${wt.branch}`);
         reload();
       })
-      .catch((e) => showToast(`Pull failed — ${String(e)}`))
+      .catch((e) => showToast(`Pull failed — ${errText(e)}`))
       .finally(() => setBusy(null));
   }
 
@@ -206,7 +206,7 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
         showToast(`✓ ${sub.name} — ${r}`);
         reload();
       })
-      .catch((e) => showToast(`Pull failed — ${String(e)}`))
+      .catch((e) => showToast(`Pull failed — ${errText(e)}`))
       .finally(() => setBusy(null));
   }
 
@@ -219,7 +219,7 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
         showToast(`✓ ${sub.name} → ${branch} · parent now shows this submodule modified`);
         reload();
       })
-      .catch((e) => showToast(`Switch failed — ${String(e)}`));
+      .catch((e) => showToast(`Switch failed — ${errText(e)}`));
   }
 
   return (

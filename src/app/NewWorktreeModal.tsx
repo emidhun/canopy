@@ -7,7 +7,7 @@
    it seeds .canopy/context.md and later becomes the PR body. */
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
+import { errText, hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
 import { useStore } from "../store";
 import { Alert, ChevRight, Fork, Info, Plus, Refresh, Spinner } from "../icons";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
@@ -102,7 +102,7 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       setBranches(b);
       showToast(`Fetched — ${b.local.length} local, ${b.remote.length} remote, ${b.tags.length} tags`);
     } catch (e) {
-      setError(`Fetch failed — ${String(e)}`);
+      setError(`Fetch failed — ${errText(e)}`);
     } finally {
       setFetching(false);
     }
@@ -148,7 +148,7 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       select(wtPath);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

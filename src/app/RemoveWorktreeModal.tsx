@@ -5,7 +5,7 @@
    branch name is typed back, because the cost here is unrecoverable work in
    private submodule clones, not just a directory. */
 import { useEffect, useState } from "react";
-import { hasBackend, ipc } from "../ipc";
+import { errText, hasBackend, ipc } from "../ipc";
 import { useStore } from "../store";
 import type { WorktreeNode } from "../types";
 import { Alert, Info, Spinner, Trash } from "../icons";
@@ -41,7 +41,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       })
       .catch((e) => {
         setReport(null);
-        setProbeError(String(e));
+        setProbeError(errText(e));
       });
   }, [wt.wtKey]);
 
@@ -60,7 +60,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       showToast(`Worktree removed — ${wt.branch}`);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

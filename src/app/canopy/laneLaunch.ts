@@ -13,7 +13,7 @@
    the context editor saved. Both are avoided by resolving the repo, worktree,
    agent profile and context at call time. */
 import { useCallback, useEffect, useState } from "react";
-import { hasBackend, ipc, type AgentCfg } from "../../ipc";
+import { errText, hasBackend, ipc, type AgentCfg } from "../../ipc";
 import { nextTermId, useStore } from "../../store";
 import type { RepoNode, WorktreeNode } from "../../types";
 import { composeAgentPrompt, composeContextMd, readWtContext, runtimeFor } from "../WorktreeContext";
@@ -109,7 +109,7 @@ export function useLaneLaunch(defaultRepo: RepoNode, defaultWt: WorktreeNode): L
         openSession({ id, wtKey: wt.wtKey, kind: "agent", title, agentId: profile.id, command });
         showToast(`${title} started — ${wt.branch}`);
       } catch (e) {
-        showToast(`Agent start failed — ${String(e)}`);
+        showToast(`Agent start failed — ${errText(e)}`);
       }
     },
     [agents, defaultRepo, defaultWt, openSession, profilesFor, showToast, uniqueTitle],

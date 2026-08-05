@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod error;
 mod git;
 mod proc;
 mod services;

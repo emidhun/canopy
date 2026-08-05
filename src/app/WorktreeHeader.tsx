@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { hasBackend, ipc, type CustomCmd } from "../ipc";
+import { errText, hasBackend, ipc, type CustomCmd } from "../ipc";
 import { useStore } from "../store";
 import type { RepoNode, SubmoduleStatus, WorktreeNode } from "../types";
 import { fmtRelTime, isLive } from "../types";
@@ -147,7 +147,7 @@ export default function WorktreeHeader({
       await ipc.runCustomCommand(wt.wtKey, cc.command);
       showToast(`${cc.label} finished — ${wt.branch}`);
     } catch (e) {
-      showToast(`${cc.label} failed — ${String(e)}`);
+      showToast(`${cc.label} failed — ${errText(e)}`);
     } finally {
       setBusyCmd(null);
     }
@@ -161,7 +161,7 @@ export default function WorktreeHeader({
       await ipc.runWorktreeSetup(wt.wtKey);
       showToast(`Setup complete — ${wt.branch}`);
     } catch (e) {
-      showToast(`Setup failed — ${String(e)}`);
+      showToast(`Setup failed — ${errText(e)}`);
     } finally {
       setSetupBusy(false);
     }
@@ -182,7 +182,7 @@ export default function WorktreeHeader({
         showToast(`✓ ${summary} — ${wt.branch}`);
         reloadSubs();
       })
-      .catch((e) => showToast(`Pull failed — ${String(e)}`))
+      .catch((e) => showToast(`Pull failed — ${errText(e)}`))
       .finally(() => setPulling(null));
   }
 
@@ -197,7 +197,7 @@ export default function WorktreeHeader({
         showToast(`✓ ${sub?.name ?? path} — ${r}`);
         reloadSubs();
       })
-      .catch((e) => showToast(`Pull failed — ${String(e)}`))
+      .catch((e) => showToast(`Pull failed — ${errText(e)}`))
       .finally(() => setPulling(null));
   }
 
@@ -211,7 +211,7 @@ export default function WorktreeHeader({
         showToast(`✓ ${sub?.name ?? path} → ${branch} · parent now shows this submodule modified`);
         reloadSubs();
       })
-      .catch((e) => showToast(`Switch failed — ${String(e)}`));
+      .catch((e) => showToast(`Switch failed — ${errText(e)}`));
   }
 
   function refetch() {
@@ -223,7 +223,7 @@ export default function WorktreeHeader({
         showToast(`✓ Fetched ${n} submodule${n === 1 ? "" : "s"}`);
         reloadSubs();
       })
-      .catch((e) => showToast(`Fetch failed — ${String(e)}`));
+      .catch((e) => showToast(`Fetch failed — ${errText(e)}`));
   }
 
   const anyRunning = wt.services.some((s) => isLive(s.status));

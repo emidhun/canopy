@@ -223,5 +223,39 @@ export const on = {
     listen<TerminalExitEvent>("terminal:exit", (e) => cb(e.payload)),
 };
 
+/** Structured backend error — every command rejects with `{ code, message }`. */
+export interface BackendError {
+  code:
+    | "git"
+    | "db"
+    | "setup"
+    | "process"
+    | "terminal"
+    | "config"
+    | "not_found"
+    | "invalid_input"
+    | "conflict"
+    | "internal";
+  message: string;
+}
+
+/** Human-readable message from any rejection (structured backend error, plain
+ * string from a plugin, or an Error). Use instead of `String(e)`. */
+export function errText(e: unknown): string {
+  if (e && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    if (typeof o.message === "string") return o.message;
+  }
+  return String(e);
+}
+
+/** The backend error code, when the rejection carries one. */
+export function errCode(e: unknown): BackendError["code"] | null {
+  if (e && typeof e === "object" && typeof (e as Record<string, unknown>).code === "string") {
+    return (e as BackendError).code;
+  }
+  return null;
+}
+
 /** True when running inside the Tauri webview (false in a plain browser tab). */
 export const hasBackend = () => "__TAURI_INTERNALS__" in window;

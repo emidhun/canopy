@@ -6,7 +6,7 @@
    that fixes it stays teal, because restarting is constructive. */
 import { useMemo, useState } from "react";
 import { Alert, Info, Restart, Server, Stop } from "../../icons";
-import { hasBackend, ipc } from "../../ipc";
+import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import { fmtUptime, type ServiceNode, type WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer } from "./Modal";
@@ -72,7 +72,7 @@ export default function ServiceDetailModal({
         await ipc.setServicePort(svcKey, Number(port));
         showToast(`${svc?.name} port → ${port}`);
       } catch (e) {
-        showToast(String(e));
+        showToast(errText(e));
         return;
       }
     } else {

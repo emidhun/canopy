@@ -10,7 +10,7 @@ import { Terminal, type IBufferLine, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { hasBackend, ipc, on } from "../ipc";
+import { errText, hasBackend, ipc, on } from "../ipc";
 import { useStore } from "../store";
 
 /** Open a URL in the user's browser (never in the app's own webview). */
@@ -117,7 +117,7 @@ export default function TerminalPane({
       // would read as output from the process and pollute copied scrollback
       new WebLinksAddon((event, uri) => {
         event?.preventDefault();
-        openExternal(uri).catch((e) => useStore.getState().showToast(`Couldn't open link — ${String(e)}`));
+        openExternal(uri).catch((e) => useStore.getState().showToast(`Couldn't open link — ${errText(e)}`));
       }),
     );
 
@@ -142,7 +142,7 @@ export default function TerminalPane({
               event?.preventDefault();
               // the :line:col tail is dropped — the editor command takes a path
               ipc.openFileInEditor(cwd, path).catch((e) => {
-                useStore.getState().showToast(`Couldn't open ${path} — ${String(e)}`);
+                useStore.getState().showToast(`Couldn't open ${path} — ${errText(e)}`);
               });
             },
           });
@@ -229,7 +229,7 @@ export default function TerminalPane({
         pending.length = 0;
         hydrated = true;
       } catch (err) {
-        termRef.current?.write(`\r\n\x1b[31mterminal error: ${String(err)}\x1b[0m\r\n`);
+        termRef.current?.write(`\r\n\x1b[31mterminal error: ${errText(err)}\x1b[0m\r\n`);
       }
     })();
 
