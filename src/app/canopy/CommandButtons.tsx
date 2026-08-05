@@ -20,7 +20,10 @@ type Grouped = CustomCmd & { group?: string };
 
 export default function CommandButtons({ wt }: { wt: WorktreeNode }) {
   const [open, setOpen] = useState(false);
-  const [cmds, setCmds] = useState<CustomCmd[]>([]);
+  // commands are stored WITH the repo id they were loaded for; a repo switch
+  // then derives [] on the SAME render (not a frame later via an effect), so a
+  // stale command can never be shown or run against the newly selected worktree
+  const [loaded, setLoaded] = useState<{ repoId: string | undefined; list: CustomCmd[] }>({ repoId: undefined, list: [] });
   // the shell-side op buffer is shared per worktree, so only one custom command
   // may run at a time — a second would interleave output and its completion
   // would flip the worktree to idle while the first is still running
@@ -34,31 +37,32 @@ export default function CommandButtons({ wt }: { wt: WorktreeNode }) {
   // when the owning repo actually changes.
   const repoId = useStore((s) => s.tree.find((r) => r.worktrees.some((w) => w.wtKey === wt.wtKey))?.repoId);
 
-  // WorktreeView is reused (no key) across repo switches, so drop the previous
-  // repo's commands and close the menu the instant the repo changes — otherwise
-  // a stale command could briefly show and be run against the new worktree
+  // only trust the loaded list when it belongs to the current repo
+  const cmds = loaded.repoId === repoId ? loaded.list : [];
+
+  // WorktreeView is reused (no key) across repo switches; close any open menu
+  // when the repo changes (the stale list is already gated out by `cmds` above)
   useEffect(() => {
-    setCmds([]);
     setOpen(false);
   }, [repoId]);
 
   // per-repo commands; reload when settings are saved
   useEffect(() => {
     if (!hasBackend()) {
-      setCmds(mockCustomCommands());
+      setLoaded({ repoId, list: mockCustomCommands() });
       return;
     }
     if (!repoId) {
-      setCmds([]);
+      setLoaded({ repoId, list: [] });
       return;
     }
     let alive = true;
     ipc
       .getSettings()
       .then((s) => {
-        if (alive) setCmds(s.repos.find((r) => r.id === repoId)?.customCommands ?? []);
+        if (alive) setLoaded({ repoId, list: s.repos.find((r) => r.id === repoId)?.customCommands ?? [] });
       })
-      .catch(() => alive && setCmds([]));
+      .catch(() => alive && setLoaded({ repoId, list: [] }));
     return () => {
       alive = false;
     };
@@ -92,6 +96,10 @@ export default function CommandButtons({ wt }: { wt: WorktreeNode }) {
 
   const run = (c: CustomCmd) => {
     if (busy) return;
+    // activating a popover row unmounts the focused button; hand focus back to
+    // the trigger so keyboard users aren't dropped onto <body> (run1 clicks
+    // leave the popover closed, so this only fires for menu rows)
+    if (open) trigger.current?.focus();
     setOpen(false);
     if (!hasBackend()) {
       showToast(`Running ${c.label} — ${wt.branch}`);
@@ -130,7 +138,6 @@ export default function CommandButtons({ wt }: { wt: WorktreeNode }) {
             title="Custom commands"
             onClick={() => setOpen((o) => !o)}
             disabled={busy}
-            aria-haspopup="true"
             aria-expanded={open}
           >
             <Play size={10} />
