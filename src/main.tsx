@@ -11,6 +11,7 @@ import "./styles/terminal.css";
 import "./styles/canopy-components.css";
 import "./styles/canopy-shell.css";
 import "./styles/canopy-modals.css";
+import "./styles/canopy-settings.css";
 
 applyPlatformClass();
 

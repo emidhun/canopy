@@ -1,324 +1,915 @@
-// Settings — repo-nav + tabbed repo-detail layout (design: "Canopy New Features").
-// Left rail selects the Application (global) settings or a repository; the repo
-// detail splits into General / Services / Commands / Files / Setup tabs. The
-// Files tab is the new "Files to provision" UI backed by .worktreemanager.json.
-import { useEffect, useRef, useState } from "react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import {
-  hasBackend,
-  ipc,
-  type ProvisionEntry,
-  type ProvisionFormat,
-  type AgentCfg,
-  type RepoCfg,
-  type ServiceCfg,
-  type Settings,
-} from "../ipc";
+// Settings — the redesigned configuration editors (design: Canopy Settings.html).
+//
+// ONE navigation list: platform pages, the repository picker acting as the
+// scope divider, then that repo's pages — nothing named twice. ⌘F searches
+// every setting and jumps to it; ⌘P opens the .worktreemanager.json preview as
+// a peer panel; unsaved changes are named per section in the nav and the bar.
+//
+// Backend honesty (design-build): pages with real wiring persist through
+// getSettings/saveSettings (Repository, Services, Agents, Commands) and
+// getRepoConfig/saveRepoConfig (Files, Setup). Pages with no backend today
+// (Appearance, Terminal shell, Notifications, Advanced, Security) render a
+// "coming soon" banner with disabled controls rather than fake ones. Shortcuts
+// is a static reference of the real keybindings.
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
-import { Braces, Cube, Database, Download, File, Fork, Plus, Server, Settings as Cog, Sparkle, Terminal, Upload } from "../icons";
+import {
+  Bell, Braces, Check, ChevRight, Chevron, Copy, Cube, Doc, Fork, Keyboard,
+  Play, Plus, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
+  Spinner, Terminal, Trash, X,
+} from "../icons";
 
-const KINDS = ["web", "server", "worker"];
-const FORMATS: { id: ProvisionFormat; label: string }[] = [
-  { id: "dotenv", label: "dotenv" },
-  { id: "json", label: "json" },
-  { id: "yaml", label: "yaml" },
-  { id: "text", label: "text" },
+/* icons don't accept `style`; wrap when a glyph needs rotating */
+const Rot = ({ children, deg }: { children: React.ReactNode; deg: number }) => (
+  <span style={{ display: "inline-flex", transform: `rotate(${deg}deg)` }}>{children}</span>
+);
+
+type IconC = ComponentType<{ size?: number }>;
+const ICONS: Record<string, IconC> = {
+  sliders: Sliders, terminal: Terminal, bell: Bell, keyboard: Keyboard, cube: Cube, fork: Fork,
+  server: Server, sparkle: Sparkle, code: Braces, doc: Doc, shield: Shield, settings: Cog,
+};
+
+type PageId =
+  | "general" | "terminal" | "notifications" | "shortcuts" | "advanced"
+  | "repo-general" | "services" | "agents" | "commands" | "files" | "setup" | "security";
+
+type PageMeta = { id: PageId; ic: string; label: string; desc: string; title: string; blurb: string };
+
+const PLATFORM: PageMeta[] = [
+  { id: "general", ic: "sliders", label: "General", desc: "Appearance and behaviour", title: "General", blurb: "How Canopy looks and what it does on launch." },
+  { id: "terminal", ic: "terminal", label: "Terminal", desc: "Shell, font, env", title: "Terminal", blurb: "The shell Canopy opens inside a worktree, and what it inherits." },
+  { id: "notifications", ic: "bell", label: "Notifications", desc: "What interrupts you", title: "Notifications", blurb: "Canopy only interrupts you for things that need a decision." },
+  { id: "shortcuts", ic: "keyboard", label: "Shortcuts", desc: "Keyboard map", title: "Keyboard shortcuts", blurb: "Every command is reachable from the keyboard." },
+  { id: "advanced", ic: "cube", label: "Advanced", desc: "Diagnostics, experiments", title: "Advanced", blurb: "Diagnostics, experiments and reset." },
 ];
-const VARS = ["${WT_DB_NAME}", "${WT_SLUG}", "${WT_INDEX}", "${WT_<SERVICE>_PORT}", "${WT_PATH}", "${REPO_PATH}"];
+const REPOPAGES: PageMeta[] = [
+  { id: "repo-general", ic: "fork", label: "General", desc: "Paths and defaults", title: "Repository", blurb: "Where this repo lives and what every new worktree starts with." },
+  { id: "services", ic: "server", label: "Services", desc: "Runtimes, ports", title: "Services", blurb: "Long-running processes Canopy starts per worktree. Ports derive from the worktree index so they never collide." },
+  { id: "agents", ic: "sparkle", label: "Agents", desc: "Coding agents", title: "Agents", blurb: "Which agent CLIs are available, and what context they inherit." },
+  { id: "commands", ic: "code", label: "Commands", desc: "One-off scripts", title: "Custom commands", blurb: "Named scripts you can launch in any worktree from the + menu." },
+  { id: "files", ic: "doc", label: "Files", desc: "Provisioned config", title: "Provisioned files", blurb: "Files seeded or templated into every new worktree — any path, any format." },
+  { id: "setup", ic: "cube", label: "Setup", desc: "Tasks on create", title: "Setup", blurb: "Commands run in order the first time a worktree is created." },
+  { id: "security", ic: "shield", label: "Security", desc: "Secrets, SSH", title: "Security", blurb: "How secrets are handled in provisioned files and exports." },
+];
+const ALLPAGES = [...PLATFORM, ...REPOPAGES];
+const pageOf = (id: PageId): PageMeta => ALLPAGES.find((p) => p.id === id) || ALLPAGES[0];
+const REPO_PAGE_IDS = new Set<PageId>(REPOPAGES.map((p) => p.id));
 
+/* the searchable index — every setting, not just page names */
+const INDEX: { page: PageId; label: string; hint: string }[] = (
+  [
+    ["general", "Editor command", "code, cursor, subl"], ["general", "Theme", "dark, match system"],
+    ["general", "Density", "compact or comfortable"], ["general", "Accent colour", "teal, green, amber"],
+    ["general", "Show switch-branch action", "worktree menu"],
+    ["terminal", "Terminal application", "Terminal, iTerm"], ["terminal", "Shell program", "/bin/zsh"],
+    ["terminal", "Font and size", "SF Mono, JetBrains"], ["terminal", "Inherit provisioned env", "ports, database"],
+    ["notifications", "Service crash alerts", "interrupt when a service dies"],
+    ["notifications", "Agent needs a decision", "blocked agent"],
+    ["shortcuts", "Command palette", "⌘K"], ["shortcuts", "Save changes", "⌘S"],
+    ["shortcuts", "Toggle worktree list", "⌘B"], ["shortcuts", "Layout presets", "⌘1 ⌘2 ⌘3 ⌘4"],
+    ["advanced", "Diagnostics", "version, config path"], ["advanced", "Experiments", "parallel setup"],
+    ["repo-general", "Repository path", "where the repo lives"], ["repo-general", "Worktree root", ".worktrees"],
+    ["repo-general", "Remove repository", "stop tracking"],
+    ["services", "Base port", "derived per worktree index"], ["services", "Service command", "how a service starts"],
+    ["services", "Working directory", "cwd"], ["services", "Extra env", "KEY=VALUE"],
+    ["agents", "Agent CLI", "claude, codex, aider"], ["agents", "Prompt on launch", "seed the handoff"],
+    ["commands", "Custom command", "label and script"],
+    ["files", "Provisioned file", "path and format"], ["files", "Template variables", "${INT_DB_NAME} ${WT_SERVICE_PORT}"],
+    ["files", "dotenv format", ".env files"],
+    ["setup", "Setup tasks", "install, migrate, build"],
+    ["security", "Mask secrets", "hide token values"], ["security", "SSH key", "git credentials"],
+  ] as [PageId, string, string][]
+).map(([page, label, hint]) => ({ page, label, hint }));
+
+const VARS: { t: string; d: string }[] = [
+  { t: "${INT_DB_NAME}", d: "tj_history" },
+  { t: "${INT_SLUG}", d: "fix-history-state" },
+  { t: "${WT_INDEX}", d: "3" },
+  { t: "${WT_SERVICE_PORT}", d: "8272" },
+  { t: "${WT_PATH}", d: "~/ToolJet/.worktrees/…" },
+  { t: "${REPO_PATH}", d: "~/ToolJet" },
+];
+
+/* ── client-side provision model (stable ids for React keys) ── */
 let _uid = 0;
 const uid = (p: string) => `${p}-${++_uid}`;
-
-function emptyService(): ServiceCfg {
-  return { id: "", name: "", kind: "server", command: "", cwd: "", basePort: null, env: {} };
-}
-
-let agentSeq = 0;
-function emptyAgent(): AgentCfg {
-  // ids only need to be stable and unique within the repo — they key React rows
-  // and let the lane remember which profile a running tab came from.
-  return { id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true };
-}
-
-/** One-click starting points; the command is still fully editable afterwards. */
-const PRESET_AGENTS = [
-  { name: "Claude", command: "claude" },
-  { name: "Codex", command: "codex" },
-  { name: "Gemini", command: "gemini" },
-];
-
-/** Fold a pre-multi-agent `agentCommand` into the agents list so the editor has
-    exactly one representation to work with. The legacy field is left in place
-    for older builds reading the same settings file. */
-function migrateAgents(r: RepoCfg): RepoCfg {
-  if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
-  return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
-}
-
-/* ── client-side provision model (adds stable ids for React keys) ── */
 type KeyRow = { id: string; k: string; v: string };
 type FileCardT = { id: string; path: string; format: ProvisionFormat; from: string; interpolate: boolean; keys: KeyRow[] };
 
 function toCards(entries: ProvisionEntry[]): FileCardT[] {
   return entries.map((e) => ({
-    id: uid("f"),
-    path: e.path,
-    format: e.format,
-    from: e.from || "",
-    interpolate: !!e.interpolate,
+    id: uid("f"), path: e.path, format: e.format, from: e.from || "", interpolate: !!e.interpolate,
     keys: (e.keys || []).map(([k, v]) => ({ id: uid("k"), k, v })),
   }));
 }
-
 function fromCards(cards: FileCardT[]): ProvisionEntry[] {
-  return cards
-    .filter((c) => c.path.trim())
-    .map((c) => ({
-      path: c.path.trim(),
-      format: c.format,
-      from: c.from.trim(),
-      interpolate: c.format === "text" ? c.interpolate : false,
-      keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
-    }));
+  return cards.filter((c) => c.path.trim()).map((c) => ({
+    path: c.path.trim(), format: c.format, from: c.from.trim(),
+    interpolate: c.format === "text" ? c.interpolate : false,
+    keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
+  }));
 }
-
-/** Build the `.worktreemanager.json` object shown in the live preview — the
- * same shape the backend writer produces (incl. preserved teardown/migrate). */
 function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
   const cfg: Record<string, unknown> = {
     $schema: "canopy://worktree-manager/v1",
-    provision: cards
-      .filter((c) => c.path.trim())
-      .map((c) => {
-        const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
-        if (c.from.trim()) o.from = c.from.trim();
-        if (c.format === "text") {
-          o.interpolate = c.interpolate;
-        } else {
-          o.mode = "upsert";
-          o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]));
-        }
-        return o;
-      }),
+    provision: cards.filter((c) => c.path.trim()).map((c) => {
+      const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
+      if (c.from.trim()) o.from = c.from.trim();
+      if (c.format === "text") o.interpolate = c.interpolate;
+      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
+      return o;
+    }),
     setup: setup.filter((s) => s.trim()),
   };
-  // preserved by the writer, read-only in this UI — shown so preview === disk
   if (teardown.length) cfg.teardown = teardown;
   if (migrate.length) cfg.migrate = migrate;
   return cfg;
 }
 
-/* ── JSON syntax highlight for the preview panel ── */
-function highlightJson(str: string): string {
-  let s = str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  s = s.replace(/"([^"]*)":/g, '<span class="j-key">"$1"</span>:');
-  s = s.replace(/: "([^"]*)"/g, (_m, val: string) => {
-    const inner = val.replace(/\$\{[^}]+\}/g, (v) => `<span class="j-var">${v}</span>`);
-    return `: <span class="j-str">"${inner}"</span>`;
-  });
-  s = s.replace(/: (true|false)/g, ': <span class="j-bool">$1</span>');
+let agentSeq = 0;
+const emptyAgent = (): AgentCfg => ({ id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true });
+const emptyService = (): ServiceCfg => ({ id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {} });
+function migrateAgents(r: RepoCfg): RepoCfg {
+  if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
+  return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
+}
+const envToStr = (env: Record<string, string>) => Object.entries(env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+const strToEnv = (s: string): Record<string, string> =>
+  Object.fromEntries(s.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf("="); return i < 0 ? [l, ""] : [l.slice(0, i), l.slice(i + 1)]; }));
+
+/* JSON preview highlight — escape first, then wrap tokens (values are escaped
+   so this is safe to inject) */
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function hlLine(line: string): string {
+  let s = esc(line);
+  s = s.replace(/"([^"]*)"(\s*:)/g, '<span class="jk">"$1"</span>$2');
+  s = s.replace(/:\s*"([^"]*)"/g, (_m, v: string) => `: <span class="jv">"${v}"</span>`);
+  s = s.replace(/:\s*(-?\d+(?:\.\d+)?)/g, ': <span class="jn">$1</span>');
   return s;
 }
 
-/* ── One provisioned-file card ── */
-function FileCard({ card, patch, remove }: { card: FileCardT; patch: (c: FileCardT) => void; remove: () => void }) {
-  const isText = card.format === "text";
-  const set = <K extends keyof FileCardT>(f: K, v: FileCardT[K]) => patch({ ...card, [f]: v });
-  const editKey = (id: string, f: "k" | "v", v: string) =>
-    patch({ ...card, keys: card.keys.map((k) => (k.id === id ? { ...k, [f]: v } : k)) });
-  const addKey = () => patch({ ...card, keys: [...card.keys, { id: uid("k"), k: "", v: "" }] });
-  const rmKey = (id: string) => patch({ ...card, keys: card.keys.filter((k) => k.id !== id) });
+const MOCK: Settings = {
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  repos: [{
+    id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    services: [
+      { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" } },
+      { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" } },
+    ],
+    customCommands: [{ label: "Lint", command: "pnpm lint" }, { label: "Unit tests", command: "pnpm test --run" }],
+    agentCommand: "claude",
+    agents: [{ id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true }, { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true }],
+  }],
+};
+const MOCK_CARDS: ProvisionEntry[] = [
+  { path: ".env", format: "dotenv", from: ".env", interpolate: false, keys: [["PG_DB", "${INT_DB_NAME}"], ["PORT", "${WT_SERVICE_PORT}"]] },
+  { path: "ee/.env", format: "dotenv", from: "ee/.env", interpolate: false, keys: [["LICENSE_KEY", ""]] },
+];
+const MOCK_SETUP = ["pnpm install", "pnpm --filter server db:migrate", "pnpm build:plugins"];
 
-  const fmtHint = {
-    dotenv: "KEY = value lines",
-    json: "dotted keys → nested (development.database)",
-    yaml: "dotted keys → nested (development.database)",
-    text: "no keys",
-  }[card.format];
-
+/* ══════════════════════════ shared little controls ══════════════════════ */
+function Toggle({ on, onClick, disabled }: { on: boolean; onClick?: () => void; disabled?: boolean }) {
+  return <button className={"tgl" + (on ? " on" : "")} role="switch" aria-checked={on} disabled={disabled} onClick={onClick}><i /></button>;
+}
+function TRow({ title, hint, on, onToggle, disabled }: { title: string; hint?: string; on: boolean; onToggle?: () => void; disabled?: boolean }) {
   return (
-    <div className="fcard">
-      <div className="fcard-head">
-        <span className="fcard-ic">
-          <File size={15} />
-        </span>
-        <input
-          className="input mono fcard-path"
-          value={card.path}
-          spellCheck={false}
-          placeholder="path/to/file"
-          onChange={(e) => set("path", e.target.value)}
-        />
-        <div className="fmt-wrap">
-          <select className="fmt-select" value={card.format} onChange={(e) => set("format", e.target.value as ProvisionFormat)}>
-            {FORMATS.map((f) => (
-              <option key={f.id} value={f.id}>
-                {f.label}
-              </option>
-            ))}
-          </select>
+    <div className="tglrow">
+      <span className="tt"><b>{title}</b>{hint && <span>{hint}</span>}</span>
+      <Toggle on={on} onClick={onToggle} disabled={disabled} />
+    </div>
+  );
+}
+function Adv({ n, label = "Advanced", children }: { n?: string; label?: string; children: React.ReactNode }) {
+  return (
+    <details className="adv">
+      <summary><span className="cv"><ChevRight size={11} /></span>{label}{n && <span className="n">{n}</span>}</summary>
+      <div className="advb">{children}</div>
+    </details>
+  );
+}
+function Soon({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="soon">
+      <span className="ic"><Cube size={14} /></span>
+      <span><b>Coming soon.</b> {children}</span>
+    </div>
+  );
+}
+function InsertVar({ onPick }: { onPick: (t: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const d = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", d);
+    return () => document.removeEventListener("mousedown", d);
+  }, [open]);
+  return (
+    <span className="varwrap" ref={ref}>
+      <button className="btn sm gh" onClick={() => setOpen((o) => !o)}><Plus size={10} />Insert variable<span className="k">⌘/</span></button>
+      {open && (
+        <div className="varmenu">
+          <div className="vh">Template variables</div>
+          {VARS.map((v) => (
+            <button className="vitem" key={v.t} onClick={() => { onPick(v.t); setOpen(false); }}><code>{v.t}</code><span>{v.d}</span></button>
+          ))}
         </div>
-        <button className="del" title="Remove file" onClick={remove}>
-          ✕
-        </button>
-      </div>
+      )}
+    </span>
+  );
+}
 
-      <div className="fcard-sub">
-        <label className="from-lbl">Copy from</label>
-        <input
-          className="input mono from-in"
-          value={card.from}
-          spellCheck={false}
-          placeholder={`${card.path || "path/to/file"}  (default: same path)`}
-          onChange={(e) => set("from", e.target.value)}
-        />
-      </div>
+type PageProps = {
+  repo: RepoCfg | null;
+  patchRepo: (p: Partial<RepoCfg>) => void;
+  settings: Settings;
+  patch: (p: Partial<Settings>) => void;
+  markDirty: (id: PageId) => void;
+  flash: (m: string) => void;
+  cards: FileCardT[];
+  setCards: (c: FileCardT[]) => void;
+  setup: string[];
+  setSetup: (s: string[]) => void;
+  onRemoveRepo: () => void;
+  selKey: string | null;
+};
 
-      <div className={"mode-note " + (isText ? "is-text" : "is-keys")}>
-        <span className="mode-pill">{isText ? "copy + interpolate" : "seed if missing · upsert keys"}</span>
-        {isText ? (
-          <span>
-            Copies the whole file, then interpolates every <code>{"${VAR}"}</code>. Nothing else to configure.
-          </span>
-        ) : (
-          <span>
-            Seeds the file if it doesn't exist, then upserts <b>only</b> the keys below — every other line is preserved.
-          </span>
-        )}
-      </div>
-
-      {!isText && (
-        <div className="keys">
-          <div className="keys-head">
-            <span>
-              Set keys <span className="keys-hint">· {fmtHint}</span>
-            </span>
-            <button className="add-action sm" onClick={addKey}>
-              <Plus size={12} />
-              Add key
+/* ══════════════════════════ real: Services ═════════════════════════════ */
+function ServicesPage({ repo, patchRepo, markDirty }: PageProps) {
+  const [open, setOpen] = useState<string | null>(repo?.services[0]?.id ?? null);
+  if (!repo) return null;
+  const svcs = repo.services;
+  const patch = (id: string, p: Partial<ServiceCfg>) => { patchRepo({ services: svcs.map((s) => (s.id === id ? { ...s, ...p } : s)) }); markDirty("services"); };
+  return (
+    <div className="sec">
+      <div className="slab">Services<span className="n">ports derive from the worktree index</span></div>
+      <div className="objs">
+        {svcs.map((s) => (
+          <div className={"obj" + (open === s.id ? " open" : "")} key={s.id}>
+            <button className="ohead" onClick={() => setOpen(open === s.id ? null : s.id)}>
+              <span className="cv"><ChevRight size={11} /></span>
+              <span className="nm">{s.name || "New service"}</span>
+              <span className="tag">{s.kind}</span>
+              <span className="gr" />
+              <span className="mono" style={{ maxWidth: 210 }}>{s.command}</span>
+              {s.basePort != null && <span className="port">:{s.basePort}</span>}
+              <span className="oacts">
+                <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); patchRepo({ services: svcs.concat([{ ...s, id: uid("svc"), name: s.name + " copy" }]) }); markDirty("services"); }}><Copy size={11} /></span>
+                <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); patchRepo({ services: svcs.filter((x) => x.id !== s.id) }); markDirty("services"); }}><Trash size={11} /></span>
+              </span>
             </button>
-          </div>
-          {card.keys.length === 0 ? (
-            <div className="empty">
-              <span>No keys — file is seeded but nothing is upserted.</span>
-            </div>
-          ) : (
-            <div className="pk-grid">
-              {card.keys.map((k) => (
-                <div className="pk-line" key={k.id}>
-                  <input
-                    className="input mono"
-                    value={k.k}
-                    placeholder="key"
-                    spellCheck={false}
-                    onChange={(e) => editKey(k.id, "k", e.target.value)}
-                  />
-                  <span className="kv-eq">=</span>
-                  <input
-                    className="input mono"
-                    value={k.v}
-                    placeholder="${WT_...}"
-                    spellCheck={false}
-                    onChange={(e) => editKey(k.id, "v", e.target.value)}
-                  />
-                  <button className="del" title="Remove key" onClick={() => rmKey(k.id)}>
-                    ✕
-                  </button>
+            {open === s.id && (
+              <div className="obody">
+                <div className="fgrid">
+                  <span className="lb">Name</span><input className="inp" value={s.name} onChange={(e) => patch(s.id, { name: e.target.value })} />
+                  <span className="lb">Command</span><input className="inp mono" value={s.command} onChange={(e) => patch(s.id, { command: e.target.value })} />
+                  <span className="lb">Directory</span><input className="inp mono" value={s.cwd} placeholder="repo root" onChange={(e) => patch(s.id, { cwd: e.target.value })} />
+                  <span className="lb">Base port</span>
+                  <div className="row">
+                    <input className="inp mono" value={s.basePort ?? ""} style={{ width: 84 }} inputMode="numeric"
+                      onChange={(e) => patch(s.id, { basePort: e.target.value.trim() === "" ? null : Number(e.target.value) || 0 })} />
+                    {s.basePort != null && <span className="hint" style={{ marginTop: 0 }}>+ index × 10 → <span className="tokchip" style={{ fontFamily: "var(--mono)" }}>{s.basePort + 30}</span> on index 3</span>}
+                  </div>
+                  <span className="lb">Kind</span>
+                  <select className="inp" value={s.kind} onChange={(e) => patch(s.id, { kind: e.target.value })}>
+                    <option value="web">web</option><option value="server">server</option><option value="worker">worker</option>
+                  </select>
                 </div>
-              ))}
+                <Adv n="env, health">
+                  <div className="fgrid">
+                    <span className="lb">Extra env</span>
+                    <textarea className="inp" value={envToStr(s.env)} placeholder="KEY=VALUE (one per line)" onChange={(e) => patch(s.id, { env: strToEnv(e.target.value) })} />
+                    <span className="lb">Health check</span>
+                    <input className="inp mono" disabled title="Health checks aren't wired yet" placeholder="coming soon" />
+                  </div>
+                </Adv>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <button className="btn" style={{ marginTop: 8 }} onClick={() => { const s = { ...emptyService(), name: "New service", basePort: 4000 }; patchRepo({ services: svcs.concat([s]) }); setOpen(s.id); markDirty("services"); }}>
+        <Plus size={11} />Add service</button>
+    </div>
+  );
+}
+
+/* ══════════════════════════ real: Agents ═══════════════════════════════ */
+function AgentsPage({ repo, patchRepo, markDirty, flash }: PageProps) {
+  if (!repo) return null;
+  const agents = repo.agents || [];
+  const patch = (id: string, p: Partial<AgentCfg>) => { patchRepo({ agents: agents.map((a) => (a.id === id ? { ...a, ...p } : a)) }); markDirty("agents"); };
+  const makeDefault = (id: string) => { const a = agents.find((x) => x.id === id); if (!a) return; patchRepo({ agents: [a, ...agents.filter((x) => x.id !== id)] }); markDirty("agents"); flash(`${a.name || a.command} is now the default agent`); };
+  const [open, setOpen] = useState<string | null>(null);
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Agent CLIs<span className="n">the first is the default</span></div>
+        <div className="objs">
+          {agents.map((a, i) => (
+            <div className={"obj" + (open === a.id ? " open" : "")} key={a.id}>
+              <button className="ohead" onClick={() => setOpen(open === a.id ? null : a.id)}>
+                <span className="cv"><ChevRight size={11} /></span>
+                <Sparkle size={12} />
+                <span className="nm">{a.name || "Untitled"}</span>
+                {i === 0 && <span className="tag" style={{ color: "var(--action-primary)", background: "var(--accent-dim)" }}>default</span>}
+                <span className="gr" />
+                <span className="mono">{a.command}</span>
+                <span className="oacts">
+                  {i !== 0 && <span className="ico" title="Make default" onClick={(e) => { e.stopPropagation(); makeDefault(a.id); }}><Check size={11} /></span>}
+                  <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); patchRepo({ agents: agents.filter((x) => x.id !== a.id) }); markDirty("agents"); }}><Trash size={11} /></span>
+                </span>
+              </button>
+              {open === a.id && (
+                <div className="obody">
+                  <div className="fgrid">
+                    <span className="lb">Name</span><input className="inp" value={a.name} placeholder="Claude Code" onChange={(e) => patch(a.id, { name: e.target.value })} />
+                    <span className="lb">Command</span><input className="inp mono" value={a.command} placeholder="claude" onChange={(e) => patch(a.id, { command: e.target.value })} />
+                  </div>
+                  <div className="tglrow" style={{ borderTop: 0 }}>
+                    <span className="tt"><b>Prompt on launch</b><span>Append Canopy's structured handoff as the first prompt.</span></span>
+                    <Toggle on={a.promptOnLaunch} onClick={() => patch(a.id, { promptOnLaunch: !a.promptOnLaunch })} />
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          ))}
         </div>
+        <button className="btn" style={{ marginTop: 8 }} onClick={() => { const a = { ...emptyAgent(), name: "New agent" }; patchRepo({ agents: agents.concat([a]) }); setOpen(a.id); markDirty("agents"); }}>
+          <Plus size={11} />Add agent</button>
+      </div>
+      <div className="sec">
+        <div className="slab">Context handed to every agent</div>
+        <Soon>The per-agent context toggles and concurrency limit aren't wired yet — Canopy currently seeds the worktree context by default.</Soon>
+        <div className="soonwrap">
+          <TRow title="Worktree context" hint="Task title, description and linked PR or issue." on disabled />
+          <TRow title="Runtime facts" hint="Branch, ports, database name and running services." on disabled />
+          <TRow title="Recent failing logs" hint="The last 40 error lines, when a service is unhealthy." on={false} disabled />
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ══════════════════════════ real: Commands ═════════════════════════════ */
+function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) {
+  const [open, setOpen] = useState<number | null>(null);
+  const [ran, setRan] = useState<{ i: number; state: "running" | "done" } | null>(null);
+  if (!repo) return null;
+  const cmds = repo.customCommands || [];
+  const patch = (i: number, p: Partial<{ label: string; command: string }>) => { patchRepo({ customCommands: cmds.map((c, j) => (j === i ? { ...c, ...p } : c)) }); markDirty("commands"); };
+  const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= cmds.length) return; const n = cmds.slice(); [n[i], n[j]] = [n[j], n[i]]; patchRepo({ customCommands: n }); markDirty("commands"); };
+  const test = (i: number, cmd: string) => {
+    if (!hasBackend() || !selKey) { flash("Open a worktree to test a command"); return; }
+    setRan({ i, state: "running" });
+    ipc.runCustomCommand(selKey, cmd).then(() => setRan({ i, state: "done" })).catch((e) => { setRan(null); flash(`Command failed — ${String(e)}`); });
+  };
+  return (
+    <div className="sec">
+      <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
+      {cmds.length === 0 ? (
+        <div className="empty">
+          <p>No commands yet. Add one like <code>Lint</code> = <code>pnpm lint</code> — it appears in every worktree's + menu.</p>
+          <button className="btn sm" onClick={() => { patchRepo({ customCommands: [{ label: "", command: "" }] }); markDirty("commands"); }}><Plus size={10} />Add command</button>
+        </div>
+      ) : (
+        <div className="objs">
+          {cmds.map((c, i) => (
+            <div className={"obj" + (open === i ? " open" : "")} key={i}>
+              <button className="ohead" onClick={() => setOpen(open === i ? null : i)}>
+                <span className="cv"><ChevRight size={11} /></span>
+                <span className="nm">{c.label || "Untitled"}</span>
+                <span className="gr" />
+                <span className="mono" style={{ maxWidth: 250 }}>{c.command}</span>
+                <span className="oacts">
+                  <span className="ico" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }}><Rot deg={180}><Chevron size={11} /></Rot></span>
+                  <span className="ico" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }}><Chevron size={11} /></span>
+                  <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.concat([{ ...c, label: c.label + " copy" }]) }); markDirty("commands"); }}><Copy size={11} /></span>
+                  <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.filter((_, j) => j !== i) }); markDirty("commands"); }}><Trash size={11} /></span>
+                </span>
+              </button>
+              {open === i && (
+                <div className="obody">
+                  <div className="fgrid">
+                    <span className="lb">Label</span><input className="inp" value={c.label} placeholder="Lint" onChange={(e) => patch(i, { label: e.target.value })} />
+                    <span className="lb">Command</span><input className="inp mono" value={c.command} placeholder="pnpm lint" onChange={(e) => patch(i, { command: e.target.value })} />
+                    <span className="lb">Group</span><input className="inp" disabled placeholder="coming soon" title="Command groups aren't stored yet" />
+                  </div>
+                  {ran && ran.i === i && (
+                    <div className="testout">
+                      <div className="th">{ran.state === "running" ? <><Spinner size={10} />running in the current worktree…</> : <><span className="ok">✓</span>finished</>}</div>
+                    </div>
+                  )}
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button className="btn sm" onClick={() => test(i, c.command)}><Play size={10} />Test in current worktree</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {cmds.length > 0 && (
+        <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
       )}
     </div>
   );
 }
 
-type TabId = "general" | "services" | "agents" | "commands" | "files" | "setup";
+/* ══════════════════════════ real: Files ════════════════════════════════ */
+const FMTS: ProvisionFormat[] = ["dotenv", "json", "yaml", "text"];
+function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
+  const [selId, setSelId] = useState<string | null>(cards[0]?.id ?? null);
+  const sel = cards.find((c) => c.id === selId) || cards[0] || null;
+  const keyRef = useRef<number | null>(null);
+  const patch = (p: Partial<FileCardT>) => { if (!sel) return; setCards(cards.map((c) => (c.id === sel.id ? { ...c, ...p } : c))); markDirty("files"); };
+  const setKey = (i: number, which: 0 | 1, val: string) => sel && patch({ keys: sel.keys.map((k, j) => (j === i ? (which ? { ...k, v: val } : { ...k, k: val }) : k)) });
+  const insert = (tok: string) => {
+    const i = keyRef.current;
+    if (i == null || !sel) { flash("Select a value field first, then insert"); return; }
+    patch({ keys: sel.keys.map((k, j) => (j === i ? { ...k, v: (k.v || "") + tok } : k)) });
+  };
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Provisioned files<span className="n">{cards.length} configured</span></div>
+        <div className="objs">
+          {cards.map((f) => (
+            <div className={"obj" + (sel && f.id === sel.id ? " open" : "")} key={f.id}>
+              <button className="ohead" onClick={() => setSelId(f.id)}>
+                <span className="cv" style={{ transform: sel && f.id === sel.id ? "rotate(90deg)" : "none" }}><ChevRight size={11} /></span>
+                <Doc size={12} />
+                <span className="mono">{f.path || "new file"}</span>
+                <span className="gr" />
+                <span className="tag">{f.format}</span>
+                <span className="port">{f.keys.length} {f.keys.length === 1 ? "key" : "keys"}</span>
+                <span className="oacts">
+                  <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); const n = { ...f, id: uid("f"), path: f.path + ".copy", keys: f.keys.map((k) => ({ ...k, id: uid("k") })) }; setCards(cards.concat([n])); markDirty("files"); }}><Copy size={11} /></span>
+                  <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); const rest = cards.filter((x) => x.id !== f.id); setCards(rest); if (sel?.id === f.id) setSelId(rest[0]?.id ?? null); markDirty("files"); }}><Trash size={11} /></span>
+                </span>
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <button className="btn" onClick={() => { const n: FileCardT = { id: uid("f"), path: "", format: "dotenv", from: "", interpolate: false, keys: [] }; setCards(cards.concat([n])); setSelId(n.id); markDirty("files"); }}><Plus size={11} />Add file</button>
+          <span className="hint" style={{ marginTop: 0 }}>Any path, any format. Env overrides take precedence.</span>
+        </div>
+      </div>
 
+      {sel && (
+        <div className="sec">
+          <div className="slab"><Braces size={11} />Editing <span className="tokchip" style={{ fontFamily: "var(--mono)", letterSpacing: 0, textTransform: "none", fontSize: "var(--fs-small)" }}>{sel.path || "new file"}</span></div>
+          <div className="steps">
+            <div className={"stp" + (sel.path ? " done" : "")}><span className="num">1</span><span className="st"><b>File</b><span>path and format</span></span></div>
+            <div className="sbody">
+              <div className="row">
+                <input className="inp mono gr" value={sel.path} placeholder=".env or config/app.json" onChange={(e) => patch({ path: e.target.value })} />
+                <select className="inp" value={sel.format} onChange={(e) => patch({ format: e.target.value as ProvisionFormat })}>
+                  {FMTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className={"stp" + (sel.from ? " done" : "")}><span className="num">2</span><span className="st"><b>Source</b><span>where to copy from</span></span></div>
+            <div className="sbody">
+              <div className="row">
+                <input className="inp mono gr" value={sel.from} placeholder="same path in the repo root" onChange={(e) => patch({ from: e.target.value })} />
+              </div>
+              <div className="hint">Leave empty to read the same path from the repo root.</div>
+            </div>
+
+            <div className={"stp" + ((sel.format === "text" ? sel.interpolate : sel.keys.length) ? " done" : "")}>
+              <span className="num">3</span><span className="st"><b>Values</b><span>{sel.format === "text" ? "interpolate the copy" : "keys to set (upsert)"}</span></span>
+            </div>
+            <div className="sbody">
+              {sel.format === "text" ? (
+                <div className="tglrow" style={{ borderTop: 0, paddingTop: 0 }}>
+                  <span className="tt"><b>Interpolate template variables</b><span>Replace <code>${"{VARIABLE}"}</code> tokens while copying the file.</span></span>
+                  <Toggle on={sel.interpolate} onClick={() => patch({ interpolate: !sel.interpolate })} />
+                </div>
+              ) : (
+                <>
+                  <div className="row" style={{ marginBottom: 7 }}>
+                    <span className="lb">{sel.keys.length} {sel.keys.length === 1 ? "key" : "keys"}</span>
+                    <span style={{ flex: 1 }} />
+                    <InsertVar onPick={insert} />
+                  </div>
+                  {sel.keys.length === 0 ? (
+                    <div className="empty"><p>No keys yet. The file is provisioned as-is.</p>
+                      <button className="btn sm" onClick={() => patch({ keys: [{ id: uid("k"), k: "", v: "" }] })}><Plus size={10} />Add key</button></div>
+                  ) : (
+                    <div className="kvg">
+                      <span className="kvhead">Key</span><span /><span className="kvhead">Value</span><span />
+                      {sel.keys.map((k, i) => (
+                        <div key={k.id} style={{ display: "contents" }}>
+                          <input className="inp mono" value={k.k} placeholder="KEY" onChange={(e) => setKey(i, 0, e.target.value)} />
+                          <span className="eq">=</span>
+                          <input className="inp mono" value={k.v} placeholder="value or ${VARIABLE}" onFocus={() => { keyRef.current = i; }} onChange={(e) => setKey(i, 1, e.target.value)} />
+                          <button className="ico bad" title="Remove key" onClick={() => patch({ keys: sel.keys.filter((_, j) => j !== i) })}><X size={11} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sel.keys.length > 0 && (
+                    <button className="btn sm gh" style={{ marginTop: 7 }} onClick={() => patch({ keys: sel.keys.concat([{ id: uid("k"), k: "", v: "" }]) })}><Plus size={10} />Add key</button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ══════════════════════════ real: Setup ════════════════════════════════ */
+function SetupPage({ setup, setSetup, markDirty }: PageProps) {
+  const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= setup.length) return; const n = setup.slice(); [n[i], n[j]] = [n[j], n[i]]; setSetup(n); markDirty("setup"); };
+  return (
+    <div className="sec">
+      <div className="slab">Setup tasks<span className="n">run in order when a worktree is created</span></div>
+      {setup.length === 0 ? (
+        <div className="empty"><p>No setup tasks. Add commands like <code>pnpm install</code> — they run in order the first time a worktree is created.</p>
+          <button className="btn sm" onClick={() => { setSetup([""]); markDirty("setup"); }}><Plus size={10} />Add task</button></div>
+      ) : (
+        <div className="objs">
+          {setup.map((t, i) => (
+            <div className="obj" key={i}>
+              <div className="ohead" style={{ cursor: "default" }}>
+                <span className="num" style={{ width: 16, height: 16, borderRadius: 4, display: "grid", placeItems: "center", font: "var(--fw-bold) var(--fs-label) var(--sans)", background: "var(--btn)", color: "var(--text-tertiary)", flex: "none" }}>{i + 1}</span>
+                <input className="inp mono gr" value={t} style={{ height: 25 }} placeholder="pnpm install" onChange={(e) => { setSetup(setup.map((x, j) => (j === i ? e.target.value : x))); markDirty("setup"); }} />
+                <span className="oacts" style={{ opacity: 1 }}>
+                  <span className="ico" title="Move up" onClick={() => move(i, -1)}><Rot deg={180}><Chevron size={11} /></Rot></span>
+                  <span className="ico" title="Move down" onClick={() => move(i, 1)}><Chevron size={11} /></span>
+                  <span className="ico bad" title="Remove" onClick={() => { setSetup(setup.filter((_, j) => j !== i)); markDirty("setup"); }}><Trash size={11} /></span>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="row" style={{ marginTop: 8 }}>
+        <button className="btn" onClick={() => { setSetup(setup.concat([""])); markDirty("setup"); }}><Plus size={11} />Add task</button>
+      </div>
+      <Adv n="not wired yet">
+        <Soon>Per-task working directory, enable/disable and the on-failure/timeout policy aren't stored yet — every task runs, in order, from the worktree root.</Soon>
+      </Adv>
+    </div>
+  );
+}
+
+/* ══════════════════════════ real: Repository ═══════════════════════════ */
+function RepoGeneralPage({ repo, patchRepo, markDirty, onRemoveRepo }: PageProps) {
+  if (!repo) return null;
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Repository</div>
+        <div className="fgrid">
+          <span className="lb">Name</span><input className="inp" value={repo.name} onChange={(e) => { patchRepo({ name: e.target.value }); markDirty("repo-general"); }} />
+          <span className="lb">Path</span>
+          <div className="row"><input className="inp mono gr" value={repo.path} readOnly /></div>
+          <span className="lb">Worktree root</span><input className="inp mono" value={repo.worktreeDir} placeholder=".worktrees" onChange={(e) => { patchRepo({ worktreeDir: e.target.value }); markDirty("repo-general"); }} />
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Defaults for new worktrees</div>
+        <Soon>These defaults aren't stored per repo yet — Canopy runs setup and provisions files on create today.</Soon>
+        <div className="soonwrap">
+          <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created." on disabled />
+          <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes." on={false} disabled />
+          <TRow title="Create an isolated database" hint="One database per worktree, named from the branch slug." on disabled />
+        </div>
+      </div>
+      <Adv label="Danger zone">
+        <div className="row">
+          <button className="btn danger" onClick={onRemoveRepo}><Trash size={11} />Remove repository</button>
+          <span className="hint" style={{ marginTop: 0 }}>Stops tracking {repo.name} in Canopy. Your files are untouched.</span>
+        </div>
+      </Adv>
+    </>
+  );
+}
+
+/* ══════════════════════════ platform pages ═════════════════════════════ */
+function GeneralPage({ settings, patch, markDirty }: PageProps) {
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Editor</div>
+        <div className="fgrid">
+          <span className="lb">Command</span>
+          <div className="row"><input className="inp mono gr" value={settings.editor.command} placeholder="code" onChange={(e) => { patch({ editor: { command: e.target.value } }); markDirty("general"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Used for “Open in editor”.</span></div>
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Behaviour</div>
+        <TRow title="Show the Switch-branch action" hint="Offer “Switch branch…” in the worktree menu and ⌘\." on={settings.showSwitchBranch !== false} onToggle={() => { patch({ showSwitchBranch: !(settings.showSwitchBranch !== false) }); markDirty("general"); }} />
+      </div>
+      <div className="sec">
+        <div className="slab">Appearance</div>
+        <Soon>Theme, density and accent aren't configurable yet — Canopy renders in dark with the teal accent.</Soon>
+        <div className="soonwrap fgrid">
+          <span className="lb">Theme</span><select className="inp" disabled><option>Dark</option></select>
+          <span className="lb">Density</span><select className="inp" disabled><option>Comfortable</option></select>
+          <span className="lb">Accent</span>
+          <div className="row">{["#5cc7cd", "#4cc266", "#e6ad5f", "#c77ecd"].map((c, i) => (
+            <button key={c} className="ico" disabled style={{ background: c, borderColor: i === 0 ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
+        </div>
+      </div>
+      <Adv n="not wired yet">
+        <Soon>Automatic updates and crash reporting aren't configurable from here yet.</Soon>
+      </Adv>
+    </>
+  );
+}
+
+function TerminalPage({ settings, patch, markDirty }: PageProps) {
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Terminal application</div>
+        <div className="fgrid">
+          <span className="lb">Program</span>
+          <div className="row"><input className="inp mono gr" value={settings.terminal} placeholder="Terminal" onChange={(e) => { patch({ terminal: e.target.value }); markDirty("terminal"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Opened by “Open in terminal”.</span></div>
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Embedded shell</div>
+        <Soon>The embedded shell's program, font, scrollback and behaviour aren't configurable yet — it inherits your login shell.</Soon>
+        <div className="soonwrap fgrid">
+          <span className="lb">Program</span><input className="inp mono" disabled placeholder="/bin/zsh" />
+          <span className="lb">Font</span><div className="row"><select className="inp gr" disabled><option>SF Mono</option></select><input className="inp mono" disabled defaultValue="12" style={{ width: 60 }} /></div>
+          <span className="lb">Scrollback</span><input className="inp mono" disabled defaultValue="10000" style={{ width: 90 }} />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function NotificationsPage() {
+  return (
+    <div className="sec">
+      <div className="slab">Notify me when</div>
+      <Soon>Notification preferences aren't stored yet. Canopy surfaces service crashes and blocked agents in the in-app attention queue regardless.</Soon>
+      <div className="soonwrap">
+        <TRow title="A service crashes" hint="The only notification on by default — it needs you." on disabled />
+        <TRow title="An agent needs a decision" hint="An agent is blocked waiting on input." on disabled />
+        <TRow title="Setup finishes" hint="Provisioning and setup tasks completed." on={false} disabled />
+      </div>
+    </div>
+  );
+}
+
+const KEYS: [string, string, string][] = [
+  ["Command palette", "⌘ K", "Global"], ["New worktree", "⌘ N", "Global"], ["Toggle worktree list", "⌘ B", "Global"],
+  ["Cross-worktree overview", "⌘ O", "Global"], ["Switch branch", "⌘ \\", "Worktree"], ["Runtime layout", "⌘ 1", "Worktree"],
+  ["Split layout", "⌘ 2", "Worktree"], ["Agent layout", "⌘ 3", "Worktree"], ["Shell layout", "⌘ 4", "Worktree"],
+  ["Run next action", "⏎", "Worktree"], ["Pull everything", "⌘ ⏎", "Worktree"],
+  ["Search settings", "⌘ F", "Settings"], ["Save changes", "⌘ S", "Settings"], ["Toggle preview", "⌘ P", "Settings"],
+];
+function ShortcutsPage() {
+  const [q, setQ] = useState("");
+  const rows = KEYS.filter(([a, b, c]) => !q || (a + b + c).toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="sec">
+      <div className="row" style={{ marginBottom: 10 }}>
+        <div className="navsearch" style={{ margin: 0, flex: 1, maxWidth: 260 }}>
+          <Search size={12} /><input placeholder="Filter shortcuts…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+      </div>
+      <table className="keys">
+        <thead><tr><th>Command</th><th>Keys</th><th>Scope</th></tr></thead>
+        <tbody>{rows.map(([a, b, c]) => (
+          <tr key={a}><td>{a}</td>
+            <td><span className="kbdk">{b.split(" ").map((k, i) => <i key={i}>{k}</i>)}</span></td>
+            <td style={{ color: "var(--text-tertiary)" }}>{c}</td></tr>))}</tbody>
+      </table>
+      {rows.length === 0 && <div className="srempty">No shortcuts match “{q}”.</div>}
+      <div className="hint" style={{ marginTop: 12 }}>Shortcuts aren't remappable yet.</div>
+    </div>
+  );
+}
+
+function AdvancedPage({ flash }: PageProps) {
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Diagnostics</div>
+        <div className="fgrid">
+          <span className="lb">Config</span>
+          <div className="row"><input className="inp mono gr" value="~/Library/Application Support/Canopy/settings.json" readOnly />
+            <button className="ico" title="Copy path" onClick={() => { navigator.clipboard?.writeText("~/Library/Application Support/Canopy/settings.json").then(() => flash("Path copied"), () => flash("Copy failed")); }}><Copy size={12} /></button></div>
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Experiments<span className="n">may change or disappear</span></div>
+        <Soon>No experiments are wired up right now.</Soon>
+        <div className="soonwrap">
+          <TRow title="Parallel setup tasks" hint="Run independent setup tasks at the same time." on={false} disabled />
+          <TRow title="Predictive worktree warmup" hint="Pre-install dependencies for branches you open often." on={false} disabled />
+        </div>
+      </div>
+    </>
+  );
+}
+
+function SecurityPage() {
+  return (
+    <>
+      <div className="sec">
+        <div className="slab">Secrets in provisioned files</div>
+        <Soon>Secret masking and export policies aren't stored yet. Provisioned key values are written to the worktree as configured.</Soon>
+        <div className="soonwrap">
+          <TRow title="Mask values that look like secrets" hint="Tokens and keys render as •••• in previews and logs." on disabled />
+          <TRow title="Keep secrets out of exports" hint="Export the key names but not their values." on disabled />
+        </div>
+      </div>
+      <div className="sec">
+        <div className="slab">Git credentials</div>
+        <div className="soonwrap fgrid">
+          <span className="lb">SSH key</span><input className="inp mono" disabled placeholder="~/.ssh/id_ed25519" />
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ══════════════════════════ search overlay ═════════════════════════════ */
+function SearchOverlay({ onClose, onGo }: { onClose: () => void; onGo: (r: { page: PageId; label: string }) => void }) {
+  const [q, setQ] = useState("");
+  const [i, setI] = useState(0);
+  const ql = q.trim().toLowerCase();
+  const rows = useMemo(() => {
+    const hit = (s: { page: PageId; label: string; hint: string }) => (s.label + " " + s.hint + " " + pageOf(s.page).title).toLowerCase().includes(ql);
+    return (ql ? INDEX.filter(hit) : INDEX.slice(0, 8)).slice(0, 40);
+  }, [ql]);
+  useEffect(() => setI(0), [ql]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+      if (e.key === "ArrowDown") { e.preventDefault(); setI((x) => Math.min(x + 1, rows.length - 1)); }
+      if (e.key === "ArrowUp") { e.preventDefault(); setI((x) => Math.max(x - 1, 0)); }
+      if (e.key === "Enter" && rows[i]) { e.preventDefault(); onGo(rows[i]); }
+    };
+    document.addEventListener("keydown", k, true);
+    return () => document.removeEventListener("keydown", k, true);
+  }, [rows, i, onClose, onGo]);
+  const hl = (text: string) => {
+    if (!ql) return text;
+    const idx = text.toLowerCase().indexOf(ql);
+    if (idx < 0) return text;
+    return <>{text.slice(0, idx)}<em>{text.slice(idx, idx + ql.length)}</em>{text.slice(idx + ql.length)}</>;
+  };
+  return (
+    <div className="sr" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="srp">
+        <div className="srf">
+          <Search size={15} />
+          <input autoFocus value={q} placeholder="Search all settings…" onChange={(e) => setQ(e.target.value)} />
+          {q && <button className="ib" onClick={() => setQ("")}><X size={12} /></button>}
+        </div>
+        <div className="srl">
+          {rows.length === 0 && <div className="srempty">No setting matches “{q}”.</div>}
+          {!ql && rows.length > 0 && <div className="srg">Common settings</div>}
+          {rows.map((r, n) => {
+            const p = pageOf(r.page);
+            const Ic = ICONS[p.ic] || Sliders;
+            return (
+              <button key={r.page + r.label} className={"sri" + (n === i ? " on" : "")} onMouseEnter={() => setI(n)} onClick={() => onGo(r)}>
+                <span className="ic"><Ic size={13} /></span>
+                <span className="st"><b>{hl(r.label)}</b><span>{hl(r.hint)}</span></span>
+                <span className="where">{p.title}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="srfoot">
+          <span><span className="kbd">↑↓</span>navigate</span>
+          <span><span className="kbd">⏎</span>go to setting</span>
+          <span><span className="kbd">esc</span>close</span>
+          <span style={{ marginLeft: "auto" }}>{INDEX.length} settings</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Preview({ cards, setup, extras, onClose }: { cards: FileCardT[]; setup: string[]; extras: { teardown: string[]; migrate: string[] }; onClose: () => void }) {
+  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+  const lines = json.split("\n");
+  return (
+    <div className="ppreview">
+      <div className="pvhead">
+        <button className="ib pvback" title="Back to the editor" onClick={onClose}><Rot deg={180}><ChevRight size={12} /></Rot></button>
+        <b>Preview</b><span className="fn">.worktreemanager.json</span>
+        <button className="ib" title="Close preview" onClick={onClose}><X size={12} /></button>
+      </div>
+      <div className="pvbody">
+        {lines.map((ln, n) => (
+          <div className="cl" key={n}><span className="ln">{n + 1}</span><span className="tx" dangerouslySetInnerHTML={{ __html: hlLine(ln) }} /></div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════ shell ══════════════════════════════════ */
 export default function SettingsView({ onClose }: { onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const tree = useStore((s) => s.tree);
   const bumpSettings = useStore((s) => s.bumpSettings);
+  const selKey = useStore((s) => s.selKey);
+
   const [settings, setSettings] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [selected, setSelected] = useState<string>("app"); // "app" or repo.id
-  const [tab, setTab] = useState<TabId>("general");
-  // per-repo .worktreemanager.json (provisioned files + setup commands)
+  const [page, setPage] = useState<PageId>("general");
+  const [repoId, setRepoId] = useState<string>("");
+  const [repoMenu, setRepoMenu] = useState(false);
+  const [search, setSearch] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const [navQ, setNavQ] = useState("");
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const [dirty, setDirty] = useState<Set<PageId>>(new Set());
+
   const [cardsByRepo, setCardsByRepo] = useState<Record<string, FileCardT[]>>({});
   const [setupByRepo, setSetupByRepo] = useState<Record<string, string[]>>({});
-  // teardown/migrate are read-only here — kept so preview/export match disk
   const [extrasByRepo, setExtrasByRepo] = useState<Record<string, { teardown: string[]; migrate: string[] }>>({});
-  // only repos whose config the user actually edited get written on Save —
-  // otherwise Save would reformat every registered repo's checked-in file
   const dirtyRepos = useRef<Set<string>>(new Set());
-  const fileRef = useRef<HTMLInputElement>(null);
+  const repoMenuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const flash = (m: string) => showToast(m);
+  const markDirty = (id: PageId) => {
+    setDirty((d) => new Set(d).add(id));
+    if ((id === "files" || id === "setup") && repoId) dirtyRepos.current.add(repoId);
+  };
+
+  function load() {
     if (!hasBackend()) {
-      setSettings({ version: 1, editor: { command: "code" }, terminal: "Terminal", repos: [], showSwitchBranch: true });
+      setSettings({ ...MOCK, repos: MOCK.repos.map(migrateAgents) });
+      setRepoId(MOCK.repos[0].id);
+      setCardsByRepo({ [MOCK.repos[0].id]: toCards(MOCK_CARDS) });
+      setSetupByRepo({ [MOCK.repos[0].id]: MOCK_SETUP });
+      setDirty(new Set());
+      dirtyRepos.current = new Set();
       return;
     }
-    ipc
-      .getSettings()
-      .then((s) => {
-        setSettings({ ...s, repos: s.repos.map(migrateAgents) });
-        if (s.repos[0]) setSelected(s.repos[0].id);
-        s.repos.forEach((r) => {
-          ipc
-            .getRepoConfig(r.id)
-            .then((c) => {
-              setCardsByRepo((m) => ({ ...m, [r.id]: toCards(c.provision) }));
-              setSetupByRepo((m) => ({ ...m, [r.id]: c.setup }));
-              setExtrasByRepo((m) => ({ ...m, [r.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
-            })
-            .catch(() => {});
-        });
-      })
-      .catch((e) => showToast(`Failed to load settings: ${e}`));
-  }, []);
+    ipc.getSettings().then((s) => {
+      setSettings({ ...s, repos: s.repos.map(migrateAgents) });
+      if (s.repos[0]) setRepoId(s.repos[0].id);
+      setDirty(new Set());
+      dirtyRepos.current = new Set();
+      s.repos.forEach((r) => {
+        ipc.getRepoConfig(r.id).then((c) => {
+          setCardsByRepo((m) => ({ ...m, [r.id]: toCards(c.provision) }));
+          setSetupByRepo((m) => ({ ...m, [r.id]: c.setup }));
+          setExtrasByRepo((m) => ({ ...m, [r.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
+        }).catch(() => {});
+      });
+    }).catch((e) => showToast(`Failed to load settings: ${e}`));
+  }
+  useEffect(load, []);
 
-  if (!settings) return <div className="main" />;
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      const meta = e.metaKey || e.ctrlKey;
+      if (meta && e.key.toLowerCase() === "f") { e.preventDefault(); setSearch(true); }
+      else if (meta && e.key.toLowerCase() === "s") { e.preventDefault(); if (dirty.size) save(); }
+      else if (meta && e.key.toLowerCase() === "p") { e.preventDefault(); setPreview((v) => !v); }
+    };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, settings, repoId, cardsByRepo, setupByRepo]);
 
+  useEffect(() => {
+    if (!repoMenu) return;
+    const d = (e: MouseEvent) => { if (repoMenuRef.current && !repoMenuRef.current.contains(e.target as Node)) setRepoMenu(false); };
+    document.addEventListener("mousedown", d);
+    return () => document.removeEventListener("mousedown", d);
+  }, [repoMenu]);
+
+  if (!settings) return <div className="cxset-root" />;
+
+  const repo = settings.repos.find((r) => r.id === repoId) || null;
+  const repoIndex = settings.repos.findIndex((r) => r.id === repoId);
+  const wtCount = (id: string) => tree.find((r) => r.repoId === id)?.worktrees.length ?? 0;
   const patch = (p: Partial<Settings>) => setSettings({ ...settings, ...p });
-  const repoIndex = settings.repos.findIndex((r) => r.id === selected);
-  const repo = repoIndex >= 0 ? settings.repos[repoIndex] : null;
-  const wtCount = (repoId: string) => tree.find((r) => r.repoId === repoId)?.worktrees.length ?? 0;
-
-  const patchRepo = (p: Partial<RepoCfg>) =>
-    patch({ repos: settings.repos.map((r, ri) => (ri === repoIndex ? { ...r, ...p } : r)) });
+  const patchRepo = (p: Partial<RepoCfg>) => patch({ repos: settings.repos.map((r, ri) => (ri === repoIndex ? { ...r, ...p } : r)) });
   const cards = (repo && cardsByRepo[repo.id]) || [];
   const setup = (repo && setupByRepo[repo.id]) || [];
   const extras = (repo && extrasByRepo[repo.id]) || { teardown: [], migrate: [] };
-  const setCards = (next: FileCardT[]) => {
-    if (!repo) return;
-    dirtyRepos.current.add(repo.id);
-    setCardsByRepo((m) => ({ ...m, [repo.id]: next }));
-  };
-  const setSetup = (next: string[]) => {
-    if (!repo) return;
-    dirtyRepos.current.add(repo.id);
-    setSetupByRepo((m) => ({ ...m, [repo.id]: next }));
-  };
-
-  async function addRepo() {
-    if (!hasBackend()) {
-      showToast("Folder picker needs the desktop app");
-      return;
-    }
-    const dir = await openDialog({ directory: true, multiple: false, title: "Select a git repository" });
-    if (typeof dir !== "string") return;
-    try {
-      const added = await ipc.addRepo(dir);
-      const fresh = await ipc.getSettings();
-      setSettings(fresh);
-      setSelected(added.id);
-      setTab("general");
-      showToast("Repository added — configure it below");
-    } catch (e) {
-      showToast(String(e));
-    }
-  }
+  const setCards = (next: FileCardT[]) => { if (repo) setCardsByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const setSetup = (next: string[]) => { if (repo) setSetupByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const isRepoPage = REPO_PAGE_IDS.has(page);
+  const p = pageOf(page);
 
   async function save() {
     if (!settings) return;
@@ -331,10 +922,6 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           services: r.services.filter((s) => s.id.trim() && s.command.trim()),
           customCommands: (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim()),
           agents,
-          // Keep the legacy field in step with the list it was migrated into.
-          // Left stale, deleting the migrated profile would leave the old command
-          // behind, and the lane — which falls back to it when the list is empty —
-          // would keep launching an agent the settings UI no longer shows.
           agentCommand: agents[0]?.command ?? "",
         };
       }),
@@ -343,28 +930,20 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     try {
       if (hasBackend()) {
         await ipc.saveSettings(cleaned);
-        // write .worktreemanager.json ONLY for repos the user actually edited,
-        // and surface every failure — a silent catch here rewrote team repos
-        // and lied about broken saves.
         const failures: string[] = [];
         await Promise.all(
-          cleaned.repos
-            .filter((r) => dirtyRepos.current.has(r.id))
-            .map((r) =>
-              ipc
-                .saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((c) => c.trim()))
-                .then(() => dirtyRepos.current.delete(r.id))
-                .catch((e) => failures.push(`${r.name}: ${e}`)),
-            ),
+          cleaned.repos.filter((r) => dirtyRepos.current.has(r.id)).map((r) =>
+            ipc.saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((c) => c.trim()))
+              .then(() => dirtyRepos.current.delete(r.id))
+              .catch((e) => failures.push(`${r.name}: ${e}`)),
+          ),
         );
-        if (failures.length) {
-          showToast(`Saved app settings, but repo config failed — ${failures.join(" · ")}`);
-          return; // keep the view open so nothing is silently lost
-        }
+        if (failures.length) { showToast(`Saved app settings, but repo config failed — ${failures.join(" · ")}`); setSaving(false); return; }
       }
-      bumpSettings(); // the agent lane re-reads its launcher list off this
-      showToast("Settings saved");
-      onClose();
+      bumpSettings();
+      const n = dirty.size;
+      setDirty(new Set());
+      showToast(n <= 1 ? "Settings saved" : `Saved ${n} sections`);
     } catch (e) {
       showToast(`Save failed: ${e}`);
     } finally {
@@ -372,607 +951,179 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     }
   }
 
-  /* ── Files tab actions ── */
-  const addFile = () =>
-    setCards([...cards, { id: uid("f"), path: "", format: "dotenv", from: "", interpolate: false, keys: [{ id: uid("k"), k: "", v: "" }] }]);
-  const patchCard = (id: string, next: FileCardT) => setCards(cards.map((c) => (c.id === id ? next : c)));
-  const removeCard = (id: string) => setCards(cards.filter((c) => c.id !== id));
+  async function addRepo() {
+    if (!hasBackend()) { showToast("Folder picker needs the desktop app"); return; }
+    const dir = await openDialog({ directory: true, multiple: false, title: "Select a git repository" });
+    if (typeof dir !== "string") return;
+    try {
+      const added = await ipc.addRepo(dir);
+      const fresh = await ipc.getSettings();
+      setSettings({ ...fresh, repos: fresh.repos.map(migrateAgents) });
+      setRepoId(added.id);
+      setPage("repo-general");
+      showToast("Repository added — configure it below");
+    } catch (e) { showToast(String(e)); }
+  }
 
-  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
-  const copyPreview = () => {
+  async function removeRepo() {
+    if (!repo) return;
+    if (!hasBackend()) { showToast("Removing a repository needs the desktop app"); return; }
     try {
-      navigator.clipboard.writeText(configJson());
-      showToast("Copied .worktreemanager.json");
-    } catch {
-      showToast("Copy failed");
-    }
-  };
-  // native save dialog + backend write — anchor downloads are ignored by the webview
-  const exportJson = async () => {
-    if (!hasBackend()) {
-      showToast("Export needs the desktop app");
-      return;
-    }
-    try {
-      const path = await saveDialog({
-        title: "Export repo config",
-        defaultPath: `${repo?.path || ""}/.worktreemanager.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!path) return;
-      await ipc.saveTextFile(path, configJson() + "\n");
-      showToast(`Exported ${path}`);
-    } catch (e) {
-      showToast(`Export failed: ${e}`);
-    }
-  };
-  const importJson = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        const parsed = JSON.parse(String(r.result));
-        const list: ProvisionEntry[] = Array.isArray(parsed.provision)
-          ? parsed.provision.map((o: Record<string, unknown>) => ({
-              path: String(o.path || ""),
-              format: (["dotenv", "json", "yaml", "text"].includes(o.format as string) ? o.format : "dotenv") as ProvisionFormat,
-              from: String(o.from || ""),
-              interpolate: !!o.interpolate,
-              keys: o.keys && typeof o.keys === "object" ? Object.entries(o.keys as object).map(([k, v]) => [k, String(v)] as [string, string]) : [],
-            }))
-          : [];
-        setCards(toCards(list));
-        if (Array.isArray(parsed.setup)) setSetup(parsed.setup.filter((x: unknown) => typeof x === "string"));
-        setTab("files");
-        showToast(list.length ? `Imported ${list.length} file${list.length > 1 ? "s" : ""}` : "No provision entries found");
-      } catch {
-        showToast(`Couldn't parse ${f.name} — invalid JSON`);
-      }
-    };
-    r.readAsText(f);
-    e.target.value = "";
+      await ipc.removeRepo(repo.id);
+      const fresh = await ipc.getSettings();
+      setSettings({ ...fresh, repos: fresh.repos.map(migrateAgents) });
+      setRepoId(fresh.repos[0]?.id ?? "");
+      setPage("general");
+      showToast(`Removed ${repo.name}`);
+    } catch (e) { showToast(String(e)); }
+  }
+
+  const goTo = (r: { page: PageId; label: string }) => {
+    setPage(r.page); setSearch(false);
+    setFlashId(r.page + "-" + r.label); setTimeout(() => setFlashId(null), 1200);
+    showToast(`Jumped to ${r.label}`);
   };
 
-  const TABS: { id: TabId; label: string; ic: typeof Cog; count?: number; isNew?: boolean }[] = [
-    { id: "general", label: "General", ic: Cog },
-    { id: "services", label: "Services", ic: Server, count: repo?.services.length },
-    { id: "agents", label: "Agents", ic: Sparkle, count: repo?.agents?.length, isNew: true },
-    { id: "commands", label: "Commands", ic: Terminal, count: repo?.customCommands?.length },
-    { id: "files", label: "Files", ic: File, count: cards.length, isNew: true },
-    { id: "setup", label: "Setup", ic: Cube, count: setup.length },
-  ];
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, selKey };
+  const body = () => {
+    if (isRepoPage && !repo) {
+      return (
+        <div className="empty">
+          <p>No repository selected. Add a git repository and Canopy will track every worktree in it.</p>
+          <button className="btn sm" onClick={addRepo}><Plus size={10} />Add repository</button>
+        </div>
+      );
+    }
+    switch (page) {
+      case "services": return <ServicesPage {...pageProps} />;
+      case "agents": return <AgentsPage {...pageProps} />;
+      case "commands": return <CommandsPage {...pageProps} />;
+      case "files": return <FilesPage {...pageProps} />;
+      case "setup": return <SetupPage {...pageProps} />;
+      case "repo-general": return <RepoGeneralPage {...pageProps} />;
+      case "terminal": return <TerminalPage {...pageProps} />;
+      case "notifications": return <NotificationsPage />;
+      case "shortcuts": return <ShortcutsPage />;
+      case "advanced": return <AdvancedPage {...pageProps} />;
+      case "security": return <SecurityPage />;
+      default: return <GeneralPage {...pageProps} />;
+    }
+  };
+
+  const navRow = (item: PageMeta) => {
+    if (navQ && !(item.label + " " + item.desc).toLowerCase().includes(navQ.toLowerCase())) return null;
+    const Ic = ICONS[item.ic] || Sliders;
+    const isDirty = dirty.has(item.id);
+    const count = item.id === "services" ? repo?.services.length
+      : item.id === "agents" ? repo?.agents?.length
+      : item.id === "commands" ? repo?.customCommands?.length
+      : item.id === "files" ? cards.length
+      : item.id === "setup" ? setup.length
+      : undefined;
+    return (
+      <button key={item.id} className={"nrow" + (page === item.id ? " sel" : "")} onClick={() => setPage(item.id)}>
+        <span className="ic"><Ic size={13} /></span>
+        <span className="lb">{item.label}</span>
+        {isDirty && <span className="dot" title="Unsaved changes" />}
+        {count != null && !isDirty && <span className="ct">{count}</span>}
+      </button>
+    );
+  };
+
+  const dirtyNames = [...dirty].map((d) => pageOf(d).title);
+  const noNavMatch = navQ && !ALLPAGES.some((x) => (x.label + " " + x.desc).toLowerCase().includes(navQ.toLowerCase()));
 
   return (
-    <div className="main">
-      <div className="wt-header">
-        <div className="wt-title-row">
-          <div className="wt-titleblock">
-            <h1 className="wt-h1">
-              <span className="fork">
-                <Fork size={17} />
-              </span>
-              <span>Settings</span>
-            </h1>
-            <div className="wt-path">repositories, services, and provisioning</div>
+    <div className="cxset-root">
+      <div className="tbar">
+        <div className="ttl"><span className="ic"><Cog size={13} /></span>Settings</div>
+        <span className="sp" />
+        <button className="ib" onClick={() => setSearch(true)} title="Search all settings (⌘F)"><Search size={13} />Search<span className="k">⌘F</span></button>
+        <button className={"ib" + (preview ? " on" : "")} onClick={() => setPreview((v) => !v)} title="Toggle config preview (⌘P)"><Braces size={13} /></button>
+        <button className="ib" onClick={onClose} title="Close settings"><X size={14} /></button>
+      </div>
+
+      <div className="body">
+        <div className="nav">
+          <div className="navsearch">
+            <Search size={12} />
+            <input placeholder="Filter pages…" value={navQ} onChange={(e) => setNavQ(e.target.value)} />
+            {navQ && <button className="ib" style={{ height: 18, minWidth: 18 }} onClick={() => setNavQ("")}><X size={11} /></button>}
           </div>
-          <div className="wt-actions">
-            <button className="iconbtn" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="iconbtn primary" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
+          <div className="navlist">
+            <div className="navgrp">Canopy</div>
+            {PLATFORM.map(navRow)}
+            <div style={{ position: "relative" }} ref={repoMenuRef}>
+              {repo && (
+                <button className="repopick" onClick={() => setRepoMenu((m) => !m)} title="Switch repository">
+                  <span className="ic"><Fork size={12} /></span>
+                  <span className="rn">{repo.name}</span>
+                  <span className="rc">{wtCount(repo.id)} wt</span>
+                  <Chevron size={11} />
+                </button>
+              )}
+              {repoMenu && (
+                <div className="varmenu" style={{ left: 6, right: "auto", top: 30, width: 204 }}>
+                  <div className="vh">Repository</div>
+                  {settings.repos.map((r) => (
+                    <button className="vitem" key={r.id} onClick={() => { setRepoId(r.id); setRepoMenu(false); }} style={{ color: r.id === repoId ? "var(--action-primary)" : "var(--text-primary)" }}>
+                      <Fork size={11} />
+                      <span style={{ color: "inherit", fontSize: "var(--fs-body)" }}>{r.name}</span>
+                      <span>{wtCount(r.id)} wt</span>
+                    </button>
+                  ))}
+                  {settings.repos.length === 0 && <button className="vitem" onClick={() => { setRepoMenu(false); addRepo(); }}><span>Add a repository…</span></button>}
+                </div>
+              )}
+            </div>
+            {repo && REPOPAGES.map(navRow)}
+            {noNavMatch && <div className="srempty" style={{ padding: "16px 8px", fontSize: "var(--fs-small)" }}>No page matches.<br />Try ⌘F to search settings.</div>}
+          </div>
+        </div>
+
+        <div className="page">
+          <div className="phead">
+            <div className="pt">
+              <h2>{p.title}
+                {isRepoPage && repo && <span className="sub">{repo.name}</span>}
+                {dirty.has(page) && <span className="dot" style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--action-primary)" }} title="Unsaved changes" />}
+              </h2>
+              <p>{p.blurb}</p>
+            </div>
+            <div className="pa">
+              {isRepoPage && repo && (
+                <button className={"btn sm" + (preview ? " pri" : "")} onClick={() => setPreview((v) => !v)}><Braces size={11} />{preview ? "Hide" : "Preview"} JSON<span className="k">⌘P</span></button>
+              )}
+            </div>
+          </div>
+          <div className="pbody">
+            <div className={"pmain" + (flashId?.startsWith(page + "-") ? " flashrow" : "")}>{body()}</div>
+            {preview && isRepoPage && repo && (
+              <Preview cards={cards} setup={setup} extras={extras} onClose={() => setPreview(false)} />
+            )}
           </div>
         </div>
       </div>
 
-      <div className="set-split">
-        {/* left rail: Application + repositories */}
-        <div className="repo-nav">
-          <div className="rn-head">Application</div>
-          <button className={"rn-item" + (selected === "app" ? " on" : "")} onClick={() => setSelected("app")}>
-            <span className="fork-badge sm">
-              <Cog size={13} />
-            </span>
-            <span className="rn-txt">
-              <span className="rn-name">General</span>
-              <span className="rn-path">editor · terminal · features</span>
-            </span>
-          </button>
-
-          <div className="rn-head" style={{ marginTop: 8 }}>
-            Repositories
-          </div>
-          {settings.repos.map((r) => (
-            <button
-              key={r.id}
-              className={"rn-item" + (selected === r.id ? " on" : "")}
-              onClick={() => {
-                setSelected(r.id);
-                setTab("general");
-              }}
-            >
-              <span className="fork-badge sm">
-                <Fork size={13} />
-              </span>
-              <span className="rn-txt">
-                <span className="rn-name">{r.name}</span>
-                <span className="rn-path">{r.path}</span>
-              </span>
-              <span className="rn-count">{wtCount(r.id)}</span>
-            </button>
-          ))}
-          <button className="rn-add" onClick={addRepo}>
-            <Plus size={13} />
-            Add repository
-          </button>
+      {dirty.size > 0 ? (
+        <div className="dirty">
+          <span className="dd" />
+          <span className="dt"><b>Unsaved changes</b> in <span className="sect">{dirtyNames.join(", ")}</span></span>
+          <span style={{ flex: 1 }} />
+          <button className="btn gh" disabled={saving} onClick={load}>Discard</button>
+          <button className="btn pri" disabled={saving} onClick={save}>{saving ? <Spinner size={11} /> : <Check size={11} />}Save changes<span className="k">⌘S</span></button>
         </div>
+      ) : (
+        <div className="statusline">
+          <span className="mono">.worktreemanager.json</span>
+          <span className="sdiv" />
+          <span>All changes saved</span>
+          <span style={{ flex: 1 }} />
+          {repo && <span>{wtCount(repo.id)} worktrees · {cards.length} provisioned files · {repo.services.length} services</span>}
+        </div>
+      )}
 
-        {/* right: application pane or repo detail */}
-        {selected === "app" || !repo ? (
-          <div className="repo-detail">
-            <div className="rd-head">
-              <span className="fork-badge">
-                <Cog size={16} />
-              </span>
-              <div className="rd-titles">
-                <h2>Application</h2>
-                <span className="rd-path">Global preferences — apply everywhere</span>
-              </div>
-            </div>
-            <div className="rd-body">
-              <div className="rd-pane">
-                <div className="cfg-rows">
-                  <div className="cfg-row">
-                    <label className="fld-label">Editor command</label>
-                    <input
-                      className="input"
-                      value={settings.editor.command}
-                      placeholder="code"
-                      onChange={(e) => patch({ editor: { command: e.target.value } })}
-                    />
-                  </div>
-                  <div className="cfg-row">
-                    <label className="fld-label">Terminal app</label>
-                    <input
-                      className="input"
-                      value={settings.terminal}
-                      placeholder="Terminal"
-                      onChange={(e) => patch({ terminal: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="subsec">
-                  <div className="subsec-head">
-                    <span className="lead">
-                      <span className="ic">
-                        <Cog size={14} />
-                      </span>
-                      <h3>Features</h3>
-                    </span>
-                    <span className="line" />
-                  </div>
-                  <label className="set-check">
-                    <input
-                      type="checkbox"
-                      checked={settings.showSwitchBranch ?? true}
-                      onChange={(e) => patch({ showSwitchBranch: e.target.checked })}
-                    />
-                    Show the “Switch branch” action in the worktree header
-                  </label>
-                </div>
-                {settings.repos.length === 0 && (
-                  <div className="empty" style={{ marginTop: 20 }}>
-                    <span>No repositories yet — add your first repo from the left rail.</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="repo-detail">
-            <div className="rd-head">
-              <span className="fork-badge">
-                <Fork size={16} />
-              </span>
-              <div className="rd-titles">
-                <input
-                  className="repo-name"
-                  value={repo.name}
-                  onChange={(e) => patchRepo({ name: e.target.value })}
-                  style={{ width: "100%" }}
-                />
-                <span className="rd-path">{repo.path}</span>
-              </div>
-              <span className="rd-head-grow" />
-              <div className="rd-config">
-                <span className="rd-config-lbl" title="These actions read/write the whole repo config">
-                  <Braces size={12} />
-                  .worktreemanager.json
-                </span>
-                <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={importJson} />
-                <button className="btn sm ghost" title="Import a .worktreemanager.json" onClick={() => fileRef.current?.click()}>
-                  <Upload size={13} />
-                  Import
-                </button>
-                <button className="btn sm ghost" title="Export the repo config" onClick={exportJson}>
-                  <Download size={13} />
-                  Export
-                </button>
-                <button
-                  className="btn sm ghost"
-                  title="Remove this repository from Canopy (files on disk are untouched)"
-                  onClick={async () => {
-                    // removal applies immediately (not on Save) — confirm first
-                    if (!window.confirm(`Remove "${repo.name}" from Canopy?\n\nWorktrees and files on disk are not touched.`)) return;
-                    if (hasBackend()) await ipc.removeRepo(repo.id).catch((e) => showToast(String(e)));
-                    const remaining = settings.repos.filter((r) => r.id !== repo.id);
-                    setSettings({ ...settings, repos: remaining });
-                    setSelected(remaining[0]?.id ?? "app");
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-
-            <div className="rd-tabs">
-              {TABS.map((t) => {
-                const Ic = t.ic;
-                return (
-                  <button key={t.id} className={"rd-tab" + (tab === t.id ? " on" : "")} onClick={() => setTab(t.id)}>
-                    <Ic size={14} />
-                    {t.label}
-                    {typeof t.count === "number" && <span className="rd-tabcount">{t.count}</span>}
-                    {t.isNew && <span className="rd-tabdot" title="New" />}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="rd-body">
-              {tab === "general" && (
-                <div className="rd-pane">
-                  <div className="cfg-rows">
-                    <div className="cfg-row">
-                      <label className="fld-label">Worktree dir</label>
-                      <input
-                        className="input mono"
-                        value={repo.worktreeDir}
-                        placeholder="/path/for/new/worktrees"
-                        onChange={(e) => patchRepo({ worktreeDir: e.target.value })}
-                      />
-                    </div>
-                    <div className="cfg-row">
-                      <label className="fld-label">
-                        <Database size={12} /> Reset DB cmd
-                      </label>
-                      <input
-                        className="input mono"
-                        value={repo.resetDb}
-                        placeholder="cd server && npm run db:reset"
-                        onChange={(e) => patchRepo({ resetDb: e.target.value })}
-                      />
-                    </div>
-                    <div className="cfg-row">
-                      <label className="fld-label">
-                        <Database size={12} /> Migrate cmd
-                      </label>
-                      <input
-                        className="input mono"
-                        value={repo.migrateDb || ""}
-                        placeholder="npm run db:migrate (else .worktreemanager.json migrate)"
-                        onChange={(e) => patchRepo({ migrateDb: e.target.value })}
-                      />
-                    </div>
-                    <div className="cfg-row">
-                      <label className="fld-label">
-                        <Sparkle size={12} /> Coding agents
-                      </label>
-                      <span className="cfg-xref">
-                        {repo.agents?.length
-                          ? `${repo.agents.length} configured — ${repo.agents.map((a) => a.name || "unnamed").join(", ")}`
-                          : "None configured yet — the lane falls back to claude."}
-                        <button className="btn sm ghost" onClick={() => setTab("agents")}>
-                          <Sparkle size={13} /> Manage agents
-                        </button>
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {tab === "agents" && (
-                <div className="rd-pane">
-                  <div className="pane-title">
-                    <div>
-                      <h3>
-                        Coding agents <span className="newpill">NEW</span>
-                      </h3>
-                      <p>
-                        Launchers in the agent lane's <b>+</b> menu — run as many at once as you like, each in its own tab. Commands run in the
-                        worktree with <span className="mono">$CANOPY_CONTEXT_FILE</span> exported.
-                      </p>
-                    </div>
-                    <div className="pane-actions">
-                      {PRESET_AGENTS.map((p) => (
-                        <button
-                          key={p.name}
-                          className="btn sm ghost"
-                          title={`Add ${p.name} (${p.command})`}
-                          onClick={() => patchRepo({ agents: [...(repo.agents || []), { ...emptyAgent(), ...p }] })}
-                        >
-                          <Plus size={13} />
-                          {p.name}
-                        </button>
-                      ))}
-                      <button className="btn sm primary" onClick={() => patchRepo({ agents: [...(repo.agents || []), emptyAgent()] })}>
-                        <Plus size={13} />
-                        Add agent
-                      </button>
-                    </div>
-                  </div>
-                  {(repo.agents || []).length === 0 ? (
-                    <div className="empty">
-                      <span>
-                        No agents configured — the lane falls back to <code>claude</code>. Add one above, or e.g. <code>Codex</code> ={" "}
-                        <code>codex</code>.
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="set-svc-table">
-                      {(repo.agents || []).map((a, ai) => {
-                        const cur = repo.agents || [];
-                        const upd = (p: Partial<AgentCfg>) => patchRepo({ agents: cur.map((x, i) => (i === ai ? { ...x, ...p } : x)) });
-                        return (
-                          <div className="agent-row" key={a.id || ai}>
-                            <span className="ag-ic">
-                              <Sparkle size={13} />
-                            </span>
-                            <input className="input" value={a.name} placeholder="Claude" onChange={(e) => upd({ name: e.target.value })} />
-                            <input
-                              className="input mono"
-                              value={a.command}
-                              placeholder="claude --permission-mode acceptEdits"
-                              onChange={(e) => upd({ command: e.target.value })}
-                            />
-                            <label className="set-check compact" title="Pass the worktree handoff (task, PR, issue, ports, database) as the CLI's first prompt argument">
-                              <input type="checkbox" checked={a.promptOnLaunch !== false} onChange={(e) => upd({ promptOnLaunch: e.target.checked })} />
-                              Send prompt
-                            </label>
-                            <button className="del" title="Remove agent" onClick={() => patchRepo({ agents: cur.filter((_, i) => i !== ai) })}>
-                              ✕
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === "services" && (
-                <div className="rd-pane">
-                  <div className="pane-title">
-                    <div>
-                      <h3>Services</h3>
-                      <p>Dev processes Canopy starts per worktree, each on a derived port.</p>
-                    </div>
-                    <div className="pane-actions">
-                      <button className="btn sm primary" onClick={() => patchRepo({ services: [...repo.services, emptyService()] })}>
-                        <Plus size={13} />
-                        Add service
-                      </button>
-                    </div>
-                  </div>
-                  {repo.services.length === 0 ? (
-                    <div className="empty">
-                      <span>No services yet — add one to run it per worktree.</span>
-                    </div>
-                  ) : (
-                    <div className="set-svc-table">
-                      <div className="set-svc-cols set-svc-cols--head">
-                        <span>id</span>
-                        <span>name</span>
-                        <span>kind</span>
-                        <span>command</span>
-                        <span>cwd</span>
-                        <span>port</span>
-                        <span />
-                      </div>
-                      {repo.services.map((svc, si) => {
-                        const patchSvc = (p: Partial<ServiceCfg>) =>
-                          patchRepo({ services: repo.services.map((s, i) => (i === si ? { ...s, ...p } : s)) });
-                        return (
-                          <div className="set-svc-cols" key={si}>
-                            <input className="set-input" value={svc.id} placeholder="frontend" onChange={(e) => patchSvc({ id: e.target.value })} />
-                            <input className="set-input" value={svc.name} placeholder="Frontend" onChange={(e) => patchSvc({ name: e.target.value })} />
-                            <select className="set-input" value={svc.kind} onChange={(e) => patchSvc({ kind: e.target.value })}>
-                              {KINDS.map((k) => (
-                                <option key={k}>{k}</option>
-                              ))}
-                            </select>
-                            <input className="set-input" value={svc.command} placeholder="npm start" onChange={(e) => patchSvc({ command: e.target.value })} />
-                            <input className="set-input" value={svc.cwd} placeholder="frontend" onChange={(e) => patchSvc({ cwd: e.target.value })} />
-                            <input
-                              className="set-input"
-                              value={svc.basePort ?? ""}
-                              placeholder="3000"
-                              onChange={(e) => patchSvc({ basePort: e.target.value ? parseInt(e.target.value, 10) || null : null })}
-                            />
-                            <button className="ghostbtn" onClick={() => patchRepo({ services: repo.services.filter((_, i) => i !== si) })}>
-                              ✕
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === "commands" && (
-                <div className="rd-pane">
-                  <div className="pane-title">
-                    <div>
-                      <h3>Custom commands</h3>
-                      <p>
-                        Buttons in the worktree header — run in the worktree root on the pinned Node with <span className="mono">$WT_PATH</span>,{" "}
-                        <span className="mono">$WTM_REPO</span> exposed.
-                      </p>
-                    </div>
-                    <div className="pane-actions">
-                      <button
-                        className="btn sm primary"
-                        onClick={() => patchRepo({ customCommands: [...(repo.customCommands || []), { label: "", command: "" }] })}
-                      >
-                        <Plus size={13} />
-                        Add command
-                      </button>
-                    </div>
-                  </div>
-                  {(repo.customCommands || []).length === 0 ? (
-                    <div className="empty">
-                      <span>
-                        No custom commands. Add e.g. <code>Lint</code> = <code>npm run lint</code>.
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="set-svc-table">
-                      {(repo.customCommands || []).map((cc, ci) => {
-                        const cur = repo.customCommands || [];
-                        const upd = (p: Partial<typeof cc>) =>
-                          patchRepo({ customCommands: cur.map((c, i) => (i === ci ? { ...c, ...p } : c)) });
-                        return (
-                          <div className="set-env-row" key={ci}>
-                            <input className="input" value={cc.label} placeholder="Lint" onChange={(e) => upd({ label: e.target.value })} />
-                            <span className="set-env-eq">=</span>
-                            <input className="input mono" value={cc.command} placeholder="npm run lint" onChange={(e) => upd({ command: e.target.value })} />
-                            <button className="del" onClick={() => patchRepo({ customCommands: cur.filter((_, i) => i !== ci) })}>
-                              ✕
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {tab === "files" && (
-                <div className="rd-pane">
-                  <div className="pane-title">
-                    <div>
-                      <h3>
-                        Files to provision <span className="newpill">NEW</span>
-                      </h3>
-                      <p>
-                        Seeded &amp; templated into every new worktree — any path, any format. Replaces the old <b>Env overrides</b>; the root{" "}
-                        <span className="mono">.env</span> is now just one entry.
-                      </p>
-                    </div>
-                    <div className="pane-actions">
-                      <button className="btn sm primary" onClick={addFile}>
-                        <Plus size={13} />
-                        Add file
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="var-strip">
-                    <span className="var-lbl">Template vars</span>
-                    {VARS.map((v) => (
-                      <code className="var-chip" key={v}>
-                        {v}
-                      </code>
-                    ))}
-                  </div>
-
-                  {cards.length === 0 ? (
-                    <div className="empty">
-                      <span>No files provisioned yet — add one to seed it into every new worktree.</span>
-                    </div>
-                  ) : (
-                    <div className="prov-list">
-                      {cards.map((c) => (
-                        <FileCard key={c.id} card={c} patch={(next) => patchCard(c.id, next)} remove={() => removeCard(c.id)} />
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="preview-block">
-                    <div className="pb-head">
-                      <span className="lead">
-                        <Braces size={13} />
-                        <span>
-                          <code>.worktreemanager.json</code> preview
-                        </span>
-                      </span>
-                      <button className="add-action" onClick={copyPreview}>
-                        Copy
-                      </button>
-                    </div>
-                    <div className="prov-preview">
-                      <div className="pp-bar">
-                        <span className="pp-ic">
-                          <Braces size={13} />
-                        </span>
-                        .worktreemanager.json
-                      </div>
-                      <pre className="pp-body" dangerouslySetInnerHTML={{ __html: highlightJson(configJson()) }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {tab === "setup" && (
-                <div className="rd-pane">
-                  <div className="pane-title">
-                    <div>
-                      <h3>Setup commands</h3>
-                      <p>
-                        Written to <span className="mono">.worktreemanager.json</span> — run on worktree create and via the header’s Setup action.
-                        Available vars: <span className="mono">$WTM_REPO</span>, <span className="mono">$WTM_WORKTREE</span>.
-                      </p>
-                    </div>
-                    <div className="pane-actions">
-                      <button className="btn sm primary" onClick={() => setSetup([...setup, ""])}>
-                        <Plus size={13} />
-                        Add command
-                      </button>
-                    </div>
-                  </div>
-                  {setup.length === 0 ? (
-                    <div className="empty">
-                      <span>
-                        No setup commands. Add e.g. <code>npm --prefix server install</code>.
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="set-svc-table">
-                      {setup.map((cmd, ci) => (
-                        <div className="set-cmd-row" key={ci}>
-                          <span className="set-cmd-num">{ci + 1}</span>
-                          <input
-                            className="input mono"
-                            value={cmd}
-                            placeholder="npm --prefix frontend install --no-audit"
-                            onChange={(e) => setSetup(setup.map((c, i) => (i === ci ? e.target.value : c)))}
-                          />
-                          <button className="del" onClick={() => setSetup(setup.filter((_, i) => i !== ci))}>
-                            ✕
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+      {search && <SearchOverlay onClose={() => setSearch(false)} onGo={goTo} />}
     </div>
   );
 }
