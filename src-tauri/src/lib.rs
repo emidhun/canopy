@@ -25,6 +25,19 @@ pub fn run() {
     let _ = fix_path_env::fix();
 
     let builder = tauri::Builder::default()
+        // MUST be first: a second instance exits immediately after notifying
+        // the first. Without this, instance B's startup sweep reads instance
+        // A's persisted *live* pgids and SIGTERMs A's running services, and
+        // both instances race on settings.json/state.json writes.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            #[cfg(target_os = "macos")]
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(
             // rolling log file in the platform log dir (~/Library/Logs/… on
             // macOS) + stderr echo for dev. INFO default; RUST_LOG overrides.

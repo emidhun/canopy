@@ -39,6 +39,9 @@ sysinfo = "0.39.3"
 # non-poisoning locks: with std, one panic while holding a lock poisons it and
 # every later .unwrap() panics forever — the app survives as a zombie window.
 parking_lot = "0.12"
+# two Canopy instances would sweep each other's live pgids as "orphans" and
+# race on settings/state writes — a second launch focuses the first instead.
+tauri-plugin-single-instance = "2"
 # embedded per-worktree terminals: a real PTY per session (the agent lane runs
 # the coding-agent CLI inside one). portable-pty is cross-platform (helps Linux).
 portable-pty = "0.9"
