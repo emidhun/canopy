@@ -31,10 +31,28 @@ impl LogLine {
 fn chrono_time() -> String {
     // HH:MM:SS local time without pulling in chrono
     let now = std::time::SystemTime::now();
-    let secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let offset = crate::proc::local_utc_offset_secs();
+    let secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let offset = cached_utc_offset(secs);
     let local = (secs as i64 + offset).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", local / 3600, (local % 3600) / 60, local % 60)
+}
+
+/// Local UTC offset with a 60s cache — the exact value only shifts on a DST
+/// boundary, and computing it per log line meant a localtime_r call for every
+/// line of a webpack burst.
+fn cached_utc_offset(now_secs: u64) -> i64 {
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+    static OFFSET: AtomicI64 = AtomicI64::new(0);
+    static FETCHED_AT: AtomicU64 = AtomicU64::new(0);
+    let last = FETCHED_AT.load(Ordering::Relaxed);
+    if last == 0 || now_secs.saturating_sub(last) > 60 {
+        let off = crate::proc::local_utc_offset_secs();
+        OFFSET.store(off, Ordering::Relaxed);
+        FETCHED_AT.store(now_secs, Ordering::Relaxed);
+        off
+    } else {
+        OFFSET.load(Ordering::Relaxed)
+    }
 }
 
 pub struct ProcEntry {
@@ -401,17 +419,22 @@ fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
     let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) }, main_window_only);
 }
 
-fn classify_line(text: &str, from_stderr: bool) -> &'static str {
-    let lower = text.to_lowercase();
-    if lower.contains("error") || lower.contains("fatal") || lower.contains("err!") {
+/// Case-insensitive substring search without allocating (the old
+/// `to_lowercase()` copied every log line — thousands per webpack burst).
+fn contains_ci(hay: &str, needle: &str) -> bool {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    !n.is_empty() && h.len() >= n.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
+fn classify_line(text: &str, _from_stderr: bool) -> &'static str {
+    if contains_ci(text, "error") || contains_ci(text, "fatal") || contains_ci(text, "err!") {
         "err"
-    } else if lower.contains("warn") {
+    } else if contains_ci(text, "warn") {
         "warn"
-    } else if lower.contains("listening") || lower.contains("compiled successfully") || lower.contains("ready") {
+    } else if contains_ci(text, "listening") || contains_ci(text, "compiled successfully") || contains_ci(text, "ready") {
         "ok"
-    } else if from_stderr {
-        "info" // many dev tools log normal output to stderr
     } else {
+        // stderr alone isn't an error — many dev tools log normal output there
         "info"
     }
 }
