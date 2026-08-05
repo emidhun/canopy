@@ -86,18 +86,30 @@ history, and unshared context state were all frontend fixes in #61.
 
 ### Resolving handoff contradictions
 
-The handoff contradicts itself. Seven instances across two ports. Apply this
-rule and **record each one in the PR**:
+The handoff contradicts itself — repeatedly, and in ways only measurement
+finds. Apply this rule and **record each instance in the PR**:
 
 > A screen overriding a **generic primitive** for its own context **wins**.
 > A screen contradicting a **specific token backed by documented rationale**
 > **loses**.
 
-Worked examples:
-- `components.css` sets the search input `--fs-small`; the screen sets
-  `--fs-body` → **screen wins** (generic primitive, screen context).
-- The screen sets `.topbar` 38px; `--h-topbar` is 36px and the readme states
-  "chrome totals 106px" → **token wins** (specific token + stated reasoning).
+Every instance found across the two ports, so the next one starts from the
+record rather than rediscovering them:
+
+| # | Conflict | Resolved |
+|---|---|---|
+| 1 | `.cx-search` input is `--fs-small`; the screen sets `--fs-body` | screen |
+| 2 | screen `.topbar` 38px; `--h-topbar` 36px + readme "chrome totals 106px" | token |
+| 3 | screen `.rail` 38px; `--h-rail` 34px + the same readme statement | token |
+| 4 | `components.css` type is 9/10/11/12px — each exactly 0.5px under the ramp | ramp |
+| 5 | `components.css` weights 500/520/560; the scale is 400/550/620/700 | scale |
+| 6 | `.cx-svc` is 22px; the workspace screen's rail chip is 24px | screen |
+| 7 | form controls — `.cx-input` height+radius, `.cx-btn`/`.cx-seg`/`.cx-modal__ic` radius, `.cx-seg button` height, `.cx-modal__foot` gap — all disagree with the modals screen | screen |
+
+Read the table as the pattern, not the total: rows 4 and 5 are one defect
+("the component layer drifted off its own scales") if you prefer to count
+that way. What matters is that the component layer and the screens disagree
+often enough that you must check, never assume.
 
 ### Missing backend — degrade visibly, never fabricate
 
@@ -124,19 +136,25 @@ Use `components/*` helpers where they exist; add `.cx-banner` /
 
 ## Phase 3 — Verify by measurement
 
-Run **all four** passes. See `verify.md` for copy-paste recipes. Skipping any
-one of these has let a real defect ship.
+Run **all five** passes. See `verify.md` for copy-paste recipes, one section
+per pass. Skipping any one of these has let a real defect ship.
 
 1. **Geometry** — computed `height`/`padding`/`gap`/`radius`/`font-size` from
-   both the rendered design and the app, diffed programmatically.
+   both the rendered design and the app, diffed programmatically. Treat a
+   non-numeric value as a failure: every comparison with `NaN` is false, so a
+   missing property otherwise reports as a match.
 2. **Inventory** — every button label, section label, field, action row, kv
    key, step and checkbox in each surface. *This is the pass that catches a
    three-row menu that should have eight.*
-3. **Tokens** — every token the handoff declares exists; every token used
-   actually resolves rather than silently falling back.
+3. **Tokens** — every token the handoff declares exists; every token
+   *referenced by the stylesheets* resolves. Derive that list from the sheets;
+   a hand-written allowlist only contains names you spelled correctly.
 4. **Content** — copy, tooltips, empty states, and the design's voice rules
    (imperative buttons that name the action; `reason · ACTION`; numbers
-   specific; sentence case; no emoji).
+   specific; sentence case; no emoji). Assert every coming-soon control
+   actually carries its tooltip.
+5. **Interaction** — hit-test visibility, keyboard operability, focus reveals,
+   and that a trigger can close its own popover.
 
 Non-negotiables while verifying:
 

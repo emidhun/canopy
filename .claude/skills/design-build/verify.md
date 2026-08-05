@@ -48,15 +48,23 @@ Then assert in the **app**, tolerating sub-pixel noise:
     const el = document.querySelector(sel);
     if (!el) { bad.push(`${sel} NOT RENDERED`); continue; }
     const c = getComputedStyle(el);
-    for (const [p, exp] of Object.entries(want))
-      if (Math.abs(parseFloat(c[p]) - parseFloat(exp)) >= 0.6)
+    for (const [p, exp] of Object.entries(want)) {
+      const got = parseFloat(c[p]), e = parseFloat(exp);
+      // NaN is the trap: every comparison with NaN is false, so a missing or
+      // non-numeric value (auto, "", a typo'd property) would report as a
+      // MATCH. Fail on non-finite before comparing.
+      if (!Number.isFinite(got) || !Number.isFinite(e))
+        bad.push(`${sel}{${p}} NON-NUMERIC design ${exp} ours ${c[p]}`);
+      else if (Math.abs(got - e) >= 0.6)
         bad.push(`${sel}{${p}} design ${exp} ours ${c[p]}`);
+    }
   }
   return bad.length ? bad : 'ALL MATCH';
 }
 ```
 
 **`NOT RENDERED` is a failure, not a pass.** Force the surface open first.
+**A non-numeric value is a failure too** — never let it slip through as equal.
 
 ### Stated alignment rules
 
@@ -133,36 +141,142 @@ grep -oE "^\s*--[a-z0-9-]+:" src/styles/tokens.css | tr -d ' :' | sort -u > /tmp
 comm -23 /tmp/d.txt /tmp/o.txt          # missing from ours
 ```
 
-Resolution — a `var()` typo falls back silently, so prove they resolve:
+Resolution — a `var()` typo falls back silently. Deriving the list from the
+stylesheets is the whole point: a hand-written allowlist only contains names
+you spelled correctly, so it can never catch the typo it claims to prove
+against.
+
+Not every token lives on `:root`. Scoped properties (`--gutter` on the main
+pane, `--tblmin` on the overview body) resolve only on their own subtree, so
+a root-only check reports them as broken every run and trains you to ignore
+it. Resolve each reference **where it is used**.
 
 ```js
+// every token REFERENCED by our stylesheets, resolved at its own use site
 () => {
-  const rs = getComputedStyle(document.documentElement);
-  return ['--sp-row','--fs-body','--h-ib','--r-md','--action-primary']
-    .filter(v => !rs.getPropertyValue(v).trim());   // empty array = all resolve
+  const refs = new Map();                       // token -> a selector using it
+  for (const sheet of document.styleSheets) {
+    let rules; try { rules = sheet.cssRules; } catch { continue; }  // cross-origin
+    const walk = (rs) => { for (const r of rs) {
+      if (r.style && r.selectorText) for (const p of r.style) {
+        const v = r.style.getPropertyValue(p);
+        for (const m of v.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g))
+          if (!refs.has(m[1])) refs.set(m[1], r.selectorText);
+      }
+      if (r.cssRules) walk(r.cssRules);
+    }};
+    walk(rules);
+  }
+  const root = getComputedStyle(document.documentElement);
+  const unresolved = [];
+  for (const [token, selector] of refs) {
+    if (root.getPropertyValue(token).trim()) continue;          // global
+    // scoped: resolve on an element the referencing rule actually matches
+    let el = null;
+    for (const s of selector.split(',')) {
+      try { el = document.querySelector(s.trim()); } catch { /* :hover etc */ }
+      if (el) break;
+    }
+    if (!el || !getComputedStyle(el).getPropertyValue(token).trim())
+      unresolved.push({ token, selector, reachable: !!el });
+  }
+  return { referenced: refs.size, unresolved };   // unresolved must be empty
 }
 ```
 
-Literal audit — run before making any claim about coverage:
+> A `var()` with a fallback (`var(--x, 6px)`) still renders when `--x` is
+> missing. This finds the missing definition regardless.
+>
+> `reachable: false` means the recipe could not find an element to test on —
+> render the surface that uses it before trusting the result.
+
+Literal audit — run before making any claim about coverage.
+
+Two traps make a naive audit report cleaner than reality:
+
+- `grep -v "var(--"` **hides mixed declarations**. `padding: var(--sp-3) 11px`
+  contains a literal and is skipped. Real drift hid behind exactly this.
+- Scanning one stylesheet says nothing about the others.
 
 ```bash
+# px literals per stylesheet, KEEPING mixed token+literal declarations and
+# excluding only custom-property definitions
+for f in src/styles/*.css; do
+  n=$(grep -oE "^\s+[a-z-]+: *[^;]+;" "$f" | grep -vE "^\s*--" \
+      | grep -oE "\b[0-9]+(\.[0-9]+)?px" | wc -l | tr -d ' ')
+  printf "  %-28s %s px literals\n" "$(basename $f)" "$n"
+done
+
+# then list them, so each can be judged rather than counted
+grep -nE "^\s+[a-z-]+: *[^;]+;" src/styles/<sheet>.css | grep -E "[0-9]+px" | grep -vE "^\s*--"
+
+# raw colours anywhere
 grep -ohE "rgba?\([0-9., ]+\)|#[0-9a-fA-F]{3,8}\b" src/styles/*.css | sort | uniq -c
-grep -nE "^\s+[a-z-]+: *[^;]*[0-9]+px" src/styles/canopy-shell.css | grep -v "var(--"
 ```
 
 ---
 
-## 4. Interaction
+## 4. Content
+
+Geometry can match perfectly while the copy is wrong. Compare text, not just
+boxes — and against the design's stated voice rules.
+
+```js
+// run on BOTH pages and diff the results
+() => {
+  const t = el => el?.textContent.replace(/\s+/g, ' ').trim();
+  return {
+    buttons:   [...document.querySelectorAll('button')].map(t).filter(Boolean),
+    tooltips:  [...document.querySelectorAll('[title]')].map(e => e.getAttribute('title')),
+    labels:    [...document.querySelectorAll('.cxm-flab,.cxs-grp,.cx-label')].map(t),
+    empties:   [...document.querySelectorAll('.cxs-empty .et,.cxs-empty .es')].map(t),
+    hints:     [...document.querySelectorAll('.cxm-fhint,.cx-modal__hint')].map(t),
+  };
+}
+```
+
+Then check the handoff's content rules by hand — they are judgement, not regex:
+
+- buttons name their **specific action** ("Restart Server", not "OK"/"Confirm")
+- an action carries its reason as `reason · ACTION`, lowercase, not repeating
+  the button
+- confirmations are **past tense** and unremarkable, no exclamation marks
+- numbers are **specific** ("18 passed · 0 failed"), never "some"/"a few"
+- warnings say **what is lost**, concretely, with the actual list
+- **sentence case** everywhere except tracked uppercase section labels
+- **no emoji**; Unicode arrows and geometric bullets are typography, not
+  decoration
+- empty states **name the next step**, never a bare "Nothing here"
+
+Every coming-soon control must carry its tooltip — assert it rather than
+trusting it:
+
+```js
+() => [...document.querySelectorAll('[data-soon]')]
+  .filter(el => !/coming soon/i.test(el.getAttribute('title') || ''))   // must be empty
+```
+
+---
+
+## 5. Interaction
 
 Existence is not usability.
 
 ```js
-// visible, not merely present — a clipped menu still "opens"
+// visible, not merely present — a clipped menu still "opens".
+// All FOUR corners: clipping is usually one-sided, so testing two can pass a
+// menu cut off at top-right or bottom-left.
 () => {
   const el = document.querySelector('.cx-pop[role="menu"]');
   const r = el.getBoundingClientRect();
   const hit = (x,y) => { const t = document.elementFromPoint(x,y); return !!t && el.contains(t); };
-  return hit(r.left+4, r.top+4) && hit(r.right-4, r.bottom-4) && hit(r.left+r.width/2, r.bottom-4);
+  const corners = {
+    topLeft:     hit(r.left + 4,  r.top + 4),
+    topRight:    hit(r.right - 4, r.top + 4),
+    bottomLeft:  hit(r.left + 4,  r.bottom - 4),
+    bottomRight: hit(r.right - 4, r.bottom - 4),
+  };
+  return { corners, fullyVisible: Object.values(corners).every(Boolean) };
 }
 ```
 

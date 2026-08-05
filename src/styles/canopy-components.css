@@ -207,5 +207,7 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-banner__link{margin-left:auto;flex:none;font-size:var(--fs-micro);color:var(--text-tertiary);white-space:nowrap}
 /* the inline marker on a control that is drawn but not yet wired */
 .cx-soon{font:var(--fw-bold) var(--fs-label) var(--sans);letter-spacing:.05em;text-transform:uppercase;color:var(--state-attention);background:var(--warn-dim);padding:var(--sp-1) var(--sp-tight);border-radius:var(--r-xs);flex:none}
-[data-soon]{cursor:not-allowed}
-[data-soon]:hover{background:none}
+/* these must out-specify .cx-btn:disabled / .cx-ib:disabled above, which
+   otherwise win and restore `cursor: default` and a hover background */
+[data-soon],.cx-btn[data-soon]:disabled,.cx-ib[data-soon]:disabled{cursor:not-allowed}
+[data-soon]:hover,.cx-btn[data-soon]:disabled:hover,.cx-ib[data-soon]:disabled:hover{background:none}
