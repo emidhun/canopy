@@ -16,6 +16,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
+import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
   Bell, Braces, Check, ChevRight, Chevron, Copy, Cube, Doc, Download, Finder, Fork, Keyboard,
   Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
@@ -600,6 +601,7 @@ function SetupPage({ setup, setSetup, markDirty, flash }: PageProps) {
 
 /* ══════════════════════════ real: Repository ═══════════════════════════ */
 function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo }: PageProps) {
+  const [confirm, setConfirm] = useState(false);
   if (!repo) return null;
   return (
     <>
@@ -633,10 +635,38 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo }: Pa
       </div>
       <Adv label="Danger zone">
         <div className="row">
-          <button className="btn danger" onClick={onRemoveRepo}><Trash size={11} />Remove repository</button>
+          <button className="btn danger" onClick={() => setConfirm(true)}><Trash size={11} />Remove repository</button>
           <span className="hint" style={{ marginTop: 0 }}>Stops tracking {repo.name} in Canopy. Your files are untouched.</span>
         </div>
       </Adv>
+      {confirm && (
+        <Modal
+          danger
+          icon={Trash}
+          title="Remove repository"
+          sub={repo.name}
+          onClose={() => setConfirm(false)}
+          foot={
+            <>
+              <Hint>You can add it again anytime.</Hint>
+              <Spacer />
+              <button className="cx-btn cx-btn--ghost" onClick={() => setConfirm(false)}>Cancel</button>
+              <button className="cx-btn cx-btn--danger" onClick={() => { setConfirm(false); onRemoveRepo(); }}>
+                <Trash size={12} />Remove repository
+              </button>
+            </>
+          }
+        >
+          <p style={{ margin: 0, fontSize: "var(--fs-body)", lineHeight: 1.55, color: "var(--text-secondary)" }}>
+            Canopy will stop tracking <b style={{ color: "var(--text-primary)" }}>{repo.name}</b> and remove its
+            configuration here — its services, custom commands and agents.
+          </p>
+          <p style={{ margin: "10px 0 0", fontSize: "var(--fs-small)", lineHeight: 1.55, color: "var(--text-tertiary)" }}>
+            The repository, its worktrees and its <span style={{ fontFamily: "var(--mono)" }}>.worktreemanager.json</span>{" "}
+            (provisioned files and setup) on disk are not touched.
+          </p>
+        </Modal>
+      )}
     </>
   );
 }
