@@ -639,29 +639,50 @@ pub fn sweep_orphans(app: &AppHandle) {
 pub fn sweep_orphans(_app: &AppHandle) {}
 
 /// Compare recorded spawn time against the process's actual start time (±5s).
-/// Unix-only (uses `ps`); only the Unix crash sweep calls it.
+/// This is the guard against PID recycling: after a reboot (or enough process
+/// churn) the persisted pgid can belong to an unrelated process — the sweep
+/// must never SIGTERM that. Unix-only; only the Unix crash sweep calls it.
 #[cfg(unix)]
 pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
-        .output();
-    let Ok(out) = out else { return false };
-    if !out.status.success() {
-        return false;
-    }
-    let lstart = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if lstart.is_empty() {
-        return false;
-    }
-    // The pgid-existence check plus a sane recorded time is sufficient for v1;
-    // parsing lstart exactly would require another shell-out.
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    recorded_secs <= now
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        false,
+        ProcessRefreshKind::nothing(),
+    );
+    let Some(p) = sys.process(Pid::from_u32(pid)) else { return false };
+    let actual = p.start_time(); // seconds since the epoch
+    // an unreadable start time (0) fails the match — skipping a sweep is safe,
+    // killing an innocent process group is not
+    actual != 0 && actual.abs_diff(recorded_secs) <= 5
 }
 
 #[cfg(test)]
 mod tests {
     use super::classify_line;
+
+    /// The PID-recycling guard must recognize a live process's real start time
+    /// (this also proves sysinfo delivers a non-zero start_time on this OS —
+    /// the guard fails closed to "no match" when it can't read one).
+    #[test]
+    #[cfg(unix)]
+    fn own_process_start_time_matches_itself() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let pid = std::process::id();
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing(),
+        );
+        let start = sys.process(Pid::from_u32(pid)).map(|p| p.start_time()).unwrap_or(0);
+        assert!(start > 0, "sysinfo must expose a start time");
+        assert!(super::proc_start_time_matches(pid, start), "exact start time matches");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert!(!super::proc_start_time_matches(pid, now + 3600), "wrong time must not match");
+    }
 
     #[test]
     fn classifies_log_levels() {
