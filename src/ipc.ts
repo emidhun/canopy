@@ -57,6 +57,8 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  /** keybinding overrides: action id → binding ("Mod+k"). See app/keys.ts. */
+  keybindings: Record<string, string>;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
