@@ -261,10 +261,27 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
         .collect();
 
+    // With per-worktree databases off, ${WT_DB_NAME} resolves to the MAIN
+    // checkout's PG_DB, so provisioning points this worktree at the shared
+    // database instead of naming one of its own. Falling back to the derived
+    // name when the main checkout has no PG_DB keeps the worktree working
+    // rather than provisioning an empty database name.
+    let isolated = {
+        let s = state.settings.read();
+        s.repos.iter().find(|r| r.id == repo_id).map(|r| r.worktree_defaults.isolated_database).unwrap_or(true)
+    };
+    let derived_db = format!("{repo_slug}_{slug}");
+    let db_name = if isolated {
+        derived_db
+    } else {
+        let main_path = state.settings.read().repos.iter().find(|r| r.id == repo_id).map(|r| r.path.clone());
+        main_path.and_then(|p| env_value(&p, "PG_DB")).unwrap_or(derived_db)
+    };
+
     let mut m = HashMap::new();
     m.insert("WT_SLUG".into(), slug.clone());
     m.insert("WT_INDEX".into(), idx.to_string());
-    m.insert("WT_DB_NAME".into(), format!("{repo_slug}_{slug}"));
+    m.insert("WT_DB_NAME".into(), db_name);
     m.insert("WM_WT_SLUG".into(), slug); // back-compat alias
 
     let overrides = state.runtime.read().port_overrides.clone();

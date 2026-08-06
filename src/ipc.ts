@@ -49,6 +49,18 @@ export interface RepoCfg {
   agentCommand: string;
   /** selectable coding-agent launchers; `agentCommand` remains as legacy data */
   agents: AgentCfg[];
+  /** branch new worktrees are created from by default; empty = the modal's own default */
+  defaultBase: string;
+  worktreeDefaults: WorktreeDefaults;
+}
+
+/** What create_worktree does after `git worktree add`, per repository. */
+export interface WorktreeDefaults {
+  runSetup: boolean;
+  startServices: boolean;
+  /** off makes ${WT_DB_NAME} resolve to the main checkout's PG_DB, so the
+      worktree shares that database instead of getting one of its own */
+  isolatedDatabase: boolean;
 }
 
 export interface Settings {
@@ -144,6 +156,7 @@ export const ipc = {
   openInEditor: (wtKey: string) => invoke<void>("open_in_editor", { wtKey }),
   openFileInEditor: (wtKey: string, path: string) => invoke<void>("open_file_in_editor", { wtKey, path }),
   revealInFinder: (wtKey: string) => invoke<void>("reveal_in_finder", { wtKey }),
+  revealRepo: (repoId: string) => invoke<void>("reveal_repo", { repoId }),
   openTerminal: (wtKey: string) => invoke<void>("open_terminal", { wtKey }),
   openPort: (port: number) => invoke<void>("open_port", { port }),
   showMainWindow: () => invoke<void>("show_main_window"),

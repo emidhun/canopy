@@ -85,6 +85,8 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
         custom_commands: Vec::new(),
         agent_command: String::new(),
         agents: Vec::new(),
+        default_base: String::new(),
+        worktree_defaults: Default::default(),
     };
 
     let updated = {
@@ -584,6 +586,14 @@ pub fn reveal_in_finder(wt_key: String) -> Result<(), CanopyError> {
     Ok(())
 }
 
+/// Reveal a registered repository in the file manager. Takes a repo id rather
+/// than a path so a webview cannot use it to open an arbitrary directory.
+#[tauri::command]
+pub fn reveal_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyError> {
+    let path = repo_path(&app, &repo_id)?;
+    reveal_in_finder(path)
+}
+
 /// Open a terminal at the worktree root. macOS uses the configured terminal app;
 /// Linux tries the user's preference then common emulators.
 #[tauri::command]
@@ -762,18 +772,35 @@ pub async fn create_worktree(
     // Assign the worktree's ports first so .env overrides can reference them.
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_path, false);
     // The worktree exists either way; surface setup failure but keep the tree fresh.
-    let app3 = app.clone();
-    let wt_path3 = wt_path.clone();
-    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
-        emit_op(&app3, &wt_path3, "create", "progress", line)
-    })
-    .await;
+    let setup_result = if repo.worktree_defaults.run_setup {
+        let app3 = app.clone();
+        let wt_path3 = wt_path.clone();
+        crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
+            emit_op(&app3, &wt_path3, "create", "progress", line)
+        })
+        .await
+    } else {
+        // Skipping is a choice, not a silent no-op: the worktree exists but is
+        // not provisioned, and the runner is one click away.
+        emit_op(&app, &wt_path, "create", "progress", "setup skipped — Run setup when you're ready");
+        Ok(())
+    };
 
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
 
     match setup_result {
         Ok(()) => {
+            // Starting services is only meaningful once provisioning has run;
+            // booting a service against an unprovisioned worktree just crashes it.
+            if repo.worktree_defaults.start_services && repo.worktree_defaults.run_setup {
+                emit_op(&app, &wt_path, "create", "progress", "starting services…");
+                for key in services::worktree_svc_keys(&app, &wt_path) {
+                    if let Err(e) = services::start_service(&app, &key).await {
+                        emit_op(&app, &wt_path, "create", "progress", format!("{key} did not start: {e}"));
+                    }
+                }
+            }
             emit_op(&app, &wt_path, "create", "done", "worktree ready");
             Ok(wt_path)
         }

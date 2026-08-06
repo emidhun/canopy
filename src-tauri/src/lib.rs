@@ -295,6 +295,7 @@ pub fn run() {
             commands::open_in_editor,
             commands::open_file_in_editor,
             commands::reveal_in_finder,
+            commands::reveal_repo,
             commands::open_terminal,
             commands::open_port,
             commands::show_main_window,

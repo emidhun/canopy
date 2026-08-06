@@ -60,11 +60,19 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     setBase("");
     setExisting("");
     setExistingKind("local");
-    ipc
-      .listBranches(repo)
-      .then((b) => {
+    // The repo's configured default base wins when it still exists; falling
+    // back to `main` keeps the previous behaviour for repos that have none.
+    Promise.all([ipc.listBranches(repo), ipc.getSettings().catch(() => null)])
+      .then(([b, st]) => {
         setBranches(b);
-        setBase(b.local.includes("main") ? "main" : (b.local[0] ?? ""));
+        const configured = st?.repos.find((r) => r.id === repo)?.defaultBase?.trim();
+        setBase(
+          configured && b.local.includes(configured)
+            ? configured
+            : b.local.includes("main")
+              ? "main"
+              : (b.local[0] ?? ""),
+        );
       })
       .catch(() => setBranches({ local: [], remote: [], tags: [] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
