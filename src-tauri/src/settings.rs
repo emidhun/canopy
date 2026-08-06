@@ -13,6 +13,14 @@ pub struct Settings {
     pub repos: Vec<RepoCfg>,
     /// show the in-place "Switch branch" action in the worktree header
     pub show_switch_branch: bool,
+    /// Opt-in experiment flags, by id (see `EXPERIMENTS` in diagnostics.rs).
+    ///
+    /// A map rather than named booleans: experiments are meant to appear and
+    /// disappear, and every one of them would otherwise be a schema change
+    /// plus a migration for something that may not survive the month. An
+    /// unknown key is simply an experiment this build no longer has.
+    #[serde(default)]
+    pub experiments: HashMap<String, bool>,
 }
 
 impl Default for Settings {
@@ -23,6 +31,7 @@ impl Default for Settings {
             terminal: String::new(),
             repos: Vec::new(),
             show_switch_branch: true,
+            experiments: HashMap::new(),
         }
     }
 }

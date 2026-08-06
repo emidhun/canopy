@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod diagnostics;
 mod error;
 mod git;
 mod proc;
@@ -312,6 +313,11 @@ pub fn run() {
             commands::set_service_port,
             commands::run_migration,
             commands::run_custom_command,
+            commands::gather_diagnostics,
+            commands::list_experiments,
+            commands::open_log_dir,
+            commands::clear_caches,
+            commands::reset_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

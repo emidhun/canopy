@@ -57,6 +57,35 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  /** opt-in experiment flags by id; unknown ids are ignored */
+  experiments: Record<string, boolean>;
+}
+
+/** An experiment this build actually ships. Nothing is listed that the app
+    does not honour — a flag nothing reads is "coming soon" with extra steps. */
+export interface Experiment {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+export interface Diagnostics {
+  appVersion: string;
+  os: string;
+  arch: string;
+  repos: number;
+  worktrees: number;
+  services: number;
+  runningServices: number;
+  terminalSessions: number;
+  configDir: string;
+  logDir: string;
+  crashReports: number;
+}
+
+export interface ClearedCaches {
+  serviceLogs: number;
+  bytes: number;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
@@ -165,6 +194,13 @@ export const ipc = {
   worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
+
+  /** returns [structured, markdown] — the second is what goes on the clipboard */
+  gatherDiagnostics: () => invoke<[Diagnostics, string]>("gather_diagnostics"),
+  listExperiments: () => invoke<Experiment[]>("list_experiments"),
+  openLogDir: () => invoke<void>("open_log_dir"),
+  clearCaches: () => invoke<ClearedCaches>("clear_caches"),
+  resetSettings: () => invoke<Settings>("reset_settings"),
 };
 
 export interface GitEvent extends GitMeta {
