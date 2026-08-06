@@ -386,16 +386,35 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
     if let Ok(meta) = git::git_meta(wt_path).await {
         let state = app.state::<AppState>();
         let mut changed = false;
+        // "moved on origin" is a RISE in behind-count, not a nonzero one: the
+        // latter would re-notify on every refresh for as long as you stay
+        // behind, which is exactly the noise that trains people to ignore
+        // notifications.
+        let mut moved_from: Option<(u32, String)> = None;
         {
             let mut tree = state.tree.write();
             for r in tree.iter_mut() {
                 for w in r.worktrees.iter_mut() {
                     if w.wt_key == wt_path && w.git.as_ref() != Some(&meta) {
+                        let was = w.git.as_ref().map(|g| g.behind).unwrap_or(0);
+                        if meta.behind > was {
+                            moved_from = Some((was, w.branch.clone()));
+                        }
                         w.git = Some(meta.clone());
                         changed = true;
                     }
                 }
             }
+        }
+        if let Some((_, branch)) = moved_from {
+            let n = meta.behind;
+            crate::notify::notify(
+                app,
+                crate::notify::Kind::BranchMoved,
+                wt_path,
+                "A branch moved on origin",
+                &format!("{branch} is {n} commit{} behind", if n == 1 { "" } else { "s" }),
+            );
         }
         if changed {
             #[derive(Serialize, Clone)]

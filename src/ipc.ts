@@ -57,6 +57,20 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  notifications: NotifyCfg;
+}
+
+/** Which backend events raise an OS notification. Every one of these also
+    appears in the in-app attention queue; a notification is for when Canopy is
+    in the tray and you're looking at something else. */
+export interface NotifyCfg {
+  serviceCrash: boolean;
+  agentWaiting: boolean;
+  setupDone: boolean;
+  branchMoved: boolean;
+  sound: boolean;
+  /** count | dot | off */
+  badge: string;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
