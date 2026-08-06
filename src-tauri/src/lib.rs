@@ -129,7 +129,7 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
                         if let Some(table) = handle.try_state::<TermTable>() {
-                            terminal::sweep_idle(&table);
+                            terminal::sweep_idle(&handle, &table);
                         }
                     }
                 });

@@ -157,6 +157,7 @@ const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    agentContext: { worktreeContext: true, runtimeFacts: true, failingLogs: false }, maxParallelAgents: 0, agentIdleTimeoutMin: 0,
     services: [
       { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" } },
       { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" } },
@@ -309,6 +310,8 @@ function AgentsPage({ repo, patchRepo, markDirty, flash }: PageProps) {
   const patch = (id: string, p: Partial<AgentCfg>) => { patchRepo({ agents: agents.map((a) => (a.id === id ? { ...a, ...p } : a)) }); markDirty("agents"); };
   const makeDefault = (id: string) => { const a = agents.find((x) => x.id === id); if (!a) return; patchRepo({ agents: [a, ...agents.filter((x) => x.id !== id)] }); markDirty("agents"); flash(`${a.name || a.command} is now the default agent`); };
   const [open, setOpen] = useState<string | null>(null);
+  const ac = repo.agentContext ?? { worktreeContext: true, runtimeFacts: true, failingLogs: false };
+  const setAc = (p: Partial<typeof ac>) => { patchRepo({ agentContext: { ...ac, ...p } }); markDirty("agents"); };
   return (
     <>
       <div className="sec">
@@ -348,11 +351,25 @@ function AgentsPage({ repo, patchRepo, markDirty, flash }: PageProps) {
       </div>
       <div className="sec">
         <div className="slab">Context handed to every agent</div>
-        <Soon>The per-agent context toggles and concurrency limit aren't wired yet — Canopy currently seeds the worktree context by default.</Soon>
-        <div className="soonwrap">
-          <TRow title="Worktree context" hint="Task title, description and linked PR or issue." on disabled />
-          <TRow title="Runtime facts" hint="Branch, ports, database name and running services." on disabled />
-          <TRow title="Recent failing logs" hint="The last 40 error lines, when a service is unhealthy." on={false} disabled />
+        <TRow title="Worktree context" hint="Task title, description and linked PR or issue." on={ac.worktreeContext} onToggle={() => setAc({ worktreeContext: !ac.worktreeContext })} />
+        <TRow title="Runtime facts" hint="Branch, path, database name and resolved ports." on={ac.runtimeFacts} onToggle={() => setAc({ runtimeFacts: !ac.runtimeFacts })} />
+        <TRow title="Recent failing logs" hint="The last error lines from unhealthy services. Off by default — it is the one part that can carry arbitrary process output into a prompt sent to a third-party CLI." on={ac.failingLogs} onToggle={() => setAc({ failingLogs: !ac.failingLogs })} />
+      </div>
+      <div className="sec">
+        <div className="slab">Advanced</div>
+        <div className="fgrid">
+          <span className="lb">Max parallel</span>
+          <div className="row">
+            <input className="inp mono" style={{ width: 80 }} value={repo.maxParallelAgents || ""} placeholder="no limit"
+              onChange={(e) => { patchRepo({ maxParallelAgents: Number(e.target.value) || 0 }); markDirty("agents"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Agents at once across this repo. A launch past the limit is refused, not queued.</span>
+          </div>
+          <span className="lb">Idle timeout</span>
+          <div className="row">
+            <input className="inp mono" style={{ width: 80 }} value={repo.agentIdleTimeoutMin || ""} placeholder="never"
+              onChange={(e) => { patchRepo({ agentIdleTimeoutMin: Number(e.target.value) || 0 }); markDirty("agents"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Minutes with no output or input before an agent is closed. Blank never closes one — a quiet agent may just be waiting for you.</span>
+          </div>
         </div>
       </div>
     </>

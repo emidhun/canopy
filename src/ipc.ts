@@ -49,6 +49,20 @@ export interface RepoCfg {
   agentCommand: string;
   /** selectable coding-agent launchers; `agentCommand` remains as legacy data */
   agents: AgentCfg[];
+  agentContext: AgentContextCfg;
+  /** most agent sessions at once in this repo; 0 = no limit */
+  maxParallelAgents: number;
+  /** minutes an agent may sit idle before Canopy closes it; 0 = never */
+  agentIdleTimeoutMin: number;
+}
+
+/** What Canopy puts in the handoff every agent receives. */
+export interface AgentContextCfg {
+  worktreeContext: boolean;
+  runtimeFacts: boolean;
+  /** opt-in: the one part that can carry arbitrary process output — including
+      a value read from a .env — into a prompt sent to a third-party CLI */
+  failingLogs: boolean;
 }
 
 export interface Settings {

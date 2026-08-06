@@ -456,11 +456,48 @@ pub fn sweep_orphans(app: &AppHandle) {
 /// child makes its reader hit EOF, which removes the session and emits
 /// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
 /// waiting for the user, and killing it would lose work.
-pub fn sweep_idle(table: &TermTable) {
+pub fn sweep_idle(app: &AppHandle, table: &TermTable) {
+    // Per-repo agent timeout, keyed by the repo's worktree paths. Resolved
+    // once per sweep rather than per session — the sweep runs every 5 minutes
+    // and this is two lock acquisitions instead of one per open terminal.
+    let agent_limits: HashMap<String, Duration> = app
+        .try_state::<AppState>()
+        .map(|state| {
+            let settings = state.settings.read();
+            let tree = state.tree.read();
+            tree.iter()
+                .filter_map(|r| {
+                    let mins = settings.repos.iter().find(|c| c.id == r.repo_id)?.agent_idle_timeout_min;
+                    (mins > 0).then(|| {
+                        r.worktrees
+                            .iter()
+                            .map(|w| (w.wt_key.clone(), Duration::from_secs(mins as u64 * 60)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .flatten()
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut sessions = table.sessions.lock();
     for (id, sess) in sessions.iter_mut() {
-        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
+        let kind = kind_of(id);
+        if kind == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
             let _ = sess.child.kill();
+            continue;
+        }
+        // Agents are exempt unless the repo opted in: a quiet agent may just
+        // be waiting for the user, and killing it loses work. Only an explicit
+        // per-repo timeout overrides that.
+        if kind == "agent" {
+            let wt = id.rsplit_once("::").map(|(w, _)| w).unwrap_or("");
+            if let Some(limit) = agent_limits.get(wt) {
+                if sess.last_activity.elapsed() > *limit {
+                    log::info!("closing idle agent {id} after {}s", limit.as_secs());
+                    let _ = sess.child.kill();
+                }
+            }
         }
     }
 }

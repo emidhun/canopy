@@ -66,6 +66,40 @@ pub struct RepoCfg {
     /// `agent_command` so existing settings files upgrade without data loss.
     #[serde(default)]
     pub agents: Vec<AgentCfg>,
+    #[serde(default)]
+    pub agent_context: AgentContextCfg,
+    /// Most agent sessions allowed to run at once in one repository.
+    /// 0 = no limit. Each agent is a real CLI doing real work; several at once
+    /// on one machine compete for CPU and for the same dev database.
+    #[serde(default)]
+    pub max_parallel_agents: u32,
+    /// Minutes an agent session may sit with no output or input before Canopy
+    /// closes it. 0 = never, which is the default: a quiet agent may simply be
+    /// waiting for the user, and killing it loses work.
+    #[serde(default)]
+    pub agent_idle_timeout_min: u32,
+}
+
+/// What Canopy puts in the handoff every agent receives.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AgentContextCfg {
+    /// the task title, body and linked PR / issue
+    pub worktree_context: bool,
+    /// branch, path, database name and resolved ports
+    pub runtime_facts: bool,
+    /// the last error lines from any unhealthy service
+    pub failing_logs: bool,
+}
+
+impl Default for AgentContextCfg {
+    fn default() -> Self {
+        // Matches what the handoff contained before this was configurable.
+        // Failing logs are opt-in: they are the one part that can carry
+        // arbitrary process output — including a value from a .env — into a
+        // prompt sent to a third-party CLI.
+        Self { worktree_context: true, runtime_facts: true, failing_logs: false }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
