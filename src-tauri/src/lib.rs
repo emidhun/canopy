@@ -3,6 +3,7 @@ mod commands;
 mod csp;
 mod db;
 mod disk;
+mod diagnostics;
 mod error;
 mod git;
 mod proc;
@@ -339,6 +340,11 @@ pub fn run() {
             commands::get_disk_usage,
             commands::scan_disk_usage,
             commands::set_worktree_pinned,
+            commands::gather_diagnostics,
+            commands::list_experiments,
+            commands::open_log_dir,
+            commands::clear_caches,
+            commands::reset_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

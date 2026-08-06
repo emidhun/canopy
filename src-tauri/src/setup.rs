@@ -788,6 +788,7 @@ pub async fn run_setup(
     repo_path: &str,
     vars: &HashMap<String, String>,
     dry_run: bool,
+    parallel: bool,
     mut progress: impl FnMut(Progress),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
@@ -805,7 +806,7 @@ pub async fn run_setup(
         // than having to parse out of someone else's output.
         progress(Progress::StepResult { index: 0, text: format!("{n} file{}", if n == 1 { "" } else { "s" }) });
     }
-    run_tasks(wt_path, repo_path, &cfg.setup, &cfg.setup_policy, vars, dry_run, &mut progress).await
+    run_tasks(wt_path, repo_path, &cfg.setup, &cfg.setup_policy, vars, dry_run, parallel, &mut progress).await
 }
 
 /// Run the setup task list, honouring per-task cwd/enable and the failure and
@@ -819,10 +820,22 @@ async fn run_tasks(
     policy: &SetupPolicy,
     vars: &HashMap<String, String>,
     dry_run: bool,
+    parallel: bool,
     progress: &mut impl FnMut(Progress),
 ) -> Result<(), String> {
     let live: Vec<&SetupTask> = tasks.iter().filter(|t| !t.cmd.trim().is_empty()).collect();
     let total = live.iter().filter(|t| t.enabled).count();
+
+    // The parallel-setup experiment runs the ENABLED tasks at once. It has to
+    // go through the same task list rather than the raw command array it was
+    // written against: running a task the user disabled, or running one
+    // outside its configured working directory, would be a bug the experiment
+    // flag doesn't excuse. A dry run still reports sequentially — the plan is
+    // what is being previewed, not the scheduling.
+    if parallel && !dry_run && total > 1 {
+        let enabled: Vec<&SetupTask> = live.iter().copied().filter(|t| t.enabled).collect();
+        return run_tasks_parallel(wt_path, repo_path, &enabled, policy, vars, progress).await;
+    }
     let mut failures: Vec<String> = Vec::new();
     let mut n = 0usize;
 
@@ -867,6 +880,84 @@ async fn run_tasks(
         // reporting Ok here would mark the worktree provisioned when it isn't.
         1 => Err(failures.remove(0)),
         k => Err(format!("{k} setup tasks failed:\n{}", failures.join("\n"))),
+    }
+}
+
+/// Run every setup command at once (the `parallel-setup` experiment).
+///
+/// Correct only when the tasks are independent; the experiment's own copy says
+/// so, and that is exactly why it is an experiment rather than the default.
+/// Ordinary setup lists routinely encode a dependency ("install, then
+/// migrate") that no static analysis here could detect.
+///
+/// Output is funnelled through one channel rather than shared `&mut` progress,
+/// so interleaved lines stay whole and each is prefixed with its task number —
+/// without that, parallel output is unreadable.
+async fn run_tasks_parallel(
+    wt_path: &str,
+    repo_path: &str,
+    tasks: &[&SetupTask],
+    policy: &SetupPolicy,
+    vars: &HashMap<String, String>,
+    progress: &mut impl FnMut(Progress),
+) -> Result<(), String> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let n = tasks.len();
+    progress(Progress::Line(format!("setup [parallel]: running {n} tasks at once")));
+
+    // Resolve every working directory BEFORE spawning: a task whose cwd
+    // escapes the worktree must fail the run, not one spawned branch.
+    let mut prepared = Vec::with_capacity(n);
+    for task in tasks {
+        let cwd = if task.cwd.trim().is_empty() {
+            wt_path.to_string()
+        } else {
+            check_contained(task.cwd.trim(), "task cwd")?;
+            Path::new(wt_path).join(task.cwd.trim()).to_string_lossy().into_owned()
+        };
+        prepared.push((task.cmd.clone(), cwd));
+    }
+
+    let mut handles = Vec::with_capacity(n);
+    for (i, (cmd, cwd)) in prepared.into_iter().enumerate() {
+        let (wt, repo, vars, tx) = (wt_path.to_string(), repo_path.to_string(), vars.clone(), tx.clone());
+        let timeout = policy.timeout_secs;
+        handles.push(tauri::async_runtime::spawn(async move {
+            let label = format!("setup [{}/{n}]", i + 1);
+            let one = [cmd];
+            let tx2 = tx.clone();
+            let mut fwd = move |p: Progress| {
+                if let Progress::Line(line) = p {
+                    let _ = tx2.send(format!("{label} {line}"));
+                }
+            };
+            run_commands_in(&cwd, &wt, &repo, &one, &vars, "setup", timeout, &mut fwd).await
+        }));
+    }
+    drop(tx); // the loop below ends when every task's sender is gone
+
+    while let Some(line) = rx.recv().await {
+        progress(Progress::Line(line));
+    }
+
+    // Every task is awaited even after one fails: leaving the others running
+    // detached would let a half-finished install keep writing into a worktree
+    // the caller has already been told is broken.
+    let mut first_error: Option<String> = None;
+    for h in handles {
+        match h.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+            Err(e) => {
+                first_error.get_or_insert(format!("setup task panicked: {e}"));
+            }
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
     }
 }
 

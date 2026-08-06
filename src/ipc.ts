@@ -96,6 +96,8 @@ export interface Settings {
   pinnedWorktrees: string[];
   security: SecurityCfg;
   embeddedTerminal: TermCfg;
+  /** opt-in experiment flags by id; unknown ids are ignored */
+  experiments: Record<string, boolean>;
 }
 
 export interface SecurityCfg {
@@ -123,6 +125,33 @@ export interface TermCfg {
   bell: boolean;
   cwdWorktree: boolean;
   inheritEnv: boolean;
+}
+
+/** An experiment this build actually ships. Nothing is listed that the app
+    does not honour — a flag nothing reads is "coming soon" with extra steps. */
+export interface Experiment {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+export interface Diagnostics {
+  appVersion: string;
+  os: string;
+  arch: string;
+  repos: number;
+  worktrees: number;
+  services: number;
+  runningServices: number;
+  terminalSessions: number;
+  configDir: string;
+  logDir: string;
+  crashReports: number;
+}
+
+export interface ClearedCaches {
+  serviceLogs: number;
+  bytes: number;
 
 }
 
@@ -344,6 +373,13 @@ export const ipc = {
       `worktree:disk`. Fresh figures are skipped unless `force`. */
   scanDiskUsage: (wtKeys: string[], force = false) => invoke<void>("scan_disk_usage", { wtKeys, force }),
   setWorktreePinned: (wtKey: string, pinned: boolean) => invoke<void>("set_worktree_pinned", { wtKey, pinned }),
+
+  /** returns [structured, markdown] — the second is what goes on the clipboard */
+  gatherDiagnostics: () => invoke<[Diagnostics, string]>("gather_diagnostics"),
+  listExperiments: () => invoke<Experiment[]>("list_experiments"),
+  openLogDir: () => invoke<void>("open_log_dir"),
+  clearCaches: () => invoke<ClearedCaches>("clear_caches"),
+  resetSettings: () => invoke<Settings>("reset_settings"),
 };
 
 /** A worktree's on-disk footprint: everything under its root, `node_modules`

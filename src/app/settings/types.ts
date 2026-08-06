@@ -23,6 +23,8 @@ export type PageProps = {
   onImportJson: () => void;
   onCopyJson: () => void;
   selKey: string | null;
+  /** re-read settings from the backend — used after a reset replaces them */
+  reload: () => void;
   /** rows the save step refused, keyed by rowKey() — the editors mark these (#43) */
   invalid: ReadonlyMap<string, IncompleteRow>;
 };

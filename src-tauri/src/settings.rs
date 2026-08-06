@@ -26,6 +26,14 @@ pub struct Settings {
     /// the embedded PTY + xterm renderer (Settings → Terminal → Embedded shell)
     #[serde(default)]
     pub embedded_terminal: TermCfg,
+    /// Opt-in experiment flags, by id (see `EXPERIMENTS` in diagnostics.rs).
+    ///
+    /// A map rather than named booleans: experiments are meant to appear and
+    /// disappear, and every one of them would otherwise be a schema change
+    /// plus a migration for something that may not survive the month. An
+    /// unknown key is simply an experiment this build no longer has.
+    #[serde(default)]
+    pub experiments: HashMap<String, bool>,
 }
 
 /// Secret handling and git credentials.
@@ -124,6 +132,7 @@ impl Default for Settings {
             pinned_worktrees: Vec::new(),
             security: SecurityCfg::default(),
             embedded_terminal: TermCfg::default(),
+            experiments: HashMap::new(),
         }
     }
 }
