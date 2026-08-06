@@ -191,11 +191,11 @@ pub fn toggle_popover(app: &AppHandle, tray_pos: PhysicalPosition<f64>, tray_siz
 /// Re-run the git refresh that the background loop skips while every window is
 /// hidden. Every path that brings a window back on screen must call this —
 /// tray click (macOS), tray menu (Linux/Windows), and `show_main_window`.
+/// Collapses with any refresh already in flight (see `state::refresh_all`).
 pub(crate) fn catch_up_refresh(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let _ = crate::state::refresh_tree(&app).await;
-        crate::state::refresh_all_git_meta(&app).await;
+        crate::state::refresh_all(&app).await;
     });
 }
 

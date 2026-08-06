@@ -102,15 +102,13 @@ pub fn run() {
             // the periodic tick is skipped (show_main_window / the popover
             // toggle kick an immediate refresh when a window comes back).
             tauri::async_runtime::spawn(async move {
-                let _ = state::refresh_tree(&handle).await;
-                state::refresh_all_git_meta(&handle).await;
+                state::refresh_all(&handle).await;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                     if !any_window_visible(&handle) {
                         continue;
                     }
-                    let _ = state::refresh_tree(&handle).await;
-                    state::refresh_all_git_meta(&handle).await;
+                    state::refresh_all(&handle).await;
                 }
             });
 

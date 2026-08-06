@@ -39,20 +39,19 @@ fn chrono_time() -> String {
 
 /// Local UTC offset with a 60s cache — the exact value only shifts on a DST
 /// boundary, and computing it per log line meant a localtime_r call for every
-/// line of a webpack burst.
+/// line of a webpack burst. Timestamp and offset are packed into ONE atomic
+/// (ts << 20 | offset + 50400; offsets span ±14h < 2^17) so a racing reader
+/// can never pair a fresh timestamp with a stale offset.
 fn cached_utc_offset(now_secs: u64) -> i64 {
-    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-    static OFFSET: AtomicI64 = AtomicI64::new(0);
-    static FETCHED_AT: AtomicU64 = AtomicU64::new(0);
-    let last = FETCHED_AT.load(Ordering::Relaxed);
-    if last == 0 || now_secs.saturating_sub(last) > 60 {
-        let off = crate::proc::local_utc_offset_secs();
-        OFFSET.store(off, Ordering::Relaxed);
-        FETCHED_AT.store(now_secs, Ordering::Relaxed);
-        off
-    } else {
-        OFFSET.load(Ordering::Relaxed)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static PACKED: AtomicU64 = AtomicU64::new(0);
+    let p = PACKED.load(Ordering::Relaxed);
+    if p != 0 && now_secs.saturating_sub(p >> 20) <= 60 {
+        return ((p & 0xF_FFFF) as i64) - 50400;
     }
+    let fresh = crate::proc::local_utc_offset_secs().clamp(-50400, 50400);
+    PACKED.store((now_secs << 20) | ((fresh + 50400) as u64), Ordering::Relaxed);
+    fresh
 }
 
 pub struct ProcEntry {

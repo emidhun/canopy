@@ -156,50 +156,92 @@ pub async fn clone_database(wt_path: &str, target: &str, mut progress: impl FnMu
     progress(format!("creating database {target}…"));
     run(wt_path, &c, &format!("createdb {conn_args} {}", q(target))).await?;
     progress(format!("copying {} → {target}…", c.db));
-    // Dump to a temp file, then restore from it — deliberately NOT a shell
-    // pipeline. A pipeline's exit status is the last command's, so a failed
-    // pg_dump feeding a tolerant pg_restore reports success; and `set -o
-    // pipefail` is not a portable fix — `set` is a POSIX *special builtin*, so
+    // Dump piped straight into restore — but the pipe lives in RUST, not the
+    // shell. A shell pipeline's exit status is the last command's (a failed
+    // pg_dump feeding a tolerant pg_restore reports success), and `set -o
+    // pipefail` is not a portable fix: `set` is a POSIX *special builtin*, so
     // on dash (Debian/Ubuntu /bin/sh) an unknown option exits the shell
-    // outright, even wrapped in braces or an `|| true` list. Two explicit
-    // stages work on every shell and say which half failed.
+    // outright — braces and `|| true` do not contain it. Connecting the two
+    // children ourselves checks BOTH statuses, names the failing stage, and
+    // stages nothing on disk (a temp file would double a big DB's footprint).
     let pre = pg_path_prefix_for(server_major(wt_path, &c).await);
-    let dump = temp_dump_path(target);
-    let dump_q = q(&crate::toolchain::bash_path(&dump));
-    let dump_res = run(
+    let result = run_piped(
         wt_path,
         &c,
-        &format!("{pre}pg_dump {conn_args} -Fc {src} -f {dump_q}", src = q(&c.db)),
+        &format!("{pre}pg_dump {conn_args} -Fc {src}", src = q(&c.db)),
+        &format!("{pre}pg_restore {conn_args} --no-owner --no-acl -d {dst}", dst = q(target)),
+        &c.db,
+        target,
     )
     .await;
-    let result = match dump_res {
-        Err(e) => Err(format!("dump of {} failed: {e}", c.db)),
-        Ok(_) => run(
-            wt_path,
-            &c,
-            &format!("{pre}pg_restore {conn_args} --no-owner --no-acl -d {dst} {dump_q}", dst = q(target)),
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("restore into {target} failed: {e}")),
-    };
-    let _ = std::fs::remove_file(&dump);
-    result?;
+    if let Err(e) = result {
+        // don't strand the half-filled database we just created — a retry
+        // would otherwise die on "already exists"
+        progress(format!("copy failed — dropping partially created {target}…"));
+        let _ = run(wt_path, &c, &format!("dropdb {conn_args} --if-exists {}", q(target))).await;
+        return Err(e);
+    }
     progress("snapshot ready".into());
     Ok(())
 }
 
-/// Scratch path for the intermediate dump. Includes the pid so two Canopy
-/// runs (or two snapshots) can't collide on it.
-fn temp_dump_path(target: &str) -> String {
-    let safe: String = target
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    std::env::temp_dir()
-        .join(format!("canopy-snap-{}-{safe}.dump", std::process::id()))
-        .to_string_lossy()
-        .into_owned()
+/// Spawn `producer | consumer` with the pipe held by us: producer's stdout
+/// feeds consumer's stdin, both run through the login shell (PATH), both exit
+/// statuses are checked, and the whole pair shares one timeout.
+async fn run_piped(
+    wt_path: &str,
+    c: &PgConn,
+    producer: &str,
+    consumer: &str,
+    src_label: &str,
+    dst_label: &str,
+) -> Result<(), String> {
+    use std::process::Stdio;
+    let spawn = |line: &str, stdin: Stdio, stdout: Stdio| {
+        let (shell, args) = crate::toolchain::shell_argv(line);
+        let mut cmd = Command::new(shell);
+        cmd.args(&args)
+            .current_dir(wt_path)
+            .kill_on_drop(true)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(Stdio::piped());
+        if let Some(p) = &c.pass {
+            cmd.env("PGPASSWORD", p);
+        }
+        cmd.spawn()
+    };
+    let mut prod = spawn(producer, Stdio::null(), Stdio::piped()).map_err(|e| format!("pg_dump spawn failed: {e}"))?;
+    let prod_out = prod.stdout.take().ok_or("pg_dump stdout unavailable")?;
+    let pipe: Stdio = prod_out.try_into().map_err(|e| format!("pipe setup failed: {e}"))?;
+    let cons = spawn(consumer, pipe, Stdio::null()).map_err(|e| format!("pg_restore spawn failed: {e}"))?;
+
+    // wait on both concurrently: if the consumer dies early the producer gets
+    // EPIPE and exits, and vice versa the consumer sees EOF — no deadlock.
+    let waited = tokio::time::timeout(PG_TIMEOUT, async {
+        tokio::join!(prod.wait_with_output(), cons.wait_with_output())
+    })
+    .await;
+    let (p_out, c_out) = match waited {
+        Ok(pair) => pair,
+        Err(_) => return Err(format!("copy timed out after {}s", PG_TIMEOUT.as_secs())),
+    };
+    let p_out = p_out.map_err(|e| format!("pg_dump wait failed: {e}"))?;
+    let c_out = c_out.map_err(|e| format!("pg_restore wait failed: {e}"))?;
+    if !p_out.status.success() {
+        return Err(format!("dump of {src_label} failed: {}", tail(&p_out.stderr)));
+    }
+    if !c_out.status.success() {
+        return Err(format!("restore into {dst_label} failed: {}", tail(&c_out.stderr)));
+    }
+    Ok(())
+}
+
+/// Last few stderr lines, newest-last — the actionable part of a pg error.
+fn tail(stderr: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = s.lines().rev().take(4).collect();
+    lines.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 /// Dump the worktree's current DB to a custom-format file at `file_path`.

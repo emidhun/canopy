@@ -360,6 +360,17 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         *cached = tree.clone();
         changed
     };
+    // self-heal the statuses map: a service's exit waiter can fire set_status
+    // AFTER its worktree was removed and cleaned (stop is async), re-inserting
+    // an orphan key — prune anything the rebuilt tree doesn't know.
+    {
+        let known: std::collections::HashSet<&str> = tree
+            .iter()
+            .flat_map(|r| r.worktrees.iter())
+            .flat_map(|w| w.services.iter().map(|s| s.svc_key.as_str()))
+            .collect();
+        state.statuses.write().retain(|k, _| known.contains(k.as_str()));
+    }
     {
         let runtime = state.runtime.read().clone();
         let _ = crate::settings::save_runtime(app, &runtime);
@@ -397,6 +408,21 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
             let _ = app.emit("worktree:git", &GitEvent { wt_key: wt_path, meta: &meta });
         }
     }
+}
+
+/// Full refresh (tree + git meta), collapsed under an in-flight guard: the
+/// 60s loop, the tray catch-up paths and show_main_window can all fire at
+/// once (tray click + window show is exactly that), and each full refresh is
+/// 2 git spawns per worktree — no reason to run three copies concurrently.
+pub async fn refresh_all(app: &AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+    if IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        return; // one is already running and will pick up the same state
+    }
+    let _ = refresh_tree(app).await;
+    refresh_all_git_meta(app).await;
+    IN_FLIGHT.store(false, Ordering::Release);
 }
 
 /// Refresh git meta for every worktree. Worktrees are independent, so the
