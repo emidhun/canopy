@@ -14,9 +14,10 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings, type TermCfg } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
+import { invalidateTermCfg } from "./TerminalPane";
 import {
   Bell, Braces, Check, ChevRight, Chevron, Copy, Cube, Doc, Download, Finder, Fork, Keyboard,
   Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
@@ -153,8 +154,13 @@ function hlLine(line: string): string {
   return s;
 }
 
+const DEFAULT_TERM: TermCfg = {
+  program: "", args: "", fontFamily: "", fontSize: 0, scrollback: 0,
+  cursor: "block", cursorBlink: true, bell: false, cwdWorktree: true, inheritEnv: true,
+};
+
 const MOCK: Settings = {
-  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, embeddedTerminal: DEFAULT_TERM,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [
@@ -721,16 +727,47 @@ function TerminalPage({ settings, patch, markDirty }: PageProps) {
             <span className="hint" style={{ marginTop: 0 }}>Opened by “Open in terminal”.</span></div>
         </div>
       </div>
-      <div className="sec">
-        <div className="slab">Embedded shell</div>
-        <Soon>The embedded shell's program, font, scrollback and behaviour aren't configurable yet — it inherits your login shell.</Soon>
-        <div className="soonwrap fgrid">
-          <span className="lb">Program</span><input className="inp mono" disabled placeholder="/bin/zsh" />
-          <span className="lb">Font</span><div className="row"><select className="inp gr" disabled><option>SF Mono</option></select><input className="inp mono" disabled defaultValue="12" style={{ width: 60 }} /></div>
-          <span className="lb">Scrollback</span><input className="inp mono" disabled defaultValue="10000" style={{ width: 90 }} />
-        </div>
-      </div>
+      <EmbeddedShellSection settings={settings} patch={patch} markDirty={markDirty} />
     </>
+  );
+}
+
+/* Embedded shell. Every field's empty/zero value means "keep the built-in
+   behaviour", so placeholders show what you get by leaving it blank rather
+   than pretending to be the stored value. */
+function EmbeddedShellSection({ settings, patch, markDirty }: Pick<PageProps, "settings" | "patch" | "markDirty">) {
+  const t = settings.embeddedTerminal ?? DEFAULT_TERM;
+  const set = (p: Partial<TermCfg>) => { patch({ embeddedTerminal: { ...t, ...p } }); markDirty("terminal"); };
+  const num = (v: string) => (v.trim() === "" ? 0 : Number(v));
+  return (
+    <div className="sec">
+      <div className="slab">Embedded shell<span className="n">applies to shells opened from now on</span></div>
+      <div className="fgrid">
+        <span className="lb">Program</span>
+        <input className="inp mono" value={t.program} placeholder="your login shell" onChange={(e) => set({ program: e.target.value })} />
+        <span className="lb">Arguments</span>
+        <input className="inp mono" value={t.args} placeholder="only used with an explicit program" disabled={!t.program.trim()}
+          title={t.program.trim() ? undefined : "Canopy passes its own -l/-i flags to a login shell it picked; your arguments would collide with them."}
+          onChange={(e) => set({ args: e.target.value })} />
+        <span className="lb">Font</span>
+        <div className="row">
+          <input className="inp mono gr" value={t.fontFamily} placeholder="the app's mono stack" onChange={(e) => set({ fontFamily: e.target.value })} />
+          <input className="inp mono" value={t.fontSize || ""} placeholder="12.5" style={{ width: 70 }} onChange={(e) => set({ fontSize: num(e.target.value) })} />
+        </div>
+        <span className="lb">Scrollback</span>
+        <input className="inp mono" value={t.scrollback || ""} placeholder="2500" style={{ width: 90 }} onChange={(e) => set({ scrollback: num(e.target.value) })} />
+        <span className="lb">Cursor</span>
+        <select className="inp" value={t.cursor || "block"} onChange={(e) => set({ cursor: e.target.value })}>
+          <option value="block">Block</option>
+          <option value="underline">Underline</option>
+          <option value="bar">Bar</option>
+        </select>
+      </div>
+      <TRow title="Blink the cursor" on={t.cursorBlink} onToggle={() => set({ cursorBlink: !t.cursorBlink })} />
+      <TRow title="Flash on bell" hint="A process emitting BEL flashes its pane. A beep from a worktree you can't see tells you nothing about where it came from." on={t.bell} onToggle={() => set({ bell: !t.bell })} />
+      <TRow title="Open in the worktree directory" hint="Off starts new shells in your home directory. A launched command always runs in the worktree." on={t.cwdWorktree} onToggle={() => set({ cwdWorktree: !t.cwdWorktree })} />
+      <TRow title="Inherit provisioned env" hint="Exposes WT_SLUG, WT_DB_NAME and the derived service ports, so a command you type sees what the services see." on={t.inheritEnv} onToggle={() => set({ inheritEnv: !t.inheritEnv })} />
+    </div>
   );
 }
 
@@ -1053,6 +1090,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         if (failures.length) { showToast(`Saved app settings, but repo config failed — ${failures.join(" · ")}`); setSaving(false); return; }
       }
       bumpSettings();
+      // the next terminal pane to mount must read the saved shell config
+      invalidateTermCfg();
       const n = dirty.size;
       setDirty(new Set());
       showToast(n <= 1 ? "Settings saved" : `Saved ${n} sections`);
