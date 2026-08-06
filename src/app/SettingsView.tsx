@@ -7,12 +7,12 @@
 //
 // Backend honesty (design-build): pages with real wiring persist through
 // getSettings/saveSettings (Repository, Services, Agents, Commands) and
-// getRepoConfig/saveRepoConfig (Files, Setup), plus Appearance (density +
-// accent) which applies live through the appearance module (localStorage, not
-// the Settings save step). Pages with no backend today (Theme/light, Terminal
-// shell, Notifications, Advanced updates/crash, Security) render a "coming
-// soon" banner with disabled controls rather than fake ones. Shortcuts is a
-// static reference of the real keybindings.
+// getRepoConfig/saveRepoConfig (Files, Setup), plus Appearance (theme, density
+// and accent) which applies live through the appearance module (localStorage,
+// not the Settings save step). Pages with no backend today (Terminal shell,
+// Notifications, Advanced updates/crash, Security) render a "coming soon" banner
+// with disabled controls rather than fake ones. Shortcuts is a static reference
+// of the real keybindings.
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
@@ -24,7 +24,7 @@ import {
   Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
   Spinner, Terminal, Trash, X,
 } from "../icons";
-import { getAppearance, setAppearance, type Accent, type Density } from "../appearance";
+import { getAppearance, setAppearance, type Accent, type Density, type Theme } from "../appearance";
 
 /* icons don't accept `style`; wrap when a glyph needs rotating */
 const Rot = ({ children, deg }: { children: React.ReactNode; deg: number }) => (
@@ -690,7 +690,7 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
   // Appearance applies live and persists to localStorage (not the Settings save
   // step); mirror it here and re-read when another window changes it.
   const [appr, setAppr] = useState(getAppearance());
-  const change = (p: Partial<{ density: Density; accent: Accent }>) => setAppr(setAppearance(p));
+  const change = (p: Partial<{ theme: Theme; density: Density; accent: Accent }>) => setAppr(setAppearance(p));
   useEffect(() => {
     const h = () => setAppr(getAppearance());
     window.addEventListener("canopy:appearance", h);
@@ -714,8 +714,11 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
         <div className="slab">Appearance<span className="n">applied instantly, saved on this machine</span></div>
         <div className="fgrid">
           <span className="lb">Theme</span>
-          <div className="row"><select className="inp" value="dark" disabled><option value="dark">Dark</option></select>
-            <span className="hint" style={{ marginTop: 0 }}>A light theme is coming.</span></div>
+          <select className="inp" value={appr.theme} onChange={(e) => change({ theme: e.target.value as Theme })}>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Match system</option>
+          </select>
           <span className="lb">Density</span>
           <select className="inp" value={appr.density} onChange={(e) => change({ density: e.target.value as Density })}>
             <option value="comfortable">Comfortable</option>
