@@ -312,6 +312,7 @@ pub fn run() {
             commands::set_service_port,
             commands::run_migration,
             commands::run_custom_command,
+            commands::set_worktree_pinned,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

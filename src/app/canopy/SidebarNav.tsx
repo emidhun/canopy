@@ -8,7 +8,7 @@ import { Chevron, Editor, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, S
 import { useStore, type LaneSession } from "../../store";
 import { isLive, type RepoNode, type WorktreeNode } from "../../types";
 import { agentState, dotClass, wtDot, type AttnItem } from "../nextAction";
-import { isPinned, togglePin, usePins } from "../pins";
+import { isPinned, togglePin } from "../pins";
 
 type Flat = { wt: WorktreeNode; repo: RepoNode };
 
@@ -39,7 +39,6 @@ export default function SidebarNav({
   const sessions = useStore((s) => s.sessions);
   const toggleWorktree = useStore((s) => s.toggleWorktree);
   const openWorktree = useStore((s) => s.openWorktree);
-  const pins = usePins();
   const [closed, setClosed] = useState<Record<string, boolean>>({});
 
   const flat = useMemo<Flat[]>(() => tree.flatMap((repo) => repo.worktrees.map((wt) => ({ wt, repo }))), [tree]);
@@ -48,23 +47,22 @@ export default function SidebarNav({
   const groups = useMemo(() => {
     const vis = flat.filter(({ wt, repo }) => !q || `${wt.branch} ${repo.name}`.toLowerCase().includes(q));
     const needs = new Set(attn.map((a) => a.wtKey));
-    const pinned = new Set(pins);
     const rest = vis.filter((f) => !needs.has(f.wt.wtKey));
     return [
       { k: "attn", label: "Needs you", items: vis.filter((f) => needs.has(f.wt.wtKey)) },
-      { k: "pin", label: "Pinned", items: rest.filter((f) => pinned.has(f.wt.wtKey)) },
+      { k: "pin", label: "Pinned", items: rest.filter((f) => f.wt.pinned) },
       {
         k: "run",
         label: "Running",
-        items: rest.filter((f) => !pinned.has(f.wt.wtKey) && f.wt.services.some((s) => isLive(s.status))),
+        items: rest.filter((f) => !f.wt.pinned && f.wt.services.some((s) => isLive(s.status))),
       },
       {
         k: "idle",
         label: "Idle",
-        items: rest.filter((f) => !pinned.has(f.wt.wtKey) && !f.wt.services.some((s) => isLive(s.status))),
+        items: rest.filter((f) => !f.wt.pinned && !f.wt.services.some((s) => isLive(s.status))),
       },
     ].filter((g) => g.items.length);
-  }, [flat, q, attn, pins]);
+  }, [flat, q, attn]);
 
   return (
     <aside className={"cxs-side" + (hidden ? " is-hidden" : "")} inert={hidden || undefined} aria-hidden={hidden || undefined}>
@@ -151,7 +149,7 @@ function WorktreeRow({
   // isLive() excludes `stopping`, so a worktree mid-shutdown reads as idle and
   // the toggle would offer "Start services" — which then races the shutdown.
   const settling = wt.services.some((s) => s.status === "starting" || s.status === "stopping");
-  const pinned = isPinned(wt.wtKey);
+  const pinned = isPinned(wt);
 
   return (
     <div className={"cxs-wtr" + (selected ? " is-on" : "")} onClick={onSelect} role="button" tabIndex={0}
@@ -219,7 +217,7 @@ function WorktreeRow({
           title={pinned ? "Unpin" : "Pin to the top"}
           onClick={(e) => {
             e.stopPropagation();
-            togglePin(wt.wtKey);
+            togglePin(wt);
           }}
         >
           <Pin size={11} />

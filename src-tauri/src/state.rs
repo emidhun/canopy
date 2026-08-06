@@ -36,6 +36,11 @@ pub struct WorktreeNode {
     pub git: Option<GitMeta>,
     /// database name from the worktree's .env (PG_DB), if present
     pub db_name: Option<String>,
+    /// pinned to the top of the sidebar. Denormalized onto the tree (the list
+    /// itself lives in `Settings`) so every window — including the popover —
+    /// gets it from the `tree:changed` it already subscribes to, with no extra
+    /// fetch and no second source of truth to drift.
+    pub pinned: bool,
     pub services: Vec<ServiceNode>,
 }
 
@@ -110,6 +115,18 @@ pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
     };
     let _ = crate::settings::save_runtime(app, &runtime);
     state.statuses.write().retain(|k, _| !k.starts_with(&prefix));
+    // Drop the pin too. Nothing else prunes this list, so without it every
+    // removed worktree leaves an entry that grows the config file forever and
+    // silently re-pins the path if it is ever recreated.
+    let settings = {
+        let mut s = state.settings.write();
+        let before = s.pinned_worktrees.len();
+        s.pinned_worktrees.retain(|k| k != wt_key);
+        (before != s.pinned_worktrees.len()).then(|| s.clone())
+    };
+    if let Some(s) = settings {
+        let _ = crate::settings::save_settings(app, &s);
+    }
     if let Some(table) = app.try_state::<crate::services::ProcTable>() {
         table.logs.lock().retain(|k, _| !k.starts_with(&prefix));
         // close the on-disk log handles too, or a removed worktree keeps file
@@ -298,6 +315,9 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
         .filter_map(|w| w.git.clone().map(|g| (w.wt_key.clone(), g)))
         .collect();
 
+    let pinned: std::collections::HashSet<String> =
+        state.settings.read().pinned_worktrees.iter().cloned().collect();
+
     let mut tree = Vec::new();
     for repo in &repos_cfg {
         let wts = match git::list_worktrees(&repo.path).await {
@@ -334,6 +354,7 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
 
             worktrees.push(WorktreeNode {
                 db_name: env_value(&wt.path, "PG_DB"),
+                pinned: pinned.contains(&wt.path),
                 wt_key: wt.path.clone(),
                 git: prev_git.get(&wt.path).cloned(),
                 branch: wt.branch,

@@ -407,5 +407,6 @@ const EMPTY_WT: WorktreeNode = {
   isMain: false,
   git: null,
   dbName: null,
+  pinned: false,
   services: [],
 };
