@@ -365,6 +365,87 @@
 .cxs-sfilter input {
   font-size: var(--fs-body);
 }
+/* repo filter — a dropdown that narrows the list to one repository */
+.cxs-repobar {
+  position: relative;
+  flex: none;
+  margin: 0 var(--sp-3) var(--sp-tight) var(--sp-4);
+}
+.cxs-repobtn {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  height: var(--h-control-xs);
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--divider);
+  background: var(--surface-well);
+  color: var(--text-secondary);
+  border-radius: var(--r-md);
+  font: var(--fs-small) var(--sans);
+  cursor: pointer;
+  transition: border-color var(--dur), color var(--dur);
+}
+.cxs-repobtn:hover {
+  border-color: var(--border-pop);
+  color: var(--text-primary);
+}
+.cxs-repobtn > svg:first-child {
+  color: var(--action-primary);
+  flex: none;
+}
+.cxs-repobtn .nm {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxs-repomenu {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: var(--surface-float);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-menu);
+  padding: var(--sp-1);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.cxs-repoitem {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: var(--fs-body) var(--sans);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.cxs-repoitem:hover {
+  background: var(--raised-hi);
+}
+.cxs-repoitem.is-on {
+  color: var(--action-primary);
+}
+.cxs-repoitem > svg {
+  flex: none;
+}
+.cxs-repoitem .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cxs-slist {
   flex: 1;
   overflow-y: auto;

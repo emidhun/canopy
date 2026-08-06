@@ -3,8 +3,8 @@
    Grouping is what makes a long list scannable — worktrees sort themselves by
    what they want from you, not by which repo they happen to live in.
    "Needs you" outranks everything; pinned worktrees hold the top of the rest. */
-import { useMemo, useState } from "react";
-import { Chevron, Editor, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Stop, Terminal } from "../../icons";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Chevron, Editor, Fork, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Stop, Terminal } from "../../icons";
 import { useStore, type LaneSession } from "../../store";
 import { isLive, type RepoNode, type WorktreeNode } from "../../types";
 import { agentState, dotClass, wtDot, type AttnItem } from "../nextAction";
@@ -41,12 +41,15 @@ export default function SidebarNav({
   const openWorktree = useStore((s) => s.openWorktree);
   const pins = usePins();
   const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const [repoFilter, setRepoFilter] = useState<string | null>(null);
 
   const flat = useMemo<Flat[]>(() => tree.flatMap((repo) => repo.worktrees.map((wt) => ({ wt, repo }))), [tree]);
   const q = query.toLowerCase().trim();
+  // a filter pointing at a removed repo falls back to "all" rather than hiding everything
+  const activeRepo = repoFilter && tree.some((r) => r.repoId === repoFilter) ? repoFilter : null;
 
   const groups = useMemo(() => {
-    const vis = flat.filter(({ wt, repo }) => !q || `${wt.branch} ${repo.name}`.toLowerCase().includes(q));
+    const vis = flat.filter(({ wt, repo }) => (!activeRepo || repo.repoId === activeRepo) && (!q || `${wt.branch} ${repo.name}`.toLowerCase().includes(q)));
     const needs = new Set(attn.map((a) => a.wtKey));
     const pinned = new Set(pins);
     const rest = vis.filter((f) => !needs.has(f.wt.wtKey));
@@ -64,7 +67,7 @@ export default function SidebarNav({
         items: rest.filter((f) => !pinned.has(f.wt.wtKey) && !f.wt.services.some((s) => isLive(s.status))),
       },
     ].filter((g) => g.items.length);
-  }, [flat, q, attn, pins]);
+  }, [flat, q, activeRepo, attn, pins]);
 
   return (
     <aside className={"cxs-side" + (hidden ? " is-hidden" : "")} inert={hidden || undefined} aria-hidden={hidden || undefined}>
@@ -77,6 +80,10 @@ export default function SidebarNav({
           <SidebarIcon size={14} />
         </button>
       </div>
+
+      {tree.length > 1 && (
+        <RepoFilter repos={tree.map((r) => ({ id: r.repoId, name: r.name }))} value={activeRepo} onPick={setRepoFilter} />
+      )}
 
       <div className="cxs-slist">
         <button className={"cxs-ovrow" + (view === "overview" ? " is-on" : "")} onClick={onOverview}>
@@ -98,10 +105,11 @@ export default function SidebarNav({
               <span className="gn">{g.items.length}</span>
             </button>
             {!closed[g.k] &&
-              g.items.map(({ wt }) => (
+              g.items.map(({ wt, repo }) => (
                 <WorktreeRow
                   key={wt.wtKey}
                   wt={wt}
+                  repoName={repo.name}
                   selected={wt.wtKey === selKey && view === "wt"}
                   sessions={sessions[wt.wtKey] ?? EMPTY}
                   onSelect={() => onSelect(wt.wtKey)}
@@ -128,8 +136,48 @@ export default function SidebarNav({
 
 const EMPTY: LaneSession[] = [];
 
+/* Filter the list to one repository. Hidden when there's only one repo — the
+   text field already narrows by branch (and repo name), so the dropdown only
+   earns its space once worktrees span more than one repo. */
+function RepoFilter({ repos, value, onPick }: { repos: { id: string; name: string }[]; value: string | null; onPick: (id: string | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const d = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", d);
+    return () => document.removeEventListener("mousedown", d);
+  }, [open]);
+  const sel = repos.find((r) => r.id === value);
+  return (
+    <div className="cxs-repobar" ref={ref}>
+      <button className="cxs-repobtn" onClick={() => setOpen((o) => !o)} title="Filter by repository" aria-haspopup="listbox" aria-expanded={open}>
+        <Fork size={11} />
+        <span className="nm">{sel ? sel.name : "All repositories"}</span>
+        <Chevron size={10} />
+      </button>
+      {open && (
+        <div className="cxs-repomenu" role="listbox">
+          <button className={"cxs-repoitem" + (value === null ? " is-on" : "")} role="option" aria-selected={value === null} onClick={() => { onPick(null); setOpen(false); }}>
+            <span className="nm">All repositories</span>
+          </button>
+          {repos.map((r) => (
+            <button key={r.id} className={"cxs-repoitem" + (r.id === value ? " is-on" : "")} role="option" aria-selected={r.id === value} onClick={() => { onPick(r.id); setOpen(false); }}>
+              <Fork size={11} />
+              <span className="nm">{r.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorktreeRow({
   wt,
+  repoName,
   selected,
   sessions,
   onSelect,
@@ -138,6 +186,7 @@ function WorktreeRow({
   onEditor,
 }: {
   wt: WorktreeNode;
+  repoName: string;
   selected: boolean;
   sessions: LaneSession[];
   onSelect: () => void;
@@ -154,7 +203,7 @@ function WorktreeRow({
   const pinned = isPinned(wt.wtKey);
 
   return (
-    <div className={"cxs-wtr" + (selected ? " is-on" : "")} onClick={onSelect} role="button" tabIndex={0}
+    <div className={"cxs-wtr" + (selected ? " is-on" : "")} title={`${repoName}: ${wt.branch}`} onClick={onSelect} role="button" tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

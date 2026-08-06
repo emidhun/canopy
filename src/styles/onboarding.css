@@ -1,14 +1,16 @@
 /* First-run onboarding — ported from the redesign handoff (Canopy
-   Onboarding.html / cxo-onboard.jsx). The shipped 5-step wizard (Repository →
-   Stack → Services → Commands → Review) collapses into ONE adaptive screen:
-   paste or drop a repo, see what Canopy found and what it will do, adjust
-   anything inline, one action. Plus the empty state, provisioning narration and
-   a "ready" screen that ends on the next action.
+   Onboarding.html / cxo-onboard.jsx, revised). The shipped 5-step wizard
+   (Repository → Stack → Services → Commands → Review) collapses into ONE
+   adaptive screen. The empty state makes the case for worktrees (a checkout-vs-
+   worktree comparison + highlights); the add screen detects as you type, shows
+   the derivation, and lets you edit each service inline; provisioning narrates
+   the real work; "ready" ends on the next action.
 
    Every selector is scoped under .ob-root so nothing leaks into the main window
    or Settings. Colours resolve from the shared token layer (tokens.css); the
-   design's own token names (--surface-*, --action-*, --r-*, --fs-*) are the
-   semantic aliases declared there, so this sheet declares none of its own. */
+   design's own token names are the semantic aliases declared there, so this
+   sheet declares none of its own. The design's light/dark toggle is dropped —
+   the app ships dark only. */
 .ob-root {
   position: fixed;
   inset: 0;
@@ -19,7 +21,6 @@
   flex-direction: column;
   font-family: var(--sans);
   user-select: none;
-  /* the screen keys its one responsive break off its own width, not the window */
   container-type: inline-size;
   container-name: obwin;
 }
@@ -35,7 +36,6 @@
   background: var(--surface-float);
   border-bottom: 1px solid var(--divider);
 }
-/* macOS overlay titlebar: clear the traffic lights (see app.css) */
 .mac .ob-root .ob-tb {
   padding-left: 80px;
 }
@@ -54,27 +54,6 @@
 .ob-root .ob-tb .sp {
   flex: 1;
   align-self: stretch;
-}
-.ob-root .ob-ib {
-  height: 26px;
-  min-width: 26px;
-  padding: 0 var(--sp-tight);
-  border: 0;
-  cursor: pointer;
-  background: none;
-  color: var(--text-secondary);
-  border-radius: var(--r-md);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-tight);
-  font: var(--fs-body) var(--sans);
-  flex: none;
-  transition: background var(--dur-fast), color var(--dur-fast);
-}
-.ob-root .ob-ib:hover {
-  background: var(--btn);
-  color: var(--text-primary);
 }
 .ob-root .ob-skip {
   height: 24px;
@@ -156,18 +135,49 @@
   padding: 0 var(--sp-4);
   font-size: var(--fs-small);
 }
+.ob-root .btn.bad:hover {
+  background: var(--red-dim);
+  color: var(--red-text);
+  border-color: var(--red-border-hi);
+}
 .ob-root .btn:focus-visible,
 .ob-root .ob-skip:focus-visible,
-.ob-root .ob-ib:focus-visible,
 .ob-root .rr:focus-visible,
 .ob-root .stackchip:focus-visible,
-.ob-root .smi:focus-visible {
+.ob-root .smi:focus-visible,
+.ob-root .asbtn:focus-visible,
+.ob-root .cbx:focus-visible,
+.ob-root .ico:focus-visible {
   outline: 2px solid var(--action-primary);
   outline-offset: -2px;
 }
 .ob-root .btn .k {
   font: 500 var(--fs-micro) var(--mono);
   opacity: 0.6;
+}
+.ob-root .ico {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--divider);
+  background: var(--surface-well);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+.ob-root .ico:hover {
+  background: var(--btn);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.ob-root .ico.bad:hover {
+  background: var(--red-dim);
+  color: var(--red-text);
+  border-color: var(--red-border-hi);
 }
 .ob-root .inp {
   height: 30px;
@@ -192,39 +202,47 @@
   font-family: var(--mono);
   font-size: var(--fs-small);
 }
-/* toggle — a control, so it floats: full-round track + knob */
-.ob-root .tgl {
-  position: relative;
-  width: 30px;
-  height: 17px;
-  border-radius: var(--r-xl);
-  background: var(--btn-hover);
-  border: 0;
+/* select styled as an input, with a chevron affordance */
+.ob-root .inp.sel {
+  appearance: none;
+  padding-right: 24px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%237c7e86' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6l6 -6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+/* the on/off control is a checkbox — a value you set, not a live switch */
+.ob-root .cbx {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background: var(--surface-well);
+  display: grid;
+  place-items: center;
   cursor: pointer;
   flex: none;
-  transition: background 0.14s;
+  color: var(--action-primary-ink);
+  padding: 0;
+  transition: background var(--dur), border-color var(--dur);
 }
-.ob-root .tgl.on {
+.ob-root .cbx:hover {
+  border-color: var(--border-pop);
+}
+.ob-root .cbx.on {
   background: var(--action-primary);
+  border-color: var(--action-primary);
 }
-.ob-root .tgl i {
-  position: absolute;
-  top: 2.5px;
-  left: 2.5px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #d5d7dc;
-  transition: transform 0.14s, background 0.14s;
-  display: block;
+.ob-root .impline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-pop);
+  padding: var(--sp-4) 0 var(--sp-xs);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
 }
-.ob-root .tgl.on i {
-  transform: translateX(13px);
-  background: var(--action-primary-ink);
-}
-.ob-root .tgl:focus-visible {
-  outline: 2px solid var(--action-primary);
-  outline-offset: 2px;
+.ob-root .impline > span {
+  flex: 1;
 }
 /* uppercase section label with a trailing hairline */
 .ob-root .slab {
@@ -249,45 +267,207 @@
   background: var(--divider);
 }
 
-/* ── A · empty state — first launch used to say nothing ───────────── */
-.ob-root .emptywrap {
+/* ── A · empty state — the ask on the left, the case on the right ─── */
+.ob-root .hero {
   flex: 1;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: var(--sp-empty-lg);
   min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
   overflow-y: auto;
 }
-.ob-root .emptycard {
-  width: 100%;
-  max-width: 540px;
-  text-align: center;
-  margin: auto 0;
+.ob-root .heroL {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 36px 26px 40px 40px;
 }
-.ob-root .emptyring {
-  width: 60px;
-  height: 60px;
-  border-radius: var(--r-2xl);
-  margin: 0 auto var(--sp-7);
-  display: grid;
-  place-items: center;
-  background: var(--accent-dim);
-  color: var(--action-primary);
-  border: 1px solid var(--teal-border);
-}
-.ob-root .emptycard h1 {
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-semi);
+.ob-root .heromark {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font: var(--fw-semi) var(--fs-lg) var(--sans);
   letter-spacing: -0.02em;
-  margin: 0 0 var(--sp-row);
+  margin-bottom: var(--sp-8);
 }
-.ob-root .emptycard > p {
+.ob-root .heromark .fk {
+  color: var(--action-primary);
+  display: inline-flex;
+}
+.ob-root .hero h1 {
+  font-size: 26px;
+  font-weight: 640;
+  letter-spacing: -0.025em;
+  margin: 0 0 10px;
+  line-height: 1.15;
+}
+.ob-root .heroL > p {
   font-size: var(--fs-md);
   color: var(--text-secondary);
   line-height: 1.6;
-  margin: 0 auto 20px;
-  max-width: 430px;
+  margin: 0 0 22px;
+  max-width: 400px;
+  text-wrap: pretty;
+}
+.ob-root .heroL > p.herohint {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  margin: 0;
+  max-width: none;
+}
+.ob-root .hero .emptyacts {
+  justify-content: flex-start;
+  margin-bottom: var(--sp-6);
+}
+.ob-root .heroR {
+  margin: var(--sp-6) var(--sp-6) var(--sp-6) 0;
+  padding: 20px;
+  border-radius: var(--r-2xl);
+  border: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--sp-7);
+  background: radial-gradient(110% 80% at 12% -12%, var(--accent-dim) 0%, transparent 62%), linear-gradient(168deg, var(--surface-float) 0%, var(--surface-app) 100%);
+}
+/* the point of a worktree is the comparison, so draw both sides */
+.ob-root .cmp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.ob-root .cmp-card {
+  border: 1px solid var(--divider);
+  border-radius: var(--r-lg);
+  padding: 13px 14px;
+}
+.ob-root .cmp-card.was {
+  background: var(--surface-well);
+}
+.ob-root .cmp-card.is {
+  background: var(--surface-card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-pop);
+}
+.ob-root .cmp-h {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-row);
+  padding-bottom: var(--sp-4);
+  margin-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--divider);
+}
+.ob-root .cmp-h b {
+  font: var(--fw-medium) var(--fs-small) var(--mono);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-secondary);
+}
+.ob-root .cmp-card.is .cmp-h b {
+  color: var(--action-primary);
+}
+.ob-root .cmp-h span {
+  margin-left: auto;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+.ob-root .cmp-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  padding: var(--sp-2) 0;
+  min-width: 0;
+}
+.ob-root .cmp-row .fd {
+  width: 14px;
+  flex: none;
+  display: inline-flex;
+  color: var(--text-tertiary);
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.ob-root .cmp-row .bd {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ob-root .cmp-row .p {
+  font: var(--fs-micro) var(--mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ob-root .cmp-row .b {
+  font: var(--fw-medium) var(--fs-micro) var(--mono);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ob-root .cmp-row .s {
+  font: var(--fs-micro) var(--mono);
+  color: var(--action-primary);
+  flex: none;
+}
+.ob-root .cmp-row.off {
+  opacity: 0.55;
+}
+.ob-root .cmp-row.off .b {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: var(--divider);
+}
+.ob-root .cmp-row.off .s {
+  font-family: var(--sans);
+  color: var(--text-tertiary);
+}
+.ob-root .cmp-n {
+  margin: var(--sp-4) 0 0;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+.ob-root .cmp-card.is .cmp-n {
+  color: var(--text-secondary);
+}
+.ob-root .hilites {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-bottom: var(--sp-6);
+}
+.ob-root .hi {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-pop-lg);
+}
+.ob-root .hi .t {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: var(--surface-well);
+  border: 1px solid var(--divider);
+  color: var(--action-primary);
+}
+.ob-root .hi .bd {
+  min-width: 0;
+}
+.ob-root .hi h3 {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  letter-spacing: -0.01em;
+}
+.ob-root .hi p {
+  margin: 3px 0 0;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+  line-height: 1.5;
   text-wrap: pretty;
 }
 .ob-root .emptyacts {
@@ -296,45 +476,6 @@
   justify-content: center;
   gap: var(--sp-4);
   margin-bottom: var(--sp-empty);
-}
-.ob-root .whatnext {
-  border-top: 1px solid var(--divider);
-  padding-top: var(--sp-7);
-  text-align: left;
-}
-.ob-root .wn {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-pop-lg);
-  padding: var(--sp-3) 0;
-}
-.ob-root .wn .n {
-  width: 18px;
-  height: 18px;
-  border-radius: var(--r-sm);
-  flex: none;
-  display: grid;
-  place-items: center;
-  font: var(--fw-bold) var(--fs-label) var(--sans);
-  background: var(--btn);
-  color: var(--text-tertiary);
-  margin-top: 1px;
-}
-.ob-root .wn .t {
-  min-width: 0;
-}
-.ob-root .wn .t b {
-  display: block;
-  font-size: var(--fs-body);
-  font-weight: var(--fw-medium);
-  color: var(--text-primary);
-}
-.ob-root .wn .t span {
-  display: block;
-  font-size: var(--fs-small);
-  color: var(--text-tertiary);
-  line-height: 1.45;
-  margin-top: 2px;
 }
 
 /* ── B · one adaptive add screen ──────────────────────────────────── */
@@ -580,7 +721,7 @@
   flex: none;
 }
 
-/* what Canopy found — grouped, toggleable, the real payload */
+/* what Canopy found — grouped, editable, the real payload */
 .ob-root .dsec {
   border-top: 1px solid var(--divider);
   padding: var(--sp-pop-lg) var(--sp-pop-lg);
@@ -604,7 +745,7 @@
   gap: var(--sp-pop);
   padding: var(--sp-3) 0;
 }
-.ob-root .svcrow + .svcrow {
+.ob-root .svcitem + .svcitem {
   border-top: 1px solid var(--divider);
 }
 .ob-root .svcrow .kic {
@@ -625,10 +766,27 @@
   min-width: 0;
   flex: 1;
 }
+/* the row body is a button that opens the inline editor */
+.ob-root .svcrow .asbtn {
+  all: unset;
+  display: block;
+  cursor: pointer;
+  min-width: 0;
+  flex: 1;
+}
 .ob-root .svcrow .r1 {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+}
+.ob-root .svcrow .cv {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform var(--dur);
+}
+.ob-root .svcitem.open .cv {
+  transform: rotate(90deg);
+  color: var(--action-primary);
 }
 .ob-root .svcrow .nm {
   font-size: var(--fs-body);
@@ -675,6 +833,43 @@
   text-align: right;
   padding: 0 var(--sp-3);
 }
+/* the inline service editor */
+.ob-root .svcedit {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+  padding: var(--sp-xs) 0 var(--sp-5) 34px;
+}
+.ob-root .fld {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+  min-width: 0;
+}
+.ob-root .fld.wide {
+  grid-column: 1 / -1;
+}
+.ob-root .fld > span {
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.ob-root .fld .inp {
+  height: 28px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ob-root .svcedit-f {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-row);
+  margin-top: 2px;
+}
+.ob-root .svcedit-f .sp {
+  flex: 1;
+}
 
 /* the derivation made visible — why these services */
 .ob-root .peek {
@@ -715,7 +910,7 @@
   padding: 0 3px;
 }
 .ob-root .peek .str {
-  color: #c3a6e8;
+  color: var(--syntax-str, #c3a6e8);
 }
 .ob-root .peek .pun {
   color: var(--text-tertiary);
@@ -905,6 +1100,26 @@
 }
 
 /* ── D · ready ────────────────────────────────────────────────────── */
+.ob-root .emptycard {
+  width: 100%;
+  max-width: 540px;
+  text-align: center;
+  margin: auto 0;
+}
+.ob-root .emptycard h1 {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semi);
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--sp-row);
+}
+.ob-root .emptycard > p {
+  font-size: var(--fs-md);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0 auto 20px;
+  max-width: 430px;
+  text-wrap: pretty;
+}
 .ob-root .donering {
   width: 56px;
   height: 56px;
@@ -976,8 +1191,21 @@
   }
 }
 
+/* narrow window: drop the showcase, stack the facts, tighten padding */
+@container obwin (max-width: 760px) {
+  .ob-root .hero {
+    grid-template-columns: 1fr;
+  }
+  .ob-root .heroR {
+    display: none;
+  }
+  .ob-root .heroL {
+    padding: 30px 26px;
+  }
+}
 @container obwin (max-width: 620px) {
-  .ob-root .donefacts {
+  .ob-root .donefacts,
+  .ob-root .svcedit {
     grid-template-columns: 1fr;
   }
   .ob-root .obinner {

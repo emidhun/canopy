@@ -1,29 +1,31 @@
 // First run — one adaptive screen, not five steps. Ported from the redesign
-// handoff (Canopy Onboarding.html / cxo-onboard.jsx).
+// handoff (Canopy Onboarding.html / cxo-onboard.jsx, revised).
 //
 // The shipped wizard walked Repository → Stack → Services → Commands → Review.
 // Two of those didn't earn a screen: "Stack" asked you to confirm something
 // already read from the repo's manifests, and "Review" restated the screens
 // before it. Meanwhile the real value — detect_repo mapping package.json
 // scripts to services — sat behind step 3. So now: an empty state that finally
-// exists, one adaptive add screen (detection runs as you type; the stack is a
-// chip; the derivation is shown, not asserted), honest provisioning narration
-// over the real IPC calls, and a "ready" screen that ends on the next action.
+// exists (with the worktree value proposition drawn out), one adaptive add
+// screen (detection runs as you type; the stack is a chip; services are
+// inline-editable; the derivation is shown, not asserted), honest provisioning
+// narration over the real IPC calls, and a "ready" screen that ends on the
+// next action.
 //
-// Backend honesty notes:
-// • The empty state's "recently opened" list is omitted — Canopy has no MRU
-//   store, so there is nothing real to list. TODO: file an issue + wire it.
+// Adaptations from the design demo:
+// • The light/dark theme toggle is omitted — the app ships dark only; there is
+//   no light theme to switch to (tokens.css has no light values yet).
 // • Env template values use ${WT_SERVER_PORT} / ${WT_DB_NAME}, the variables the
 //   Rust setup runner actually interpolates (state.rs:142, setup.rs). The
-//   handoff/SettingsView names ${WT_SERVICE_PORT} / ${INT_DB_NAME} are NOT
-//   substituted by the backend and would land in .env as dead literals.
+//   handoff names ${WT_SERVICE_PORT} / ${INT_DB_NAME} are NOT substituted by the
+//   backend and would land in .env as dead literals.
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "../styles/onboarding.css";
 import { errText, hasBackend, ipc, type ProvisionEntry, type RepoCfg, type RepoDetection, type ServiceCfg } from "../ipc";
 import { useStore } from "../store";
-import { Browser, Check, ChevRight, Chevron, Cube, Doc, Fork, Plus, Server, Spinner } from "../icons";
+import { Bolt, Browser, Check, ChevRight, Chevron, Cube, Doc, Download, Fork, Plus, Server, Spinner, Trash } from "../icons";
 
 /* the one folder glyph the shared set doesn't carry */
 const Folder = ({ size = 14 }: { size?: number }) => (
@@ -49,6 +51,8 @@ interface WizSvc {
   on: boolean;
   name: string;
   kind: Kind;
+  dir: string;
+  dirEdited?: boolean;
   script?: string;
   cmd: string;
   port: string;
@@ -64,6 +68,10 @@ interface Cfg {
 let _uid = 0;
 const uid = (p: string) => p + ++_uid;
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const slug = (v: string) => v.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+// Mirror the backend's port-variable name-slug (state.rs): each non-alphanumeric
+// char → "_", uppercased, trimmed. A service named "Server dev" → WT_SERVER_DEV_PORT.
+const envSlug = (v: string) => [...v].map((c) => (/[A-Za-z0-9]/.test(c) ? c.toUpperCase() : "_")).join("").replace(/^_+|_+$/g, "");
 const KIND_IC: Record<Kind, typeof Server> = { web: Browser, server: Server, worker: Cube };
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -72,6 +80,7 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function derive(det: RepoDetection): { services: WizSvc[]; cfg: Cfg } {
   const scripts = det.scripts ?? [];
   const find = (re: RegExp) => scripts.find((s) => re.test(s.name));
+  const dirOf = (command: string) => command.match(/--prefix\s+(\S+)/)?.[1] ?? "";
 
   const services: WizSvc[] = [];
   let portBase = 3000;
@@ -85,17 +94,19 @@ function derive(det: RepoDetection): { services: WizSvc[]; cfg: Cfg } {
       on: services.filter((x) => x.on).length < 2,
       name: cap(name.replace(/[:_-]/g, " ")),
       kind: web ? "web" : "server",
+      dir: dirOf(command),
+      dirEdited: true,
       script: name,
       cmd: command,
       port: String((portBase += services.length ? 10 : 0)),
     });
   }
   if (!services.length) {
-    services.push({ id: uid("s"), on: true, name: "Dev", kind: "server", cmd: "npm run dev", port: "3000" });
+    services.push({ id: uid("s"), on: true, name: "Dev", kind: "server", dir: "", dirEdited: true, cmd: "npm run dev", port: "3000" });
   }
   const build = find(/^(build|compile|plugins?:build)$/i);
   if (build) {
-    services.push({ id: uid("s"), on: false, name: cap(build.name.replace(/[:_-]/g, " ")), kind: "worker", script: build.name, cmd: build.command, port: "" });
+    services.push({ id: uid("s"), on: false, name: cap(build.name.replace(/[:_-]/g, " ")), kind: "worker", dir: dirOf(build.command), dirEdited: true, script: build.name, cmd: build.command, port: "" });
   }
 
   const reset = find(/^(db:reset|reset:db|resetdb)$/i);
@@ -107,12 +118,19 @@ function derive(det: RepoDetection): { services: WizSvc[]; cfg: Cfg } {
   else if (create) setup.push({ id: uid("u"), on: true, cmd: `npm run ${create.name}` });
   else if (migrate) setup.push({ id: uid("u"), on: true, cmd: `npm run ${migrate.name}` });
 
+  // The backend exposes each service's port as WT_<NAME-SLUG>_PORT (and by id).
+  // Point the default PORT env at the primary service's real variable so it
+  // actually resolves — a hardcoded ${WT_SERVER_PORT} only worked when a service
+  // happened to be named exactly "Server".
+  const primary = services.find((s) => s.on && s.kind === "server") ?? services.find((s) => s.on && s.port) ?? services[0];
+  const portVar = primary ? `\${WT_${envSlug(primary.name)}_PORT}` : "${WT_SERVER_PORT}";
+
   const cfg: Cfg = {
     resetDb: reset ? `npm run ${reset.name}` : "",
     migrate: migrate ? `npm run ${migrate.name}` : "",
-    worktreeDir: det.top ? `${det.top}-worktrees` : "",
+    worktreeDir: det.top ? `${det.top}/.worktrees` : "",
     env: [
-      { id: uid("e"), on: true, key: "PORT", value: "${WT_SERVER_PORT}" },
+      { id: uid("e"), on: true, key: "PORT", value: portVar },
       { id: uid("e"), on: true, key: "PG_DB", value: "${WT_DB_NAME}" },
     ],
     setup,
@@ -120,8 +138,13 @@ function derive(det: RepoDetection): { services: WizSvc[]; cfg: Cfg } {
   return { services, cfg };
 }
 
-function Tgl({ on, onClick }: { on: boolean; onClick: () => void }) {
-  return <button className={"tgl" + (on ? " on" : "")} role="switch" aria-checked={on} onClick={onClick}><i /></button>;
+/* the on/off control is a checkbox — a value you're setting, not a live switch */
+function Chk({ on, onClick, label }: { on: boolean; onClick: () => void; label?: string }) {
+  return (
+    <button className={"cbx" + (on ? " on" : "")} role="checkbox" aria-checked={on} aria-label={label || "Include"} onClick={onClick}>
+      {on ? <Check size={11} /> : null}
+    </button>
+  );
 }
 
 /* ── the stack: a chip, not a step ────────────────────────────────── */
@@ -159,34 +182,51 @@ function StackChip({ value, detected, onPick }: { value: string; detected?: stri
   );
 }
 
-/* ── A · empty state — first launch used to say nothing ───────────── */
-function EmptyState({ onAdd, onBrowse }: { onAdd: () => void; onBrowse: () => void }) {
+/* ── A · empty state — the ask on the left, the case for worktrees on the right ── */
+const HILITES: [typeof Fork, string, string][] = [
+  [Fork, "Leave work where it stands", "Each branch keeps its own checkout, so a review never costs you the thing you were halfway through."],
+  [Server, "Ports that don't fight", "Canopy assigns each worktree its own ports and database, so branches run side by side."],
+  [Bolt, "Ready when you get there", "Checkout, install, migrate and run happen together, so you come back to a working app."],
+];
+
+function EmptyState({ onAdd }: { onAdd: () => void }) {
   return (
-    <div className="emptywrap">
-      <div className="emptycard">
-        <div className="emptyring"><Fork size={26} /></div>
+    <div className="hero">
+      <div className="heroL">
+        <div className="heromark"><span className="fk"><Fork size={19} /></span>Canopy</div>
         <h1>No repositories yet</h1>
         <p>Canopy runs each branch as its own worktree — separate checkout, separate services, separate database. Point it at a repo and it reads your scripts to work out what to run.</p>
         <div className="emptyacts">
-          <button className="btn pri lg" onClick={onAdd}><Plus size={13} />Add a repository<span className="k">⌘N</span></button>
-          <button className="btn lg" onClick={onBrowse}><Folder size={13} />Browse…</button>
+          <button className="btn pri lg" onClick={onAdd}><Plus size={13} />Add a repository</button>
         </div>
-        <div className="whatnext">
-          <div className="slab">What happens next</div>
-          {[
-            ["Canopy reads the repo", "git remotes, branches, and the scripts in your manifest."],
-            ["It proposes what to run", "long-running scripts become services, with ports derived per worktree."],
-            ["You create a worktree", "a branch checked out, provisioned and running in one action."],
-          ].map(([t, d], i) => (
-            <div className="wn" key={t}>
-              <span className="n">{i + 1}</span>
-              <span className="t"><b>{t}</b><span>{d}</span></span>
+        <p className="herohint">Or drop a git repository anywhere in this window.</p>
+      </div>
+
+      <div className="heroR">
+        <div className="cmp">
+          <div className="cmp-card was">
+            <div className="cmp-h"><b>git checkout</b><span>one working copy</span></div>
+            <div className="cmp-row live"><span className="fd"><Folder size={12} /></span><span className="bd"><span className="b">main</span><span className="p">~/canopy</span></span><span className="s">:3000</span></div>
+            <div className="cmp-row off"><span className="fd" /><span className="bd"><span className="b">feat/wt-components-v2</span><span className="p">no checkout</span></span><span className="s">stashed</span></div>
+            <div className="cmp-row off"><span className="fd" /><span className="bd"><span className="b">fix/deduplicate-queries</span><span className="p">no checkout</span></span><span className="s">waiting</span></div>
+            <p className="cmp-n">Switching means stashing, checking out, reinstalling, restarting.</p>
+          </div>
+          <div className="cmp-card is">
+            <div className="cmp-h"><b>git worktree</b><span>three, at once</span></div>
+            <div className="cmp-row live"><span className="fd"><Folder size={12} /></span><span className="bd"><span className="b">main</span><span className="p">~/canopy</span></span><span className="s">:3000</span></div>
+            <div className="cmp-row live"><span className="fd"><Folder size={12} /></span><span className="bd"><span className="b">feat/wt-components-v2</span><span className="p">.worktrees/feat-wt-components-v2</span></span><span className="s">:3010</span></div>
+            <div className="cmp-row live"><span className="fd"><Folder size={12} /></span><span className="bd"><span className="b">fix/deduplicate-queries</span><span className="p">.worktrees/fix-deduplicate-queries</span></span><span className="s">:3020</span></div>
+            <p className="cmp-n">Every branch stays checked out, installed and running. Switching is switching windows.</p>
+          </div>
+        </div>
+        <div className="hilites">
+          {HILITES.map(([Ic, t, d]) => (
+            <div className="hi" key={t}>
+              <span className="t"><Ic size={13} /></span>
+              <span className="bd"><h3>{t}</h3><p>{d}</p></span>
             </div>
           ))}
         </div>
-        {/* The design shows a "Recently opened" list here. Canopy has no MRU
-            store, so there is nothing real to list — omitted rather than
-            fabricated. TODO: file an issue to persist opened-repo history. */}
       </div>
     </div>
   );
@@ -208,6 +248,7 @@ function AddScreen({
   onStack,
   setServices,
   setCfg,
+  flash,
   onSkip,
   onDone,
 }: {
@@ -224,9 +265,13 @@ function AddScreen({
   onStack: (id: string) => void;
   setServices: React.Dispatch<React.SetStateAction<WizSvc[]>>;
   setCfg: React.Dispatch<React.SetStateAction<Cfg>>;
+  flash: (m: string) => void;
   onSkip: () => void;
   onDone: () => void;
 }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
   const on = services.filter((s) => s.on);
   const hits = new Set<string>();
   services.forEach((s) => s.on && s.script && hits.add(s.script));
@@ -235,8 +280,47 @@ function AddScreen({
     if (m) hits.add(m[1]);
   });
   const patch = (id: string, p: Partial<WizSvc>) => setServices((ss) => ss.map((s) => (s.id === id ? { ...s, ...p } : s)));
+  const dropSvc = (id: string) => {
+    setServices((ss) => ss.filter((s) => s.id !== id));
+    setEdit(null);
+  };
   const envOn = cfg.env.filter((e) => e.on).length;
   const setupOn = cfg.setup.filter((u) => u.on).length;
+
+  /* Import an existing .worktreemanager.json — reuses the FileReader path
+     Settings uses, so it round-trips with what provisioning writes out. */
+  const triggerImport = () => {
+    if (!hasBackend()) return flash("Import needs the desktop app");
+    fileRef.current?.click();
+  };
+  const onImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const parsed = JSON.parse(String(r.result)) as { provision?: unknown; setup?: unknown; migrate?: unknown };
+        const prov = Array.isArray(parsed.provision) ? (parsed.provision as Record<string, unknown>[]) : [];
+        const dotenv = prov.find((p) => p.format === "dotenv") ?? prov[0];
+        setCfg((c) => {
+          const next = { ...c };
+          if (dotenv && dotenv.keys && typeof dotenv.keys === "object") {
+            next.env = Object.entries(dotenv.keys as Record<string, unknown>).map(([k, v]) => ({ id: uid("e"), on: true, key: k, value: String(v) }));
+          }
+          if (Array.isArray(parsed.setup)) {
+            next.setup = (parsed.setup as unknown[]).filter((x) => typeof x === "string").map((cmd) => ({ id: uid("u"), on: true, cmd: cmd as string }));
+          }
+          if (Array.isArray(parsed.migrate) && typeof parsed.migrate[0] === "string") next.migrate = parsed.migrate[0] as string;
+          return next;
+        });
+        flash(`Imported ${f.name}`);
+      } catch {
+        flash(`Couldn't parse ${f.name} — invalid JSON`);
+      }
+    };
+    r.readAsText(f);
+  };
 
   return (
     <>
@@ -309,26 +393,79 @@ function AddScreen({
                       <span className="ln" />
                       <button
                         className="btn sm gh"
-                        onClick={() => setServices((ss) => ss.concat([{ id: uid("s"), on: true, name: "New service", kind: "server", cmd: "npm run dev", port: "" }]))}
+                        onClick={() => {
+                          const id = uid("s");
+                          setServices((ss) => ss.concat([{ id, on: true, name: "", kind: "server", dir: "", script: undefined, cmd: "", port: "" }]));
+                          setEdit(id);
+                        }}
                       >
-                        <Plus size={10} />Add
+                        <Plus size={10} />Add service
                       </button>
                     </div>
                     {services.map((s) => {
                       const Ic = KIND_IC[s.kind];
+                      const open = edit === s.id;
                       return (
-                        <div className={"svcrow " + (s.on ? "on" : "off")} key={s.id}>
-                          <span className="kic"><Ic size={13} /></span>
-                          <span className="bd">
-                            <span className="r1"><span className="nm">{s.name}</span><span className="tag">{s.kind}</span></span>
-                            <span className="cmd"><b>from</b> {s.script ? '"' + s.script + '"' : "manual"} · {s.cmd}</span>
-                          </span>
-                          {s.on ? (
-                            <input className="inp mono pin" value={s.port} placeholder="—" spellCheck={false} onChange={(e) => patch(s.id, { port: e.target.value })} />
-                          ) : (
-                            <span className={"port" + (s.port ? "" : " none")}>{s.port ? ":" + s.port : "no port"}</span>
+                        <div className={"svcitem" + (open ? " open" : "")} key={s.id}>
+                          <div className={"svcrow " + (s.on ? "on" : "off")}>
+                            <span className="kic"><Ic size={13} /></span>
+                            <button className="bd asbtn" onClick={() => setEdit(open ? null : s.id)} title={open ? "Done editing" : "Edit this service"}>
+                              <span className="r1">
+                                <span className="nm">{s.name || "Unnamed service"}</span>
+                                <span className="tag">{s.kind}</span>
+                                <span className="cv"><ChevRight size={11} /></span>
+                              </span>
+                              <span className="cmd">
+                                <b>from</b> {s.script ? '"' + s.script + '"' : "manual"}
+                                {s.dir ? <> · <b>in</b> {s.dir}</> : null} · {s.cmd || "no command yet"}
+                              </span>
+                            </button>
+                            {s.on ? (
+                              <input className="inp mono pin" value={s.port} placeholder="—" spellCheck={false} onChange={(e) => patch(s.id, { port: e.target.value })} />
+                            ) : (
+                              <span className={"port" + (s.port ? "" : " none")}>{s.port ? ":" + s.port : "no port"}</span>
+                            )}
+                            <Chk on={s.on} label={`Run ${s.name || "service"}`} onClick={() => patch(s.id, { on: !s.on })} />
+                          </div>
+                          {open && (
+                            <div className="svcedit">
+                              <label className="fld">
+                                <span>Name</span>
+                                <input
+                                  className="inp"
+                                  autoFocus
+                                  value={s.name}
+                                  placeholder="Frontend dev"
+                                  onChange={(e) => patch(s.id, s.dirEdited ? { name: e.target.value } : { name: e.target.value, dir: slug(e.target.value) })}
+                                />
+                              </label>
+                              <label className="fld">
+                                <span>Kind</span>
+                                <select className="inp sel" value={s.kind} onChange={(e) => patch(s.id, { kind: e.target.value as Kind })}>
+                                  <option value="web">web</option>
+                                  <option value="server">server</option>
+                                  <option value="worker">worker</option>
+                                </select>
+                              </label>
+                              <label className="fld">
+                                <span>Directory</span>
+                                <input className="inp mono" value={s.dir} placeholder="repo root" onChange={(e) => patch(s.id, { dir: e.target.value, dirEdited: true })} />
+                              </label>
+                              <label className="fld">
+                                <span>Port</span>
+                                <input className="inp mono" value={s.port} placeholder="none" onChange={(e) => patch(s.id, { port: e.target.value })} />
+                              </label>
+                              <label className="fld wide">
+                                <span>Command</span>
+                                <input className="inp mono" value={s.cmd} placeholder="npm run dev" onChange={(e) => patch(s.id, { cmd: e.target.value, script: undefined })} />
+                              </label>
+                              <div className="svcedit-f">
+                                <button className="btn sm bad" onClick={() => dropSvc(s.id)}><Trash size={11} />Remove</button>
+                                <span className="sp" />
+                                <button className="btn sm" onClick={() => setEdit(null)}>Done</button>
+                              </div>
+                            </div>
                           )}
-                          <Tgl on={s.on} onClick={() => patch(s.id, { on: !s.on })} />
                         </div>
                       );
                     })}
@@ -366,6 +503,11 @@ function AddScreen({
                       <span className="n">{envOn} env keys · {setupOn} setup steps · db commands found</span>
                     </summary>
                     <div className="advb">
+                      <div className="impline">
+                        <span>Already have a config? Import it instead of re-entering it.</span>
+                        <button className="btn sm" onClick={triggerImport}><Download size={11} />Import .worktreemanager.json</button>
+                        <input ref={fileRef} type="file" accept=".json,application/json" style={{ display: "none" }} onChange={onImportFile} />
+                      </div>
                       <div className="slab" style={{ marginTop: 4 }}>Env written into each worktree's .env<span className="ln" /></div>
                       <div className="kv">
                         {cfg.env.map((e) => (
@@ -385,12 +527,21 @@ function AddScreen({
                               style={{ opacity: e.on ? 1 : 0.5 }}
                               onChange={(ev) => setCfg((c) => ({ ...c, env: c.env.map((x) => (x.id === e.id ? { ...x, value: ev.target.value } : x)) }))}
                             />
-                            <Tgl on={e.on} onClick={() => setCfg((c) => ({ ...c, env: c.env.map((x) => (x.id === e.id ? { ...x, on: !x.on } : x)) }))} />
+                            <Chk on={e.on} label={`Write ${e.key || "env key"}`} onClick={() => setCfg((c) => ({ ...c, env: c.env.map((x) => (x.id === e.id ? { ...x, on: !x.on } : x)) }))} />
                           </div>
                         ))}
                       </div>
 
-                      <div className="slab" style={{ marginTop: 13 }}>Setup, run in order on create<span className="ln" /></div>
+                      <div className="slab" style={{ marginTop: 13 }}>
+                        Setup, run in order on create
+                        <span className="ln" />
+                        <button
+                          className="btn sm gh"
+                          onClick={() => setCfg((c) => ({ ...c, setup: c.setup.concat([{ id: uid("u"), on: true, cmd: "" }]) }))}
+                        >
+                          <Plus size={10} />Add step
+                        </button>
+                      </div>
                       {cfg.setup.map((u, i) => (
                         <div className="stepline" key={u.id}>
                           <span className="n2">{i + 1}</span>
@@ -398,10 +549,14 @@ function AddScreen({
                             className="inp mono"
                             style={{ flex: 1, opacity: u.on ? 1 : 0.5 }}
                             value={u.cmd}
+                            placeholder="npm install"
                             spellCheck={false}
                             onChange={(ev) => setCfg((c) => ({ ...c, setup: c.setup.map((x) => (x.id === u.id ? { ...x, cmd: ev.target.value } : x)) }))}
                           />
-                          <Tgl on={u.on} onClick={() => setCfg((c) => ({ ...c, setup: c.setup.map((x) => (x.id === u.id ? { ...x, on: !x.on } : x)) }))} />
+                          <button className="ico bad" title="Remove step" onClick={() => setCfg((c) => ({ ...c, setup: c.setup.filter((x) => x.id !== u.id) }))}>
+                            <Trash size={11} />
+                          </button>
+                          <Chk on={u.on} label={`Run step ${i + 1}`} onClick={() => setCfg((c) => ({ ...c, setup: c.setup.map((x) => (x.id === u.id ? { ...x, on: !x.on } : x)) }))} />
                         </div>
                       ))}
 
@@ -462,7 +617,6 @@ function Provisioning({ name, steps, onDone, onError, onCancel }: { name: string
       for (let i = 0; i < steps.length; i++) {
         if (cancelled.current) return;
         try {
-          // real work, but with a readable floor so narration doesn't flash past
           const [meta] = await Promise.all([steps[i].run(), delay(460)]);
           if (!alive || cancelled.current) return;
           setMetas((xs) => {
@@ -499,7 +653,6 @@ function Provisioning({ name, steps, onDone, onError, onCancel }: { name: string
             {i < n && metas[i] && <span className="mt">{metas[i]}</span>}
           </div>
         ))}
-        {/* a first run must be escapable while its one long operation runs */}
         <div className="runcancel">
           <button
             className="btn"
@@ -609,7 +762,6 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
       setServices(sv);
       setCfg(cf);
       setPhase("scanning");
-      // a brief, honest beat while we "read" the manifest we just parsed
       setTimeout(() => {
         if (seq === detectSeq.current) setPhase("ready");
       }, 650);
@@ -626,7 +778,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
     setDet(null);
     setDetErr(null);
     clearTimeout(debounce.current);
-    ++detectSeq.current; // invalidate any in-flight detect
+    ++detectSeq.current;
     if (!v.trim()) {
       setPhase("idle");
       return;
@@ -639,21 +791,23 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
     if (!hasBackend()) return flash("Browse needs the desktop app");
     const picked = await openDialog({ directory: true, multiple: false, title: "Choose a git repository" });
     if (typeof picked === "string") {
+      setView("add");
       setPath(picked);
       detect(picked);
     }
   }
 
   /* real OS folder drop → the same path field (Tauri v2 webview drag-drop).
+     Active on the empty state too, so "drop anywhere in this window" is true.
      Degrades silently: typing and Browse still work if the event never fires. */
   useEffect(() => {
-    if (view !== "add" || !hasBackend()) return;
+    if ((view !== "add" && view !== "empty") || !hasBackend()) return;
     let un: (() => void) | undefined;
     let webview: ReturnType<typeof getCurrentWebview>;
     try {
       webview = getCurrentWebview();
     } catch {
-      return; // not a real Tauri webview — typing / Browse still work
+      return;
     }
     webview
       .onDragDropEvent((event) => {
@@ -664,6 +818,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
           setOver(false);
           const p = pl.paths?.[0];
           if (p) {
+            setView("add");
             setPath(p);
             detect(p);
           }
@@ -688,8 +843,18 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
     const envPairs = cfg.env.filter((e) => e.on && e.key.trim()).map((e) => [e.key, e.value] as [string, string]);
     const setupCmds = cfg.setup.filter((u) => u.on && u.cmd.trim()).map((u) => u.cmd);
 
+    const svcCfg = (): ServiceCfg[] =>
+      on.map((s) => ({
+        id: slug(s.name) || "service",
+        name: s.name,
+        kind: s.kind,
+        command: s.cmd,
+        cwd: s.dir.trim(),
+        basePort: s.port.trim() ? parseInt(s.port, 10) || null : null,
+        env: {},
+      }));
+
     if (!hasBackend()) {
-      // browser preview: narrate the same shape without touching a backend
       const ports = on.map((s) => s.port).filter(Boolean);
       setRunSteps([
         { t: `Registering ${det.name}`, run: async () => "" },
@@ -701,7 +866,6 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
       return;
     }
 
-    // shared context threaded across the real steps
     const ctx: { repo: RepoCfg | null } = { repo: null };
     const steps: RunStep[] = [
       {
@@ -723,15 +887,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
           const settings = await ipc.getSettings();
           const repo = settings.repos.find((r) => r.path === det.top);
           if (!repo) throw new Error("repo not found");
-          repo.services = on.map((s) => ({
-            id: s.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "service",
-            name: s.name,
-            kind: s.kind,
-            command: s.cmd,
-            cwd: "",
-            basePort: s.port.trim() ? parseInt(s.port, 10) || null : null,
-            env: {},
-          })) as ServiceCfg[];
+          repo.services = svcCfg();
           repo.resetDb = cfg.resetDb;
           repo.migrateDb = cfg.migrate;
           if (cfg.worktreeDir.trim()) repo.worktreeDir = cfg.worktreeDir.trim();
@@ -783,7 +939,6 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
     setCfg({ resetDb: "", migrate: "", worktreeDir: "", env: [], setup: [] });
   }
 
-  // keyboard: ⌘N opens add from empty; ⌘⏎ adds when ready; Esc skips a step
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -816,7 +971,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
         {view === "add" && <button className="ob-skip" onClick={() => setView("empty")}>Back</button>}
       </div>
 
-      {view === "empty" && <EmptyState onAdd={() => setView("add")} onBrowse={browse} />}
+      {view === "empty" && <EmptyState onAdd={() => setView("add")} />}
       {view === "add" && (
         <AddScreen
           det={det}
@@ -832,6 +987,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
           onStack={setStack}
           setServices={setServices}
           setCfg={setCfg}
+          flash={flash}
           onSkip={() => setView("empty")}
           onDone={startProvision}
         />

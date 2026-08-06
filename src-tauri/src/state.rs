@@ -274,8 +274,23 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
             if let Some(bp) = s.base_port {
                 let key = svc_key(wt_key, &s.id);
                 let port = effective_port(&overrides, &key, bp as u32, idx).to_string();
-                m.insert(format!("WT_{}_PORT", s.id.to_uppercase()), port.clone());
-                m.insert(format!("WM_PORT_{}", s.id.to_uppercase()), port); // back-compat alias
+                let id_up = s.id.to_uppercase();
+                m.insert(format!("WT_{id_up}_PORT"), port.clone());
+                m.insert(format!("WM_PORT_{id_up}"), port.clone()); // back-compat alias
+                // Also expose the port under the service's human NAME, so an .env
+                // template can use `${WT_SERVER_PORT}` for a service named "Server"
+                // regardless of its internal id (ids like `svc-19` never matched a
+                // human-authored template). Additive: `or_insert` never clobbers an
+                // id-based var, and a name collision keeps the first service's port.
+                let name_slug: String = s
+                    .name
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+                    .collect();
+                let name_slug = name_slug.trim_matches('_');
+                if !name_slug.is_empty() {
+                    m.entry(format!("WT_{name_slug}_PORT")).or_insert(port);
+                }
             }
         }
     }
