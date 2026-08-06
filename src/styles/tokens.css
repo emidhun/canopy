@@ -99,11 +99,12 @@
   --toast-bg: #16171a;
 
   /* ── typography ──────────────────────────────────────────────────
-     System fonts only — no webfonts ship, which keeps a native desktop feel
-     and avoids a flash on launch. Mono is load-bearing, not decorative:
+     Inter + JetBrains Mono ship bundled (Latin subset, variable, ~88 KB — see
+     src/styles/fonts.css) so every platform renders the same, with the system
+     stack (SF / Segoe) as the fallback. Mono is load-bearing, not decorative:
      anything git or the filesystem owns is monospace so it can't be misread. */
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ui: var(--sans);
 
   /* size ramp — dense by design; 9.5px is legible only in caps + tracking */

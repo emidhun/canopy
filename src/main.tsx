@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import { applyPlatformClass } from "./platform";
 import { initAppearance } from "./appearance";
+import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/terminal.css";
