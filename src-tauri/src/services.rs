@@ -77,6 +77,9 @@ pub struct ProcEntry {
     /// process-group / job handle used to tear down the whole child tree
     pub group: crate::proc::ProcGroup,
     pub started_at: Instant,
+    /// read only by the Unix crash-orphan persist (Windows has none — the Job
+    /// Object's KILL_ON_JOB_CLOSE makes the OS reap the tree)
+    #[cfg_attr(windows, allow(dead_code))]
     pub started_unix: u64,
     /// generation guard: stop() bumps this so a stale waiter doesn't clobber state
     pub generation: u64,

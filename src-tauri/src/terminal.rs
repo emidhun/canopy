@@ -14,6 +14,9 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::Serialize;
 #[cfg(unix)]
 use crate::settings::TermOrphan;
+// only the Unix orphan persist/sweep reads app state — on Windows the Job
+// Object reaps the tree, so both are stubs and this import would be unused
+#[cfg(unix)]
 use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};

@@ -304,6 +304,9 @@ mod tests {
         assert_eq!(tail(b""), "");
     }
 
+    /// only the Unix-gated pipe test uses this (the test spawns POSIX shell
+    /// commands, so it doesn't run on the Windows job)
+    #[cfg(unix)]
     fn test_conn() -> PgConn {
         PgConn {
             host: "h".into(),
