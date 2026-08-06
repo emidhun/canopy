@@ -41,6 +41,20 @@ export default function AgentsPage({ repo, patchRepo, markDirty, flash, invalid 
                     <span className="lb">Name</span><input className="inp" value={a.name} placeholder="Claude Code" onChange={(e) => patch(a.id, { name: e.target.value })} />
                     <span className="lb">Command</span><input className="inp mono" value={a.command} placeholder="claude" onChange={(e) => patch(a.id, { command: e.target.value })} />
                   </div>
+                  <div className="fgrid">
+                    <span className="lb">Waiting phrases</span>
+                    <textarea
+                      className="inp mono"
+                      rows={3}
+                      value={a.waitingPatterns}
+                      placeholder={"Do you want to proceed?\nApprove this edit"}
+                      onChange={(e) => patch(a.id, { waitingPatterns: e.target.value })}
+                    />
+                  </div>
+                  <div className="hint">
+                    One phrase per line. Canopy already recognises the common prompt shapes —
+                    add a line only when this CLI asks in a way it misses.
+                  </div>
                   <div className="tglrow" style={{ borderTop: 0 }}>
                     <span className="tt"><b>Prompt on launch</b><span>Append Canopy's structured handoff as the first prompt.</span></span>
                     <Toggle on={a.promptOnLaunch} onClick={() => patch(a.id, { promptOnLaunch: !a.promptOnLaunch })} />
