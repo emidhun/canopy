@@ -54,6 +54,9 @@ pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(),
         let state = app.state::<AppState>();
         *state.settings.write() = new_settings.clone();
     }
+    // re-publish git credentials before the rescan, so the refresh it triggers
+    // already uses the key the user just chose
+    git::apply_credentials(&new_settings.security.ssh_key, &new_settings.security.credential_helper);
     settings::save_settings(&app, &new_settings).map_err(CanopyError::config)?;
     // await only the structural rebuild (the tree must reflect the new
     // services/repos when this resolves); git meta is 2 spawns per worktree

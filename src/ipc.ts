@@ -57,6 +57,17 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  security: SecurityCfg;
+}
+
+export interface SecurityCfg {
+  /** render secret-looking values as bullets in the preview and in streamed
+      setup output */
+  maskSecrets: boolean;
+  /** export key names but not their values */
+  maskInExports: boolean;
+  sshKey: string;
+  credentialHelper: string;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";

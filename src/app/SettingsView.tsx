@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type SecurityCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -114,14 +114,29 @@ function fromCards(cards: FileCardT[]): ProvisionEntry[] {
     keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
   }));
 }
-function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
+/* Key fragments that mean "this value is a credential". Matched
+   case-insensitively as substrings, so GITHUB_TOKEN, jwtSecret and DB_PASSWORD
+   all hit. Kept in step with the same list in services.rs. */
+const SECRET_HINTS = ["secret", "token", "password", "passwd", "apikey", "api_key", "private", "credential", "signing"];
+export const looksSecret = (key: string) => {
+  const k = key.toLowerCase();
+  return SECRET_HINTS.some((h) => k.includes(h));
+};
+
+/** A provisioned value as it should be SHOWN. Template references like
+    `${WT_DB_NAME}` are never masked — they are the mechanism, not a secret,
+    and hiding them would make the preview useless for checking a template. */
+export const maskValue = (key: string, value: string) =>
+  looksSecret(key) && value.trim() && !value.includes("${") ? "••••••••" : value;
+
+function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[], mask = false) {
   const cfg: Record<string, unknown> = {
     $schema: "canopy://worktree-manager/v1",
     provision: cards.filter((c) => c.path.trim()).map((c) => {
       const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
       if (c.from.trim()) o.from = c.from.trim();
       if (c.format === "text") o.interpolate = c.interpolate;
-      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
+      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, mask ? maskValue(k.k, k.v) : k.v])); }
       return o;
     }),
     setup: setup.filter((s) => s.trim()),
@@ -153,8 +168,10 @@ function hlLine(line: string): string {
   return s;
 }
 
+const DEFAULT_SECURITY: SecurityCfg = { maskSecrets: true, maskInExports: false, sshKey: "", credentialHelper: "" };
+
 const MOCK: Settings = {
-  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, security: DEFAULT_SECURITY,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [
@@ -819,22 +836,39 @@ function AdvancedPage({ flash }: PageProps) {
   );
 }
 
-function SecurityPage() {
+function SecurityPage({ settings, patch, markDirty }: PageProps) {
+  const sec = settings.security ?? DEFAULT_SECURITY;
+  const set = (p: Partial<SecurityCfg>) => { patch({ security: { ...sec, ...p } }); markDirty("security"); };
   return (
     <>
       <div className="sec">
         <div className="slab">Secrets in provisioned files</div>
-        <Soon>Secret masking and export policies aren't stored yet. Provisioned key values are written to the worktree as configured.</Soon>
-        <div className="soonwrap">
-          <TRow title="Mask values that look like secrets" hint="Tokens and keys render as •••• in previews and logs." on disabled />
-          <TRow title="Keep secrets out of exports" hint="Export the key names but not their values." on disabled />
-        </div>
+        <TRow
+          title="Mask values that look like secrets"
+          hint="Keys named …token, …secret, …password or …key render as •••• in the config preview. Template references like ${WT_DB_NAME} are never masked — they're the mechanism, not a secret."
+          on={sec.maskSecrets}
+          onToggle={() => set({ maskSecrets: !sec.maskSecrets })}
+        />
+        <TRow
+          title="Keep secrets out of exports"
+          hint="Copy JSON and Export write the key names with masked values. Off by default: an export is usually a file you commit, where the values are the point."
+          on={sec.maskInExports}
+          onToggle={() => set({ maskInExports: !sec.maskInExports })}
+        />
+        <p className="hint">Masking never changes what is saved to .worktreemanager.json — worktrees are always provisioned with the real values.</p>
       </div>
       <div className="sec">
         <div className="slab">Git credentials</div>
-        <div className="soonwrap fgrid">
-          <span className="lb">SSH key</span><input className="inp mono" disabled placeholder="~/.ssh/id_ed25519" />
+        <div className="fgrid">
+          <span className="lb">SSH key</span>
+          <input className="inp mono" value={sec.sshKey} placeholder="git's own default" onChange={(e) => set({ sshKey: e.target.value })} />
+          <span className="lb">Credential helper</span>
+          <input className="inp mono" value={sec.credentialHelper} placeholder="git's own default" onChange={(e) => set({ credentialHelper: e.target.value })} />
         </div>
+        <p className="hint">
+          Applied per git invocation — Canopy never edits your repo or global git config.
+          A chosen SSH key is used with <span className="mono">IdentitiesOnly</span>, so ssh-agent can't offer a different one first.
+        </p>
       </div>
     </>
   );
@@ -900,8 +934,8 @@ function SearchOverlay({ onClose, onGo }: { onClose: () => void; onGo: (r: { pag
   );
 }
 
-function Preview({ cards, setup, extras, onClose }: { cards: FileCardT[]; setup: string[]; extras: { teardown: string[]; migrate: string[] }; onClose: () => void }) {
-  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+function Preview({ cards, setup, extras, mask, onClose }: { cards: FileCardT[]; setup: string[]; extras: { teardown: string[]; migrate: string[] }; mask: boolean; onClose: () => void }) {
+  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, mask), null, 2);
   const lines = json.split("\n");
   return (
     <div className="ppreview">
@@ -1098,7 +1132,11 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
 
   /* ── .worktreemanager.json import / export (mirrors the previous repo
         config editor: native save + backend write out, FileReader in) ── */
-  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+  /* Masking applies to what LEAVES the app (copy / export), never to what is
+     saved: a masked config written back to disk would provision the literal
+     string "••••••••" into every worktree. `save_repo_config` is unaffected. */
+  const configJson = () =>
+    JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, !!settings?.security?.maskInExports), null, 2);
   const copyJson = () => {
     if (!repo) return;
     navigator.clipboard?.writeText(configJson()).then(() => showToast("Copied .worktreemanager.json"), () => showToast("Copy failed"));
@@ -1179,7 +1217,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       case "notifications": return <NotificationsPage />;
       case "shortcuts": return <ShortcutsPage />;
       case "advanced": return <AdvancedPage {...pageProps} />;
-      case "security": return <SecurityPage />;
+      case "security": return <SecurityPage {...pageProps} />;
       default: return <GeneralPage {...pageProps} />;
     }
   };
@@ -1285,7 +1323,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="pbody">
             <div className={"pmain" + (flashId?.startsWith(page + "-") ? " flashrow" : "")}>{body()}</div>
             {preview && isRepoPage && repo && (
-              <Preview cards={cards} setup={setup} extras={extras} onClose={() => setPreview(false)} />
+              <Preview cards={cards} setup={setup} extras={extras} mask={settings.security?.maskSecrets !== false} onClose={() => setPreview(false)} />
             )}
           </div>
         </div>
