@@ -5,7 +5,7 @@
 // These live apart from the page components so they can be tested directly and
 // shared: SettingsView's save path and the Files/Setup pages both reach for
 // them. Nothing here touches React, Tauri or the DOM.
-import type { AgentContextCfg, AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask, WorktreeDefaults } from "../../ipc";
+import type { AgentContextCfg, AgentCfg, TermCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask, WorktreeDefaults } from "../../ipc";
 
 /* ── client-side provision model (stable ids for React keys) ──
    The counter resets on every page load, and service ids generated here are
@@ -49,6 +49,13 @@ export const DEFAULT_WT_DEFAULTS: WorktreeDefaults = { runSetup: true, startServ
    arbitrary process output — a stack trace, a printed connection string, a
    value read from a .env — into a prompt handed to a third-party CLI. */
 export const DEFAULT_AGENT_CONTEXT: AgentContextCfg = { worktreeContext: true, runtimeFacts: true, failingLogs: false };
+
+/* Unset means "keep the built-in behaviour" for every field, so the renderer's
+   real defaults stay in TerminalPane rather than being duplicated here. */
+export const DEFAULT_TERM: TermCfg = {
+  program: "", args: "", fontFamily: "", fontSize: 0, scrollback: 0,
+  cursor: "block", cursorBlink: true, bell: false, cwdWorktree: true, inheritEnv: true,
+};
 
 export const DEFAULT_SECURITY: SecurityCfg = { maskSecrets: true, maskInExports: false, sshKey: "", credentialHelper: "" };
 

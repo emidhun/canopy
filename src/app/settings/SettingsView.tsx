@@ -44,6 +44,7 @@ import NotificationsPage from "./pages/NotificationsPage";
 import ShortcutsPage from "./pages/ShortcutsPage";
 import AdvancedPage from "./pages/AdvancedPage";
 import SecurityPage from "./pages/SecurityPage";
+import { invalidateTermCfg } from "../TerminalPane";
 
 /** a page whose repo has no refused rows gets this rather than a fresh Map */
 const NO_INVALID: ReadonlyMap<string, IncompleteRow> = new Map();
@@ -234,6 +235,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         );
         if (failures.length) { showToast(`Saved app settings, but repo config failed — ${failures.join(" · ")}`); setSaving(false); return; }
       }
+      // the next terminal pane to mount must read the saved shell config
+      invalidateTermCfg();
       bumpSettings();
       const n = dirty.size;
       setDirty(new Set());

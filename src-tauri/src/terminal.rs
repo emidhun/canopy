@@ -14,8 +14,8 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::Serialize;
 #[cfg(unix)]
 use crate::settings::TermOrphan;
-// read by the activity detector (agent profile lookup) on every platform, and
-// by the Unix orphan persist/sweep
+// read by the activity detector (agent profile lookup) and the embedded-shell
+// config lookup on every platform, and by the Unix orphan persist/sweep
 use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -151,6 +151,11 @@ pub struct BufferSnapshot {
 fn terminal_windows(t: &tauri::EventTarget) -> bool {
     matches!(t, tauri::EventTarget::WebviewWindow { label }
         if label == "main" || label.starts_with("term-"))
+}
+
+/// The user's home directory, for "don't open in the worktree root".
+fn home_dir() -> Option<String> {
+    std::env::var("HOME").ok().or_else(|| std::env::var("USERPROFILE").ok()).filter(|h| !h.is_empty())
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -353,11 +358,26 @@ pub fn open(
     rows: u16,
     command: Option<String>,
 ) -> Result<(), String> {
-    // Resolve the profile's waiting snippets BEFORE taking the sessions lock:
-    // this reads settings, and keeping the two locks disjoint means no path
-    // can ever establish a settings→sessions ordering to deadlock against.
+    // Resolve everything that reads settings BEFORE taking the sessions lock:
+    // keeping the two locks disjoint means no path can ever establish a
+    // settings→sessions ordering to deadlock against.
     let waiting_patterns =
         if kind_of(id) == "agent" { patterns_for(app, cwd, command.as_deref()) } else { Vec::new() };
+    let (term_cfg, provisioned_vars) = match app.try_state::<AppState>() {
+        Some(state) => {
+            let cfg = state.settings.read().embedded_terminal.clone();
+            let vars = if cfg.inherit_env {
+                state
+                    .wt_context(cwd)
+                    .map(|ctx| crate::state::worktree_vars(app, &ctx.repo_id, cwd, ctx.is_main))
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+            (cfg, vars)
+        }
+        None => (crate::settings::TermCfg::default(), HashMap::new()),
+    };
 
     let mut sessions = table.sessions.lock();
     if sessions.contains_key(id) {
@@ -371,15 +391,28 @@ pub fn open(
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
-    // login shell (nvm/asdf/volta + user PATH initialize); honor a worktree's
-    // pinned Node the same way spawned services do.
-    let shell = crate::toolchain::user_shell();
+    // An explicit program is run as given, with the user's own arguments; an
+    // unset one keeps the login-shell behaviour that makes nvm/asdf/volta and
+    // rc-file PATH resolve.
+    let shell = if term_cfg.program.trim().is_empty() {
+        crate::toolchain::user_shell()
+    } else {
+        term_cfg.program.trim().to_string()
+    };
+    let custom_program = !term_cfg.program.trim().is_empty();
     let mut cmd = CommandBuilder::new(&shell);
     let name = std::path::Path::new(&shell).file_name().and_then(|s| s.to_str()).unwrap_or("");
     // on Windows the shell is `bash.exe`; normalize so the family checks below
     // (login flag, and the `-i` interactive flag) match as they do on Unix
     let name = name.strip_suffix(".exe").unwrap_or(name);
-    if !matches!(name, "sh" | "dash") {
+    if custom_program {
+        // The user chose the program, so they own its arguments. Canopy's
+        // -l/-i flags are for a shell IT picked and would be wrong (or fatal)
+        // for an arbitrary binary.
+        for a in term_cfg.args.split_whitespace() {
+            cmd.arg(a);
+        }
+    } else if !matches!(name, "sh" | "dash") {
         cmd.arg("-l");
     }
     if let Some(c) = command.as_deref().filter(|c| !c.trim().is_empty()) {
@@ -393,8 +426,20 @@ pub fn open(
         cmd.arg("-c");
         cmd.arg(c);
     }
-    cmd.cwd(cwd);
+    // A launched command always runs where it belongs; only a bare shell can
+    // honour "open in my home directory instead".
+    let start_dir = if term_cfg.cwd_worktree || command.is_some() {
+        cwd.to_string()
+    } else {
+        home_dir().unwrap_or_else(|| cwd.to_string())
+    };
+    cmd.cwd(&start_dir);
     cmd.env("TERM", "xterm-256color");
+    // The same WT_SLUG / WT_DB_NAME / WT_<SERVICE>_PORT the services and setup
+    // commands see, so a command typed by hand behaves the same way.
+    for (k, v) in provisioned_vars {
+        cmd.env(k, v);
+    }
     // Every agent profile can read the same durable handoff even when it opts
     // out of positional prompts because its CLI has a different interface.
     if kind_of(id) == "agent" {
