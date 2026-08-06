@@ -101,6 +101,8 @@ export interface Settings {
   notifications: NotifyCfg;
   /** keybinding overrides: action id → binding ("Mod+k"). See app/keys.ts. */
   keybindings: Record<string, string>;
+  updates: { autoCheck: boolean };
+  crashReports: { enabled: boolean };
 }
 export interface SecurityCfg {
   /** render secret-looking values as bullets in the preview and in streamed
@@ -167,7 +169,18 @@ export interface NotifyCfg {
   sound: boolean;
   /** count | dot | off */
   badge: string;
+}
 
+/** Result of an update check. Canopy reports what exists; it never downloads
+    or installs (release signing isn't set up — see updates.rs). */
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  available: boolean;
+  url: string | null;
+  /** why the last check produced nothing — shown verbatim */
+  error: string | null;
+  checkedAt: number;
 
 }
 
@@ -396,6 +409,11 @@ export const ipc = {
   openLogDir: () => invoke<void>("open_log_dir"),
   clearCaches: () => invoke<ClearedCaches>("clear_caches"),
   resetSettings: () => invoke<Settings>("reset_settings"),
+
+  checkForUpdate: () => invoke<UpdateStatus>("check_for_update"),
+  crashReportCount: () => invoke<number>("crash_report_count"),
+  openCrashReports: () => invoke<void>("open_crash_reports"),
+
 };
 
 /** A worktree's on-disk footprint: everything under its root, `node_modules`

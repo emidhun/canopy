@@ -17,6 +17,7 @@ mod stats;
 mod suite;
 mod terminal;
 mod toolchain;
+mod updates;
 mod tray;
 
 use services::ProcTable;
@@ -103,6 +104,11 @@ pub fn run() {
             app.manage(TermTable::default());
             app.manage(disk::DiskCache::default());
             app.manage(notify::NotifyState::default());
+
+            // crash reports + the update check need AppState for their
+            // preferences, so both are installed after it is managed
+            updates::install_panic_hook(handle.clone());
+            updates::spawn_check_task(handle.clone());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
@@ -348,6 +354,9 @@ pub fn run() {
             commands::open_log_dir,
             commands::clear_caches,
             commands::reset_settings,
+            commands::check_for_update,
+            commands::open_crash_reports,
+            commands::crash_report_count,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
