@@ -64,7 +64,7 @@ export const emptyAgent = (): AgentCfg => ({
   id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true,
 });
 export const emptyService = (): ServiceCfg => ({
-  id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {},
+  id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {}, health: "",
 });
 
 /* A repo saved before the agent list existed carries a single `agentCommand`;
