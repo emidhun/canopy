@@ -74,13 +74,24 @@ export function agentState(s: LaneSession): AgentState {
   return s.running ? "busy" : "idle";
 }
 
-/** True once the backend can tell us a worktree has never been provisioned.
+/** Does this worktree need provisioning before it is usable?
 
-    TODO(#53): `WorktreeNode` carries no setup record, so this is always false
-    and the "Run setup" branch below is unreachable. The engine falls through
-    to the next applicable state rather than guessing. */
-function neverSetUp(_wt: WorktreeNode): boolean {
-  return false;
+    True in exactly two cases, both of which a human must act on:
+      - the repo declares provisioning and Canopy has no record of it running
+      - the last recorded run failed, so the worktree is half-provisioned
+
+    Deliberately false when the repo declares nothing to provision (there is
+    no action to offer) and for the main checkout (it is the source the
+    worktrees are seeded *from*, not a thing Canopy provisions). */
+export function needsSetup(wt: WorktreeNode): boolean {
+  if (wt.isMain || !wt.setupConfigured) return false;
+  return wt.setup === null || !wt.setup.ok;
+}
+
+/** Why the setup action is being offered — a half-provisioned worktree is a
+    materially different situation from one that was never touched. */
+function setupWhy(wt: WorktreeNode): string {
+  return wt.setup === null ? "never provisioned" : "the last run failed";
 }
 
 export function nextAction(wt: WorktreeNode, sessions: LaneSession[]): NextAction {
@@ -117,8 +128,8 @@ export function nextAction(wt: WorktreeNode, sessions: LaneSession[]): NextActio
       sessionId: waiting.id,
     };
 
-  if (neverSetUp(wt))
-    return { id: "setup", kind: "primary", icon: Cube, label: "Run setup", why: "never provisioned", key: "⏎" };
+  if (needsSetup(wt))
+    return { id: "setup", kind: "primary", icon: Cube, label: "Run setup", why: setupWhy(wt), key: "⏎" };
 
   if (starting)
     return {
@@ -238,14 +249,13 @@ export function attentionItems(tree: RepoNode[], sessions: Record<string, LaneSe
           act: "Answer",
         });
       }
-      // TODO(#53): "Setup never run" belongs here once the backend records it.
-      if (neverSetUp(wt))
+      if (needsSetup(wt))
         out.push({
           id: `${wt.wtKey}::setup`,
           sev: 2,
           kind: "todo",
           wtKey: wt.wtKey,
-          title: "Setup never run",
+          title: wt.setup === null ? "Setup never run" : "Setup failed",
           wt: wt.branch,
           act: "Run setup",
         });

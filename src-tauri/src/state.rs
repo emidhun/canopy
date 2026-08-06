@@ -36,6 +36,14 @@ pub struct WorktreeNode {
     pub git: Option<GitMeta>,
     /// database name from the worktree's .env (PG_DB), if present
     pub db_name: Option<String>,
+    /// what Canopy knows about this worktree's provisioning; `None` = never
+    /// provisioned as far as it can tell. Read from `.canopy/setup.json`, or
+    /// inferred from the presence of every declared provisioned file.
+    pub setup: Option<crate::setup::SetupState>,
+    /// does the owning repo declare anything to provision or run at all? A
+    /// repo with no `.worktreemanager.json` can't have "unprovisioned"
+    /// worktrees, so `setup: None` there means "nothing to do", not "act".
+    pub setup_configured: bool,
     pub services: Vec<ServiceNode>,
 }
 
@@ -332,8 +340,11 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
                 })
                 .collect();
 
+            let (setup, setup_configured) = crate::setup::setup_status(&wt.path, &repo.path);
             worktrees.push(WorktreeNode {
                 db_name: env_value(&wt.path, "PG_DB"),
+                setup,
+                setup_configured,
                 wt_key: wt.path.clone(),
                 git: prev_git.get(&wt.path).cloned(),
                 branch: wt.branch,
