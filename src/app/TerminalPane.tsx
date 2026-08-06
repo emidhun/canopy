@@ -172,6 +172,28 @@ export default function TerminalPane({
     let suppressOut = false;
     const pending: { seq: number; data: string }[] = [];
     const writeChunk = (b64: string) => termRef.current?.write(decode(b64));
+    // cumulative byte cursor of the last chunk we applied. The backend stops
+    // emitting while every window is hidden (the PTY keeps running and its
+    // scrollback keeps advancing) — a seq gap on the next event, or a stale
+    // cursor on window focus, means "resync from the snapshot".
+    let lastSeq = 0;
+    /** decoded byte length of a base64 chunk, without decoding it */
+    const b64len = (s: string) => (s.length / 4) * 3 - (s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0);
+    const resync = async () => {
+      if (!hydrated) return; // initial hydrate owns the buffer until done
+      try {
+        const snap = await ipc.terminalGetBuffer(termId);
+        if (disposed || !termRef.current || !snap || snap.seq === lastSeq) return;
+        lastSeq = snap.seq;
+        suppressOut = true;
+        termRef.current.reset();
+        termRef.current.write(decode(snap.buffer), () => {
+          suppressOut = false;
+        });
+      } catch {
+        /* the next chunk's gap check retries */
+      }
+    };
 
     // fit only when the host is actually laid out — fitting a zero-size or
     // display:none element leaves xterm's renderer without dimensions and throws
@@ -201,8 +223,15 @@ export default function TerminalPane({
       // or the handler leaks and keeps appending after unmount.
       const u1 = await on.terminalData((e) => {
         if (e.id !== termId) return;
-        if (!hydrated) pending.push({ seq: e.seq, data: e.data });
-        else writeChunk(e.data);
+        if (!hydrated) {
+          pending.push({ seq: e.seq, data: e.data });
+        } else if (e.seq - b64len(e.data) !== lastSeq) {
+          // missed chunks (emits were skipped while hidden) — full resync
+          void resync();
+        } else {
+          writeChunk(e.data);
+          lastSeq = e.seq;
+        }
       });
       if (disposed) return u1();
       unlistenData = u1;
@@ -225,13 +254,25 @@ export default function TerminalPane({
             suppressOut = false;
           });
         }
-        for (const p of pending) if (p.seq > baseline) writeChunk(p.data);
+        lastSeq = baseline;
+        for (const p of pending)
+          if (p.seq > baseline) {
+            writeChunk(p.data);
+            lastSeq = p.seq;
+          }
         pending.length = 0;
         hydrated = true;
       } catch (err) {
         termRef.current?.write(`\r\n\x1b[31mterminal error: ${errText(err)}\x1b[0m\r\n`);
       }
     })();
+
+    // window back on screen → catch up on output emitted-nothing while hidden
+    const onVisible = () => {
+      if (!document.hidden) void resync();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
 
     // keep the PTY sized to the widget
     const ro = new ResizeObserver(() => {
@@ -243,6 +284,8 @@ export default function TerminalPane({
 
     return () => {
       disposed = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
       unlistenData?.();
       unlistenExit?.();
       fileLinks.dispose();

@@ -261,7 +261,13 @@ pub fn open(
                             }
                         }
                     }
-                    if ours {
+                    // Skip the emit while nothing is on screen: base64 + JSON +
+                    // waking a hidden webview per chunk is pure waste. The
+                    // scrollback + seq advanced above regardless, and the UI
+                    // resyncs from the snapshot on show / on the next chunk's
+                    // seq-gap check — the same race-free cursor rehydrate
+                    // mechanism it already uses on mount.
+                    if ours && crate::windows_visible() {
                         let _ = app.emit_filter("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq }, terminal_windows);
                     }
                 }

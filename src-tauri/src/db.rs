@@ -55,10 +55,16 @@ impl PgConn {
 const PG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
 
 /// Run a shell command line in the worktree dir with PGPASSWORD set.
+/// Uses the fast non-login shell: these lines are composed by Canopy (pure
+/// POSIX, need only PATH), and a login shell's profile init cost 300ms–1s
+/// PER invocation — a snapshot chains five of them before any data moves.
 async fn run(wt_path: &str, c: &PgConn, cmdline: &str) -> Result<String, String> {
-    let (shell, shargs) = crate::toolchain::shell_argv(cmdline);
+    let (shell, shargs) = crate::toolchain::fast_shell_argv(cmdline);
     let mut cmd = Command::new(shell);
-    cmd.args(&shargs).current_dir(wt_path).kill_on_drop(true);
+    cmd.args(&shargs)
+        .current_dir(wt_path)
+        .env("PATH", crate::toolchain::effective_path())
+        .kill_on_drop(true);
     if let Some(p) = &c.pass {
         cmd.env("PGPASSWORD", p);
     }
@@ -198,10 +204,12 @@ async fn run_piped(
 ) -> Result<(), String> {
     use std::process::Stdio;
     let spawn = |line: &str, stdin: Stdio, stdout: Stdio| {
-        let (shell, args) = crate::toolchain::shell_argv(line);
+        // fast non-login shell — see `run` for why this is safe here
+        let (shell, args) = crate::toolchain::fast_shell_argv(line);
         let mut cmd = Command::new(shell);
         cmd.args(&args)
             .current_dir(wt_path)
+            .env("PATH", crate::toolchain::effective_path())
             .kill_on_drop(true)
             .stdin(stdin)
             .stdout(stdout)

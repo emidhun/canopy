@@ -193,6 +193,9 @@ pub fn toggle_popover(app: &AppHandle, tray_pos: PhysicalPosition<f64>, tray_siz
 /// tray click (macOS), tray menu (Linux/Windows), and `show_main_window`.
 /// Collapses with any refresh already in flight (see `state::refresh_all`).
 pub(crate) fn catch_up_refresh(app: &AppHandle) {
+    // eager visibility hint: emit gating must not swallow the first events
+    // after a show while the 1s poll catches up
+    crate::note_window_shown();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         crate::state::refresh_all(&app).await;

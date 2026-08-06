@@ -33,7 +33,7 @@ pub fn spawn_stats_task(app: AppHandle) {
             // enumerating every process on the machine 30×/min is the app's
             // steady-state CPU cost — skip it while nothing is on screen
             // (the stats card can't be seen from the tray)
-            if !crate::any_window_visible(&app) {
+            if !crate::windows_visible() {
                 continue;
             }
 

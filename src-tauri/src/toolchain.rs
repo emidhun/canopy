@@ -180,6 +180,54 @@ fn find_git_bash() -> Option<String> {
     None
 }
 
+/// PATH as a login shell resolves it, captured ONCE per run and unioned with
+/// the process PATH. Internal tool invocations (db CLIs) use this instead of
+/// paying profile-sourcing (nvm/asdf init: dozens of file reads + often a
+/// node exec, 300ms–1s) on every spawn. Capture failure degrades to the
+/// process PATH — which fix_path_env already promoted at startup.
+#[cfg(unix)]
+pub fn effective_path() -> String {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let cur = std::env::var("PATH").unwrap_or_default();
+        let captured = std::process::Command::new(user_shell())
+            .args(["-l", "-c", "printf %s \"$PATH\""])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        match captured {
+            Some(c) if c != cur && !cur.is_empty() => format!("{c}:{cur}"),
+            Some(c) => c,
+            None => cur,
+        }
+    })
+    .clone()
+}
+
+#[cfg(windows)]
+pub fn effective_path() -> String {
+    std::env::var("PATH").unwrap_or_default()
+}
+
+/// Fast non-login shell for INTERNAL tool invocations — command lines Canopy
+/// composes itself (psql/pg_dump/pg_restore/createdb/dropdb), which are pure
+/// POSIX and need only PATH (see `effective_path`). User-authored commands
+/// (services, setup, custom, reset) MUST keep `shell_argv`'s login shell:
+/// their PATH and functions may come from profile files.
+pub fn fast_shell_argv(cmdline: &str) -> (String, Vec<String>) {
+    // Windows: Git Bash without `-l` skips /etc/profile + ~/.bash_profile —
+    // same speedup, same POSIX syntax. Unix: /bin/sh is fine because the
+    // composed lines avoid bashisms (no pipefail — see db.rs).
+    #[cfg(target_os = "windows")]
+    let shell = user_shell();
+    #[cfg(not(target_os = "windows"))]
+    let shell = "/bin/sh".to_string();
+    (shell, vec!["-c".into(), cmdline.to_string()])
+}
+
 /// Build `(shell, argv)` to run `cmdline` through the user's shell. Flags are
 /// chosen per shell family: pass `-l` and `-c` as *separate* args so fish parses
 /// them (it rejects the combined `-lc`), and drop `-l` for plain `sh`/`dash`

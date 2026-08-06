@@ -20,11 +20,28 @@ use tauri::Manager;
 use terminal::TermTable;
 
 /// Is any Canopy window (main / popover / detached terminal) on screen?
-/// Gates the background refresh + stats loops — work nobody can see.
+/// Queries the OS — used only by the 1s poll below; hot paths read the cache.
 pub(crate) fn any_window_visible(app: &tauri::AppHandle) -> bool {
     app.webview_windows()
         .values()
         .any(|w| w.is_visible().unwrap_or(false))
+}
+
+/// Cached answer to "is anything on screen", refreshed every second and set
+/// eagerly by the show paths. Emitting into hidden webviews keeps their
+/// WebKit/WebView2 processes hot for work nobody can see — the log pump and
+/// PTY reader consult this per emit, so it must be an atomic read, not an
+/// OS query marshalled to the main thread per 32KB chunk.
+static WINDOWS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn windows_visible() -> bool {
+    WINDOWS_VISIBLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Called by every path that shows a window, so the ≤1s cache staleness can
+/// never swallow the first events after a show.
+pub(crate) fn note_window_shown() {
+    WINDOWS_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -84,6 +101,27 @@ pub fn run() {
 
             stats::spawn_stats_task(handle.clone());
 
+            // 1s visibility poll feeding the WINDOWS_VISIBLE cache
+            {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        WINDOWS_VISIBLE.store(
+                            any_window_visible(&handle),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                });
+            }
+
+            // warm the login-PATH capture off the critical path, so the first
+            // database action doesn't pay the profile-sourcing cost inline
+            #[cfg(unix)]
+            std::thread::spawn(|| {
+                let _ = toolchain::effective_path();
+            });
+
             // periodically sweep idle shell terminals (bounds long-run memory)
             {
                 let handle = handle.clone();
@@ -105,7 +143,7 @@ pub fn run() {
                 state::refresh_all(&handle).await;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    if !any_window_visible(&handle) {
+                    if !windows_visible() {
                         continue;
                     }
                     state::refresh_all(&handle).await;

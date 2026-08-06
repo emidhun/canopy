@@ -10,7 +10,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub const LOG_CAP: usize = 160;
-const LOG_FLUSH_MS: u64 = 80;
+// Flush cadence for log batches. 200ms caps store-update/render pressure at
+// 5/sec per noisy service (was 12.5/sec at 80ms) — meaningful on low-spec
+// machines during a webpack burst, imperceptible as log-tail latency.
+const LOG_FLUSH_MS: u64 = 200;
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,7 +139,12 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: vec![line] }, main_window_only);
+    // ring + disk always record; the emit is skipped while nothing is on
+    // screen (the UI re-snapshots the ring via get_logs on tab select,
+    // primeLogs, and window focus)
+    if crate::windows_visible() {
+        let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: vec![line] }, main_window_only);
+    }
 }
 
 /// Cap for one on-disk service log before it rolls to `<name>.1.log`.
@@ -474,7 +482,12 @@ fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) }, main_window_only);
+    // see push_log: recorded always, emitted only when someone can see it
+    if crate::windows_visible() {
+        let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) }, main_window_only);
+    } else {
+        batch.clear();
+    }
 }
 
 /// Case-insensitive substring search without allocating (the old
