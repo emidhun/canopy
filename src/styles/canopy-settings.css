@@ -119,7 +119,6 @@
 }
 .cxset-root .navsearch:focus-within {
   border-color: var(--action-primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .cxset-root .navsearch input {
   flex: 1;
@@ -548,7 +547,6 @@
 }
 .cxset-root .inp:focus {
   border-color: var(--action-primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .cxset-root .inp::placeholder {
   color: var(--text-tertiary);

@@ -1953,7 +1953,6 @@
    the auto-focused field otherwise lacks (matches .cx-search) */
 .cxs-pp-search:focus-within {
   border-color: var(--action-primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .cxs-pp-search input {
   flex: 1;
