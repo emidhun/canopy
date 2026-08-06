@@ -16,12 +16,12 @@ const nowS = () => Date.now() / 1000;
 
 /* Custom commands for the no-backend dev build, so the rail's command buttons
    render without a real settings file. Mirrors the design's CMDS seed. */
-export function mockCustomCommands(): { label: string; command: string }[] {
+export function mockCustomCommands(): { label: string; command: string; group: string }[] {
   return [
-    { label: "Lint", command: "pnpm lint" },
-    { label: "Unit tests", command: "pnpm test --run" },
-    { label: "Typecheck", command: "pnpm tsc --noEmit" },
-    { label: "Storybook", command: "pnpm storybook" },
+    { label: "Lint", command: "pnpm lint", group: "Checks" },
+    { label: "Unit tests", command: "pnpm test --run", group: "Checks" },
+    { label: "Typecheck", command: "pnpm tsc --noEmit", group: "Checks" },
+    { label: "Storybook", command: "pnpm storybook", group: "" },
   ];
 }
 

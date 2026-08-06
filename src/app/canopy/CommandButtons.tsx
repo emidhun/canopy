@@ -4,9 +4,10 @@
 
    The first command gets its own labelled run button; the rest collapse into a
    single "Commands" popover so the bar cannot grow without bound as the user
-   adds more. Mirrors the design's CmdButtons (cx-app.jsx). The backend
-   `CustomCmd` is `{ label, command }` with no group field, so the design's
-   per-group headers only render if a group ever appears in the data. */
+   adds more. Mirrors the design's CmdButtons (cx-app.jsx). Commands carry an
+   optional `group`, and the popover renders a header per group; ungrouped
+   commands sit together under no header, so a repo that never sets one looks
+   exactly as it did. */
 import { useEffect, useRef, useState } from "react";
 import { Chevron, Play, Spinner } from "../../icons";
 import { errText, hasBackend, ipc, type CustomCmd } from "../../ipc";
@@ -14,8 +15,8 @@ import { mockCustomCommands } from "../../mock";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 
-// CustomCmd has no `group` yet; read it defensively so grouping still works if
-// one is ever added to the settings schema.
+/** `group` is optional in practice — a settings file written before groups
+    existed has none — so it is read defensively rather than assumed. */
 type Grouped = CustomCmd & { group?: string };
 
 export default function CommandButtons({ wt }: { wt: WorktreeNode }) {

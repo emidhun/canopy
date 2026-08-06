@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type CustomCmd, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -161,7 +161,7 @@ const MOCK: Settings = {
       { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" } },
       { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" } },
     ],
-    customCommands: [{ label: "Lint", command: "pnpm lint" }, { label: "Unit tests", command: "pnpm test --run" }],
+    customCommands: [{ label: "Lint", command: "pnpm lint", group: "Checks" }, { label: "Unit tests", command: "pnpm test --run", group: "Checks" }],
     agentCommand: "claude",
     agents: [{ id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true }, { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true }],
   }],
@@ -365,20 +365,24 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
   const [ran, setRan] = useState<{ i: number; state: "running" | "done" } | null>(null);
   if (!repo) return null;
   const cmds = repo.customCommands || [];
-  const patch = (i: number, p: Partial<{ label: string; command: string }>) => { patchRepo({ customCommands: cmds.map((c, j) => (j === i ? { ...c, ...p } : c)) }); markDirty("commands"); };
+  const patch = (i: number, p: Partial<CustomCmd>) => { patchRepo({ customCommands: cmds.map((c, j) => (j === i ? { ...c, ...p } : c)) }); markDirty("commands"); };
   const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= cmds.length) return; const n = cmds.slice(); [n[i], n[j]] = [n[j], n[i]]; patchRepo({ customCommands: n }); markDirty("commands"); };
   const test = (i: number, cmd: string) => {
     if (!hasBackend() || !selKey) { flash("Open a worktree to test a command"); return; }
     setRan({ i, state: "running" });
     ipc.runCustomCommand(selKey, cmd).then(() => setRan({ i, state: "done" })).catch((e) => { setRan(null); flash(`Command failed — ${errText(e)}`); });
   };
+  // Existing groups become suggestions: grouping is only useful when names
+  // match exactly, and free typing is how you end up with "Build" and "build".
+  const groupNames = Array.from(new Set(cmds.map((c) => (c.group ?? "").trim()).filter(Boolean)));
   return (
     <div className="sec">
+      <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
       <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
       {cmds.length === 0 ? (
         <div className="empty">
           <p>No commands yet. Add one like <code>Lint</code> = <code>pnpm lint</code> — it appears in every worktree's + menu.</p>
-          <button className="btn sm" onClick={() => { patchRepo({ customCommands: [{ label: "", command: "" }] }); markDirty("commands"); }}><Plus size={10} />Add command</button>
+          <button className="btn sm" onClick={() => { patchRepo({ customCommands: [{ label: "", command: "", group: "" }] }); markDirty("commands"); }}><Plus size={10} />Add command</button>
         </div>
       ) : (
         <div className="objs">
@@ -402,7 +406,10 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
                   <div className="fgrid">
                     <span className="lb">Label</span><input className="inp" value={c.label} placeholder="Lint" onChange={(e) => patch(i, { label: e.target.value })} />
                     <span className="lb">Command</span><input className="inp mono" value={c.command} placeholder="pnpm lint" onChange={(e) => patch(i, { command: e.target.value })} />
-                    <span className="lb">Group</span><input className="inp" disabled placeholder="coming soon" title="Command groups aren't stored yet" />
+                    <span className="lb">Group</span>
+                    <input className="inp" value={c.group ?? ""} placeholder="ungrouped" list="cx-cmd-groups"
+                      title="Commands sharing a group get a header in the rail's Commands menu"
+                      onChange={(e) => patch(i, { group: e.target.value })} />
                   </div>
                   {ran && ran.i === i && (
                     <div className="testout">
@@ -419,7 +426,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
         </div>
       )}
       {cmds.length > 0 && (
-        <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
+        <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "", group: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
       )}
     </div>
   );
