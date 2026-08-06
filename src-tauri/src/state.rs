@@ -112,6 +112,9 @@ pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
     state.statuses.write().retain(|k, _| !k.starts_with(&prefix));
     if let Some(table) = app.try_state::<crate::services::ProcTable>() {
         table.logs.lock().retain(|k, _| !k.starts_with(&prefix));
+        // close the on-disk log handles too, or a removed worktree keeps file
+        // descriptors open for the rest of the run
+        table.log_files.lock().retain(|k, _| !k.starts_with(&prefix));
     }
 }
 

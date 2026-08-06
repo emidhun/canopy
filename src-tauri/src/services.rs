@@ -69,6 +69,8 @@ pub struct ProcEntry {
 pub struct ProcTable {
     pub procs: Mutex<HashMap<String, ProcEntry>>,
     pub logs: Mutex<HashMap<String, VecDeque<LogLine>>>,
+    /// open append handles for the on-disk service logs (see `persist_log_lines`)
+    pub log_files: Mutex<HashMap<String, LogSink>>,
     generation: Mutex<u64>,
 }
 
@@ -140,34 +142,91 @@ pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
 
 /// Cap for one on-disk service log before it rolls to `<name>.1.log`.
 const SVC_LOG_ROTATE_BYTES: u64 = 2 * 1024 * 1024;
+/// Longest generated log filename stem; beyond this the flattened svc_key is
+/// truncated and hashed, since 255 bytes is the per-component limit on APFS,
+/// ext4 and NTFS alike and deep worktree paths flatten into long names.
+const LOG_NAME_MAX: usize = 120;
+
+/// Open sink for one service's on-disk log. Holding the handle (and counting
+/// bytes in-process) keeps the steady-state cost of a flush to a single
+/// `write` — the log pump fires every 80ms per running service, so resolving
+/// the directory and reopening the file each time was pure syscall overhead.
+pub struct LogSink {
+    file: std::fs::File,
+    written: u64,
+}
+
+/// `<app-log-dir>/services`, resolved and created once per run.
+fn service_log_dir(app: &AppHandle) -> Option<&'static std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = app.path().app_log_dir().ok()?.join("services");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    })
+    .as_ref()
+}
+
+/// svc_key (`<wt path>::<service id>`) flattened to a filesystem-safe stem,
+/// length-bounded so a deep worktree path can't overflow the 255-byte
+/// filename limit.
+fn log_file_stem(key: &str) -> String {
+    let flat: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .collect();
+    if flat.len() <= LOG_NAME_MAX {
+        return flat;
+    }
+    // keep the tail (worktree + service, the part a human recognizes) and
+    // prefix a cheap hash of the whole key so distinct services never collide
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let tail: String = flat.chars().skip(flat.chars().count() - (LOG_NAME_MAX - 17)).collect();
+    format!("{h:016x}_{tail}")
+}
 
 /// Append log lines to a per-service file under `<app-log-dir>/services/`.
 /// The in-memory ring keeps only LOG_CAP lines — a crash 500 lines in would
 /// otherwise lose its own cause. Best-effort: log I/O never fails a service op.
 fn persist_log_lines(app: &AppHandle, key: &str, lines: &[LogLine]) {
     use std::io::Write;
-    let Ok(dir) = app.path().app_log_dir().map(|d| d.join("services")) else { return };
-    if std::fs::create_dir_all(&dir).is_err() {
+    if lines.is_empty() {
         return;
     }
-    // svc_key is `<wt path>::<service id>` — flatten to a safe filename
-    let name: String = key
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
-        .collect();
-    let path = dir.join(format!("{name}.log"));
-    // size-capped: roll the current file to `.1.log` (replacing the previous roll)
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > SVC_LOG_ROTATE_BYTES {
-            let _ = std::fs::rename(&path, dir.join(format!("{name}.1.log")));
+    let Some(dir) = service_log_dir(app) else { return };
+    let mut body = String::new();
+    for l in lines {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "{} [{}] {}", l.t, l.lv, l.text);
+    }
+
+    let table = app.state::<ProcTable>();
+    let mut sinks = table.log_files.lock();
+    let stem = log_file_stem(key);
+    let path = dir.join(format!("{stem}.log"));
+
+    // rotate on the byte count we already track — no metadata() syscall
+    if let Some(s) = sinks.get(key) {
+        if s.written + body.len() as u64 > SVC_LOG_ROTATE_BYTES {
+            sinks.remove(key); // drop the handle before renaming (Windows)
+            let _ = std::fs::rename(&path, dir.join(format!("{stem}.1.log")));
         }
     }
-    let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
-    let mut out = String::new();
-    for l in lines {
-        out.push_str(&format!("{} [{}] {}\n", l.t, l.lv, l.text));
+    let sink = match sinks.entry(key.to_string()) {
+        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+        std::collections::hash_map::Entry::Vacant(e) => {
+            let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+            let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+            e.insert(LogSink { file, written })
+        }
+    };
+    if sink.file.write_all(body.as_bytes()).is_ok() {
+        sink.written += body.len() as u64;
     }
-    let _ = f.write_all(out.as_bytes());
 }
 
 /// Persist live service pgids so a crash can be swept on next launch. Unix-only:
@@ -678,7 +737,24 @@ pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_line;
+    use super::{classify_line, log_file_stem, LOG_NAME_MAX};
+
+    #[test]
+    fn log_file_stem_is_safe_and_length_bounded() {
+        let short = log_file_stem("/Users/me/wt/feat::frontend");
+        assert_eq!(short, "_Users_me_wt_feat__frontend", "separators flattened");
+
+        // a deep path must not overflow the 255-byte filename limit
+        let deep = format!("/Users/me/{}/wt::server", "nested-dir/".repeat(40));
+        let stem = log_file_stem(&deep);
+        assert!(stem.len() <= LOG_NAME_MAX, "bounded: {}", stem.len());
+        assert!(stem.ends_with("wt__server"), "keeps the recognizable tail: {stem}");
+
+        // two long keys differing only at the head still get distinct names
+        let a = log_file_stem(&format!("/a/{}/wt::server", "x/".repeat(80)));
+        let b = log_file_stem(&format!("/b/{}/wt::server", "x/".repeat(80)));
+        assert_ne!(a, b, "hash prefix disambiguates truncated names");
+    }
 
     /// The PID-recycling guard must recognize a live process's real start time
     /// (this also proves sysinfo delivers a non-zero start_time on this OS —

@@ -156,21 +156,50 @@ pub async fn clone_database(wt_path: &str, target: &str, mut progress: impl FnMu
     progress(format!("creating database {target}…"));
     run(wt_path, &c, &format!("createdb {conn_args} {}", q(target))).await?;
     progress(format!("copying {} → {target}…", c.db));
-    // custom-format dump piped straight into restore, using binaries matching the
-    // server version so directives/archive format stay compatible on restore.
-    // pipefail: a pipeline's status is otherwise the LAST command's — a failed
-    // pg_dump feeding a tolerant pg_restore would report a truncated copy as ok.
-    // (`|| true` keeps plain sh/dash working, where pipefail doesn't exist —
-    // those shells just keep the old last-command semantics.)
-    let line = format!(
-        "{{ set -o pipefail; }} 2>/dev/null || true; {pre}pg_dump {conn_args} -Fc {src} | pg_restore {conn_args} --no-owner --no-acl -d {dst}",
-        pre = pg_path_prefix_for(server_major(wt_path, &c).await),
-        src = q(&c.db),
-        dst = q(target),
-    );
-    run(wt_path, &c, &line).await?;
+    // Dump to a temp file, then restore from it — deliberately NOT a shell
+    // pipeline. A pipeline's exit status is the last command's, so a failed
+    // pg_dump feeding a tolerant pg_restore reports success; and `set -o
+    // pipefail` is not a portable fix — `set` is a POSIX *special builtin*, so
+    // on dash (Debian/Ubuntu /bin/sh) an unknown option exits the shell
+    // outright, even wrapped in braces or an `|| true` list. Two explicit
+    // stages work on every shell and say which half failed.
+    let pre = pg_path_prefix_for(server_major(wt_path, &c).await);
+    let dump = temp_dump_path(target);
+    let dump_q = q(&crate::toolchain::bash_path(&dump));
+    let dump_res = run(
+        wt_path,
+        &c,
+        &format!("{pre}pg_dump {conn_args} -Fc {src} -f {dump_q}", src = q(&c.db)),
+    )
+    .await;
+    let result = match dump_res {
+        Err(e) => Err(format!("dump of {} failed: {e}", c.db)),
+        Ok(_) => run(
+            wt_path,
+            &c,
+            &format!("{pre}pg_restore {conn_args} --no-owner --no-acl -d {dst} {dump_q}", dst = q(target)),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("restore into {target} failed: {e}")),
+    };
+    let _ = std::fs::remove_file(&dump);
+    result?;
     progress("snapshot ready".into());
     Ok(())
+}
+
+/// Scratch path for the intermediate dump. Includes the pid so two Canopy
+/// runs (or two snapshots) can't collide on it.
+fn temp_dump_path(target: &str) -> String {
+    let safe: String = target
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    std::env::temp_dir()
+        .join(format!("canopy-snap-{}-{safe}.dump", std::process::id()))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Dump the worktree's current DB to a custom-format file at `file_path`.
