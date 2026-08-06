@@ -292,6 +292,59 @@
   --state-idle: var(--off);
 }
 
+/* ── appearance: density ──────────────────────────────────────────
+   Compact tightens the vertical rhythm — row/control heights and the default
+   row spacing — without touching the type ramp. Applied by [data-density] on
+   <html> (see appearance.ts). */
+[data-density="compact"] {
+  --sp-row: 6px;
+  --h-row: 24px;
+  --h-control: 26px;
+  --h-control-xs: 22px;
+  --h-control-sm: 20px;
+  --lh-body: 1.45;
+}
+
+/* ── appearance: accent ───────────────────────────────────────────
+   One accent, swappable. Every accented surface reads --teal / --accent /
+   --action-primary (which alias --teal) and the derived teal-* tints, so
+   remapping this family re-tints the whole app. Teal is the default and the
+   scarcity rule still holds — this only changes WHICH single hue is the accent.
+   Applied by [data-accent] on <html>. */
+[data-accent="green"] {
+  --teal: #4cc266;
+  --teal-dim: rgba(76, 194, 102, 0.15);
+  --teal-text: #a9dfb6;
+  --teal-text-hi: #b7e6c2;
+  --teal-border: rgba(76, 194, 102, 0.34);
+  --teal-fill-hi: rgba(76, 194, 102, 0.26);
+  --on-teal: #06241f;
+  --on-accent: #06241f;
+  --focus-ring: rgba(76, 194, 102, 0.4);
+}
+[data-accent="amber"] {
+  --teal: #e6ad5f;
+  --teal-dim: rgba(230, 173, 95, 0.15);
+  --teal-text: #e8cda1;
+  --teal-text-hi: #f0d9b4;
+  --teal-border: rgba(230, 173, 95, 0.34);
+  --teal-fill-hi: rgba(230, 173, 95, 0.26);
+  --on-teal: #221806;
+  --on-accent: #221806;
+  --focus-ring: rgba(230, 173, 95, 0.4);
+}
+[data-accent="violet"] {
+  --teal: #c77ecd;
+  --teal-dim: rgba(199, 126, 205, 0.16);
+  --teal-text: #e7c6ea;
+  --teal-text-hi: #eed2f0;
+  --teal-border: rgba(199, 126, 205, 0.34);
+  --teal-fill-hi: rgba(199, 126, 205, 0.26);
+  --on-teal: #1b0a1f;
+  --on-accent: #1b0a1f;
+  --focus-ring: rgba(199, 126, 205, 0.4);
+}
+
 /* ── base ── */
 * {
   box-sizing: border-box;

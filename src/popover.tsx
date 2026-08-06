@@ -4,10 +4,12 @@ import Popover from "./popover/Popover";
 import { initSync, useStore } from "./store";
 import { hasBackend } from "./ipc";
 import { applyPlatformClass } from "./platform";
+import { initAppearance } from "./appearance";
 import "./styles/tokens.css";
 import "./styles/popover.css";
 
 applyPlatformClass();
+initAppearance();
 
 const POP_W = 348; // design width
 const POP_MAX_H = 472; // design cap — the list scrolls inside past this
