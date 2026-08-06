@@ -657,11 +657,7 @@ pub async fn show_main_window(app: AppHandle) -> Result<(), CanopyError> {
         let _ = pop.hide();
     }
     // the background refresh pauses while every window is hidden — catch up now
-    let app2 = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let _ = refresh_tree(&app2).await;
-        refresh_all_git_meta(&app2).await;
-    });
+    crate::tray::catch_up_refresh(&app);
     Ok(())
 }
 

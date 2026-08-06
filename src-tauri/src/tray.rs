@@ -155,6 +155,11 @@ pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = win.unminimize();
                     let _ = win.set_focus();
                 }
+                // On Linux the tray MENU is the only entry point (appindicator
+                // delivers no click events), so this — not the popover toggle —
+                // is the path back from a hidden window. Without the catch-up
+                // the user would stare at up to 60s-stale git data.
+                catch_up_refresh(app);
             }
             "quit" => app.exit(0),
             _ => {}
@@ -179,12 +184,19 @@ pub fn toggle_popover(app: &AppHandle, tray_pos: PhysicalPosition<f64>, tray_siz
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
     if visible {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = crate::state::refresh_tree(&app).await;
-            crate::state::refresh_all_git_meta(&app).await;
-        });
+        catch_up_refresh(app);
     }
+}
+
+/// Re-run the git refresh that the background loop skips while every window is
+/// hidden. Every path that brings a window back on screen must call this —
+/// tray click (macOS), tray menu (Linux/Windows), and `show_main_window`.
+pub(crate) fn catch_up_refresh(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = crate::state::refresh_tree(&app).await;
+        crate::state::refresh_all_git_meta(&app).await;
+    });
 }
 
 /// Center the popover window under the tray icon, hanging below the menu/task
