@@ -9,8 +9,8 @@ import "./styles/popover.css";
 
 applyPlatformClass();
 
-const GUTTER_X = 0; // window hugs the card (no shadow gutter)
-const GUTTER_Y = 0;
+const POP_W = 348; // design width
+const POP_MAX_H = 472; // design cap — the list scrolls inside past this
 
 function PopoverRoot() {
   const ref = useRef<HTMLDivElement>(null);
@@ -18,26 +18,25 @@ function PopoverRoot() {
 
   useEffect(() => initSync(), []);
 
-  // Fit the window to the content, capped at the available screen height
-  // (menu bar → dock; screen.availHeight already excludes both). When the list
-  // is taller than that, the window stops growing and .wm-groups scrolls inside.
+  // Fit the window to the content, capped at the design's 472px (and never past
+  // the available screen height). Past the cap the .list scrolls inside.
   useEffect(() => {
     if (!hasBackend() || !ref.current) return;
     const el = ref.current;
     let raf = 0;
     const measure = async () => {
-      const pop = el.querySelector(".wm-pop") as HTMLElement | null;
-      const groups = el.querySelector(".wm-groups") as HTMLElement | null;
-      // full content height even when the list is clamped + scrolling
-      const base = pop ? pop.clientHeight : el.offsetHeight;
-      const overflow = groups ? Math.max(0, groups.scrollHeight - groups.clientHeight) : 0;
-      const natural = Math.ceil(base + overflow) + GUTTER_Y;
-      // window top sits ~6px below the menu bar; leave a small margin off the dock
-      const maxH = Math.max(260, window.screen.availHeight - 14);
+      const ph = el.querySelector(".ph") as HTMLElement | null;
+      const list = el.querySelector(".list") as HTMLElement | null;
+      const pf = el.querySelector(".pf") as HTMLElement | null;
+      // header + footer are fixed; the list contributes its full content height
+      const natural = ph && pf && list
+        ? Math.ceil(ph.offsetHeight + pf.offsetHeight + list.scrollHeight + 2 /* card borders */)
+        : el.offsetHeight;
+      const maxH = Math.min(POP_MAX_H, Math.max(260, window.screen.availHeight - 14));
       const h = Math.min(natural, maxH);
       const { getCurrentWindow, LogicalSize } = await import("@tauri-apps/api/window");
       getCurrentWindow()
-        .setSize(new LogicalSize(284 + GUTTER_X, h))
+        .setSize(new LogicalSize(POP_W, h))
         .catch(() => {});
     };
     // measure after layout settles, and again once more to converge if clamped
