@@ -677,4 +677,109 @@ mod tests {
         assert_eq!(msg, "fix: tab\tin message", "only the first tab splits");
         assert_eq!(parse_last_commit(""), (0, String::new()));
     }
+
+    // ── integration: the real git CLI against throwaway repos ──
+    //
+    // These exercise the actual plumbing (worktree add/list/remove, status,
+    // meta) on whatever git the machine has — the same binary users run.
+    // Paths are compared by count/branch, never by string equality, because
+    // git canonicalizes (macOS /var → /private/var) and Windows mixes
+    // separators.
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("canopy-git-{tag}-{}", std::process::id()))
+    }
+
+    async fn init_repo(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let d = dir.to_str().unwrap();
+        run_git(d, &["init"]).await.unwrap();
+        // CI runners have no global identity; commits fail without one
+        run_git(d, &["config", "user.email", "canopy-test@localhost"]).await.unwrap();
+        run_git(d, &["config", "user.name", "canopy-test"]).await.unwrap();
+        run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run_git(d, &["add", "."]).await.unwrap();
+        run_git(d, &["commit", "-m", "init"]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worktree_lifecycle_against_a_real_repo() {
+        let repo = unique_dir("life");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+
+        let wts = list_worktrees(rp).await.unwrap();
+        assert_eq!(wts.len(), 1, "fresh repo = one main checkout");
+        assert!(wts[0].is_main);
+
+        // meta: clean → dirty → clean
+        let m = git_meta(rp).await.unwrap();
+        assert!(!m.dirty);
+        assert_eq!(m.last_commit_msg, "init");
+        assert!(m.last_commit_ts > 0);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        assert!(git_meta(rp).await.unwrap().dirty, "edit must show as dirty");
+        run_git(rp, &["checkout", "--", "."]).await.unwrap();
+
+        // linked worktree on a new branch
+        let wt = unique_dir("life-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        let wtp_owned = wt.to_str().unwrap().to_string();
+        let wtp = wtp_owned.as_str();
+        create_worktree(rp, wtp, "feat-x", Some("HEAD"), true, |_| {}).await.unwrap();
+        assert!(wt.join("a.txt").exists(), "checkout materialized");
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 2);
+        let head = run_git(wtp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), "feat-x");
+
+        // dirty report: clean, then counts an untracked file
+        let r = dirty_report(wtp).await.unwrap();
+        assert!(!r.dirty && r.total == 0, "{r:?}");
+        std::fs::write(wt.join("b.txt"), "x").unwrap();
+        let r = dirty_report(wtp).await.unwrap();
+        assert!(r.dirty && r.total == 1, "{r:?}");
+
+        // remove (--force covers the untracked file) + branch deletion
+        remove_worktree(rp, wtp, Some("feat-x"), true).await.unwrap();
+        assert!(!wt.exists(), "worktree directory removed");
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 1);
+        let branches = run_git(rp, &["branch", "--list", "feat-x"]).await.unwrap();
+        assert!(branches.trim().is_empty(), "branch deleted: {branches:?}");
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test]
+    async fn switch_branch_in_place_and_back() {
+        let repo = unique_dir("switch");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+        let original = list_worktrees(rp).await.unwrap()[0].branch.clone();
+
+        switch_branch(rp, "feat-y", true, None).await.unwrap();
+        let head = run_git(rp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), "feat-y");
+
+        // plain checkout back (create=false path)
+        switch_branch(rp, &original, false, None).await.unwrap();
+        let head = run_git(rp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), original);
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// Data-loss guard: this report arms `worktree remove --force`, and a
+    /// failed probe must be an ERROR the UI fails closed on — never `clean`.
+    #[tokio::test]
+    async fn dirty_report_fails_closed_on_a_broken_repo() {
+        let missing = unique_dir("never-created");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(
+            dirty_report(missing.to_str().unwrap()).await.is_err(),
+            "missing path must error, not report clean"
+        );
+    }
 }

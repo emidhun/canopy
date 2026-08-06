@@ -464,7 +464,28 @@ pub fn sweep_idle(table: &TermTable) {
 
 #[cfg(test)]
 mod tests {
-    use super::kind_of;
+    use super::{b64, kind_of};
+
+    /// TerminalPane detects missed chunks (emits skipped while hidden) by
+    /// computing each chunk's decoded length WITHOUT decoding it:
+    /// `len/4*3 - padding`. That formula is only correct while this encoder
+    /// emits standard, unwrapped base64 — pin the contract on the Rust side
+    /// so a future encoder change can't silently break the frontend gap math.
+    #[test]
+    fn b64_length_formula_matches_frontend_gap_math() {
+        for n in 0..=9usize {
+            let s = b64(&vec![0xAB; n]);
+            assert!(!s.contains('\n') && !s.contains('\r'), "must be unwrapped: {s:?}");
+            let pad = if s.ends_with("==") {
+                2
+            } else if s.ends_with('=') {
+                1
+            } else {
+                0
+            };
+            assert_eq!(s.len() / 4 * 3 - pad, n, "n={n} s={s}");
+        }
+    }
 
     #[test]
     fn kind_of_reads_multi_session_ids() {

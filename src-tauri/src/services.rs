@@ -43,18 +43,33 @@ fn chrono_time() -> String {
 /// Local UTC offset with a 60s cache — the exact value only shifts on a DST
 /// boundary, and computing it per log line meant a localtime_r call for every
 /// line of a webpack burst. Timestamp and offset are packed into ONE atomic
-/// (ts << 20 | offset + 50400; offsets span ±14h < 2^17) so a racing reader
-/// can never pair a fresh timestamp with a stale offset.
+/// (see `pack_offset`) so a racing reader can never pair a fresh timestamp
+/// with a stale offset.
 fn cached_utc_offset(now_secs: u64) -> i64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static PACKED: AtomicU64 = AtomicU64::new(0);
     let p = PACKED.load(Ordering::Relaxed);
-    if p != 0 && now_secs.saturating_sub(p >> 20) <= 60 {
-        return ((p & 0xF_FFFF) as i64) - 50400;
+    if p != 0 {
+        let (ts, off) = unpack_offset(p);
+        if now_secs.saturating_sub(ts) <= 60 {
+            return off;
+        }
     }
-    let fresh = crate::proc::local_utc_offset_secs().clamp(-50400, 50400);
-    PACKED.store((now_secs << 20) | ((fresh + 50400) as u64), Ordering::Relaxed);
+    let fresh = crate::proc::local_utc_offset_secs().clamp(-OFFSET_BIAS, OFFSET_BIAS);
+    PACKED.store(pack_offset(now_secs, fresh), Ordering::Relaxed);
     fresh
+}
+
+/// UTC offsets span ±14h (= ±50400s) < 2^17, so `offset + BIAS` fits the low
+/// 20 bits and the fetch timestamp takes the rest: `ts << 20 | offset + BIAS`.
+const OFFSET_BIAS: i64 = 50_400;
+
+fn pack_offset(ts_secs: u64, offset: i64) -> u64 {
+    (ts_secs << 20) | ((offset + OFFSET_BIAS) as u64)
+}
+
+fn unpack_offset(p: u64) -> (u64, i64) {
+    (p >> 20, ((p & 0xF_FFFF) as i64) - OFFSET_BIAS)
 }
 
 pub struct ProcEntry {
@@ -797,5 +812,26 @@ mod tests {
         assert_eq!(classify_line("webpack compiled successfully", false), "ok");
         assert_eq!(classify_line("Listening on :3000", true), "ok");
         assert_eq!(classify_line("plain build output", true), "info", "stderr alone isn't an error");
+    }
+
+    #[test]
+    fn contains_ci_edge_cases() {
+        assert!(super::contains_ci("XxErRoRxX", "error"), "mid-word, mixed case");
+        assert!(!super::contains_ci("err", "error"), "needle longer than hay");
+        assert!(!super::contains_ci("", "e"), "empty hay");
+        assert!(!super::contains_ci("anything", ""), "empty needle matches nothing (never classifies)");
+    }
+
+    /// The packed-atomic cache must round-trip both extremes of the legal
+    /// UTC-offset range without the timestamp and offset bleeding into each
+    /// other's bits.
+    #[test]
+    fn offset_packing_round_trips() {
+        use super::{pack_offset, unpack_offset, OFFSET_BIAS};
+        for &off in &[-OFFSET_BIAS, -3600, 0, 19800 /* +05:30 */, OFFSET_BIAS] {
+            for &ts in &[0u64, 1_722_500_000, u64::MAX >> 21] {
+                assert_eq!(unpack_offset(pack_offset(ts, off)), (ts, off), "ts={ts} off={off}");
+            }
+        }
     }
 }

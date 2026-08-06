@@ -683,6 +683,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wt_slug_is_db_safe() {
+        assert_eq!(wt_slug("/Users/me/wt/Feat-X.2"), "feat_x_2");
+        assert_eq!(wt_slug("/w/plain"), "plain");
+    }
+
+    #[test]
     fn interpolates_braced_vars() {
         let mut v = HashMap::new();
         v.insert("WT_DB_NAME".to_string(), "tooljet_feature_x".to_string());

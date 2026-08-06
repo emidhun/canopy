@@ -289,10 +289,59 @@ pub async fn restore_database(wt_path: &str, file_path: &str, mut progress: impl
 
 #[cfg(test)]
 mod tests {
-    use super::q;
+    use super::*;
+
     #[test]
     fn quotes_args_safely() {
         assert_eq!(q("tooljet_main"), "'tooljet_main'");
         assert_eq!(q("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn tail_keeps_last_lines_in_order() {
+        assert_eq!(tail(b"a\nb\nc\nd\ne\nf"), "c\nd\ne\nf");
+        assert_eq!(tail(b"only"), "only");
+        assert_eq!(tail(b""), "");
+    }
+
+    fn test_conn() -> PgConn {
+        PgConn {
+            host: "h".into(),
+            port: "1".into(),
+            user: "u".into(),
+            pass: None,
+            db: "d".into(),
+        }
+    }
+
+    /// THE invariant clone_database depends on: both children's exit statuses
+    /// are checked, and the error names the failing stage. A shell pipeline
+    /// reports only the last command's status — this is the regression that
+    /// motivated the Rust-held pipe, so it gets a live process test.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_piped_checks_both_exit_statuses() {
+        let c = test_conn();
+        let wt = std::env::temp_dir();
+        let wt = wt.to_str().unwrap();
+
+        // happy path: bytes flow producer → consumer, both exit 0
+        run_piped(wt, &c, "printf %s data", "cat >/dev/null", "src", "dst")
+            .await
+            .expect("clean pipe");
+
+        // producer fails while the consumer exits 0 — exactly the case a
+        // shell pipeline would report as success
+        let e = run_piped(wt, &c, "printf x; echo boom >&2; exit 7", "cat >/dev/null", "srcdb", "dst")
+            .await
+            .unwrap_err();
+        assert!(e.contains("dump of srcdb failed"), "names the dump stage: {e}");
+        assert!(e.contains("boom"), "carries producer stderr: {e}");
+
+        // consumer fails after a clean producer
+        let e = run_piped(wt, &c, "printf %s data", "cat >/dev/null; exit 3", "src", "dstdb")
+            .await
+            .unwrap_err();
+        assert!(e.contains("restore into dstdb failed"), "names the restore stage: {e}");
     }
 }
