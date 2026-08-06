@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod disk;
 mod error;
 mod git;
 mod proc;
@@ -94,6 +95,7 @@ pub fn run() {
             ));
             app.manage(ProcTable::default());
             app.manage(TermTable::default());
+            app.manage(disk::DiskCache::default());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
@@ -312,6 +314,8 @@ pub fn run() {
             commands::set_service_port,
             commands::run_migration,
             commands::run_custom_command,
+            commands::get_disk_usage,
+            commands::scan_disk_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

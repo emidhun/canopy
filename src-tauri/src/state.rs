@@ -110,6 +110,9 @@ pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
     };
     let _ = crate::settings::save_runtime(app, &runtime);
     state.statuses.write().retain(|k, _| !k.starts_with(&prefix));
+    // a measurement for a path that no longer exists would otherwise sit in the
+    // cache forever, and be served to the overview if the path is ever reused
+    crate::disk::forget(app, wt_key);
     if let Some(table) = app.try_state::<crate::services::ProcTable>() {
         table.logs.lock().retain(|k, _| !k.starts_with(&prefix));
         // close the on-disk log handles too, or a removed worktree keeps file

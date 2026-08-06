@@ -772,6 +772,10 @@ pub async fn create_worktree(
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
 
+    // installing dependencies is the single biggest change a worktree's
+    // footprint ever sees — measure it now rather than serving a stale figure
+    crate::disk::request(&app, vec![wt_path.clone()], true);
+
     match setup_result {
         Ok(()) => {
             emit_op(&app, &wt_path, "create", "done", "worktree ready");
@@ -809,6 +813,7 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     .await
     {
         Ok(()) => {
+            crate::disk::request(&app, vec![wt_key.clone()], true);
             emit_op(&app, &wt_key, "create", "done", "setup complete");
             Ok(())
         }
@@ -1157,6 +1162,34 @@ pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<Provisio
     let path = repo_path(&app, &repo_id)?;
     let files: Vec<crate::setup::ProvisionFile> = provision.into_iter().map(Into::into).collect();
     crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
+}
+
+// ── disk usage ──
+
+/// Every measurement Canopy currently holds, keyed by `wt_key`. Returns
+/// instantly from cache — a window that opens the overview gets whatever
+/// earlier scans found rather than waiting on a fresh walk.
+#[tauri::command]
+pub fn get_disk_usage(app: AppHandle) -> std::collections::HashMap<String, crate::disk::DiskUsage> {
+    crate::disk::snapshot(&app)
+}
+
+/// Queue worktrees for measurement and return immediately; results arrive as
+/// `worktree:disk` events. Unknown keys are dropped rather than walked — this
+/// is the one command that takes a caller-supplied path list, so it applies the
+/// same containment rule as every other `wt_key` entry point.
+#[tauri::command]
+pub fn scan_disk_usage(app: AppHandle, wt_keys: Vec<String>, force: bool) -> Result<(), CanopyError> {
+    let known: Vec<String> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        wt_keys
+            .into_iter()
+            .filter(|k| tree.iter().flat_map(|r| r.worktrees.iter()).any(|w| &w.wt_key == k))
+            .collect()
+    };
+    crate::disk::request(&app, known, force);
+    Ok(())
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.
