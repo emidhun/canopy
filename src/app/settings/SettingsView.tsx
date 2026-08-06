@@ -366,7 +366,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       case "setup": return <SetupPage {...pageProps} />;
       case "repo-general": return <RepoGeneralPage {...pageProps} />;
       case "terminal": return <TerminalPage {...pageProps} />;
-      case "notifications": return <NotificationsPage />;
+      case "notifications": return <NotificationsPage {...pageProps} />;
       case "shortcuts": return <ShortcutsPage />;
       case "advanced": return <AdvancedPage {...pageProps} />;
       case "security": return <SecurityPage {...pageProps} />;

@@ -48,6 +48,9 @@ tauri-plugin-single-instance = "2"
 # the coding-agent CLI inside one). portable-pty is cross-platform (helps Linux).
 portable-pty = "0.9"
 base64 = "0.23"
+# OS notifications for the states that need a human while Canopy is in the
+# tray — a crashed service, a blocked agent, a finished setup.
+tauri-plugin-notification = "2"
 
 # POSIX process control (process groups, killpg, localtime_r). On Windows the
 # equivalent lives in the `windows` crate below (Job Objects). See src/proc.rs.

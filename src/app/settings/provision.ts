@@ -5,7 +5,7 @@
 // These live apart from the page components so they can be tested directly and
 // shared: SettingsView's save path and the Files/Setup pages both reach for
 // them. Nothing here touches React, Tauri or the DOM.
-import type { AgentContextCfg, AgentCfg, TermCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask, WorktreeDefaults } from "../../ipc";
+import type { AgentContextCfg, AgentCfg, NotifyCfg, TermCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask, WorktreeDefaults } from "../../ipc";
 
 /* ── client-side provision model (stable ids for React keys) ──
    The counter resets on every page load, and service ids generated here are
@@ -55,6 +55,12 @@ export const DEFAULT_AGENT_CONTEXT: AgentContextCfg = { worktreeContext: true, r
 export const DEFAULT_TERM: TermCfg = {
   program: "", args: "", fontFamily: "", fontSize: 0, scrollback: 0,
   cursor: "block", cursorBlink: true, bell: false, cwdWorktree: true, inheritEnv: true,
+};
+
+/* Defaults follow one rule: notify when a human is BLOCKING something, never
+   for progress you asked for and can watch. */
+export const DEFAULT_NOTIFY: NotifyCfg = {
+  serviceCrash: true, agentWaiting: true, setupDone: false, branchMoved: false, sound: false, badge: "count",
 };
 
 export const DEFAULT_SECURITY: SecurityCfg = { maskSecrets: true, maskInExports: false, sshKey: "", credentialHelper: "" };
