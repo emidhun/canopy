@@ -3,7 +3,7 @@
 import { type ProvisionEntry, type Settings, type SetupTask } from "../../ipc";
 
 export const MOCK: Settings = {
-  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, pinnedWorktrees: [],
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [

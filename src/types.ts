@@ -48,6 +48,9 @@ export interface WorktreeNode {
   setup: SetupState | null;
   /** does the owning repo declare anything to provision or run? */
   setupConfigured: boolean;
+  /** pinned to the top of the sidebar (persisted in Settings, denormalized
+      here so every window gets it from the tree it already subscribes to) */
+  pinned: boolean;
   services: ServiceNode[];
 }
 

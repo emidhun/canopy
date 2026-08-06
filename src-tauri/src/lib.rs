@@ -335,6 +335,7 @@ pub fn run() {
             commands::run_custom_command,
             commands::get_disk_usage,
             commands::scan_disk_usage,
+            commands::set_worktree_pinned,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -43,6 +43,7 @@ export function mockTree(): RepoNode[] {
           dbName: null,
           setup: RAN,
           setupConfigured: true,
+          pinned: false,
           git: { ahead: 0, behind: 0, dirty: false, lastCommitTs: nowS() - 2 * 60 * min, lastCommitMsg: "checkout: fix tax rounding" },
           services: [
             svc("~/code/acme-web", "frontend", "Frontend", "web", 3000, "running"),
@@ -57,6 +58,7 @@ export function mockTree(): RepoNode[] {
           dbName: "db_2",
           setup: RAN,
           setupConfigured: true,
+          pinned: true,
           git: { ahead: 7, behind: 2, dirty: true, lastCommitTs: nowS() - 11 * min, lastCommitMsg: "wip: express checkout drawer" },
           services: [
             svc("~/code/.wt/acme-web-checkout", "frontend", "Frontend", "web", 3010, "stopped"),
@@ -78,6 +80,7 @@ export function mockTree(): RepoNode[] {
           dbName: null,
           setup: RAN,
           setupConfigured: true,
+          pinned: false,
           git: { ahead: 0, behind: 0, dirty: false, lastCommitTs: nowS() - 24 * 60 * min, lastCommitMsg: "bump stripe sdk to 14.2" },
           services: [
             svc("~/code/payments-api", "api", "API", "server", 8080, "running"),
@@ -92,6 +95,7 @@ export function mockTree(): RepoNode[] {
           dbName: "db_4",
           setup: null,
           setupConfigured: true,
+          pinned: false,
           git: { ahead: 3, behind: 0, dirty: true, lastCommitTs: nowS() - 4 * min, lastCommitMsg: "refund: idempotency key guard" },
           services: [svc("~/code/.wt/payments-refund", "api", "API", "server", 8090, "running")],
         },
@@ -110,6 +114,7 @@ export function mockTree(): RepoNode[] {
           dbName: null,
           setup: null,
           setupConfigured: false,
+          pinned: false,
           git: { ahead: 1, behind: 0, dirty: false, lastCommitTs: nowS() - 5 * 60 * min, lastCommitMsg: "Button: focus ring tokens" },
           services: [svc("~/dev/design-system", "storybook", "Storybook", "web", 6006, "running")],
         },
