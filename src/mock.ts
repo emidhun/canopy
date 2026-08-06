@@ -9,7 +9,7 @@ const svc = (
   kind: SvcKind,
   port: number | null,
   status: ServiceNode["status"],
-): ServiceNode => ({ svcKey: `${wtKey}::${serviceId}`, serviceId, name, kind, port, status });
+): ServiceNode => ({ svcKey: `${wtKey}::${serviceId}`, serviceId, name, kind, port, derivedPort: port, status });
 
 const min = 60;
 const nowS = () => Date.now() / 1000;
