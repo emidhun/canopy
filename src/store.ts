@@ -15,6 +15,10 @@ export interface OpLog {
   lines: LogLine[];
   /** last "[k/n]: cmd" step marker seen, for the inline loader */
   step: string | null;
+  /** step index → the short quantity it produced ("1,842 packages"). Index 0
+      is the provisioning phase. A step with no entry produced nothing the
+      backend recognised, and renders with no metadata rather than a guess. */
+  results: Record<number, string>;
   running: boolean;
 }
 
@@ -186,15 +190,31 @@ const STEP_MARK = /\[\d+\/\d+\]:/;
 
 /** Fold a worktree:op event into the per-worktree op buffer. A progress event
     after an idle state starts a fresh buffer (new run). */
-function appendOpLine(wtKey: string, state: "progress" | "done" | "error", detail: string) {
+function appendOpLine(
+  wtKey: string,
+  state: "progress" | "done" | "error",
+  detail: string,
+  stepIndex?: number,
+  result?: string,
+) {
   useStore.setState((st) => {
     const prev = st.ops[wtKey];
     const fresh = state === "progress" && !prev?.running;
+    // A result event carries no output line — recording it as one would put a
+    // blank row in the raw tail the failure view prints.
+    const isResult = result !== undefined && stepIndex !== undefined;
     const lv = state === "error" ? "err" : state === "done" ? "ok" : "info";
-    const lines = [...(fresh ? [] : prev?.lines ?? []), { t: logTime(), lv, text: detail } as LogLine];
+    const lines = isResult
+      ? (fresh ? [] : (prev?.lines ?? []))
+      : [...(fresh ? [] : (prev?.lines ?? [])), { t: logTime(), lv, text: detail } as LogLine];
     if (lines.length > OP_LOG_CAP) lines.splice(0, lines.length - OP_LOG_CAP);
-    const step = STEP_MARK.test(detail) ? detail : fresh ? null : prev?.step ?? null;
-    return { ops: { ...st.ops, [wtKey]: { lines, step, running: state === "progress" } } };
+    const step = STEP_MARK.test(detail) ? detail : fresh ? null : (prev?.step ?? null);
+    const results = isResult
+      ? { ...(fresh ? {} : (prev?.results ?? {})), [stepIndex]: result }
+      : fresh
+        ? {}
+        : (prev?.results ?? {});
+    return { ops: { ...st.ops, [wtKey]: { lines, step, results, running: state === "progress" } } };
   });
 }
 
@@ -583,7 +603,7 @@ export function initSync(): () => void {
 
   track(on.serviceLog((e) => appendLogs(e.svcKey, e.lines)));
 
-  track(on.worktreeOp((e) => appendOpLine(e.wtKey, e.state, e.detail)));
+  track(on.worktreeOp((e) => appendOpLine(e.wtKey, e.state, e.detail, e.step, e.result)));
 
   // session lifecycle: every lane tab is its own PTY, so its exit is the
   // authoritative "this tab stopped" signal. The tab is kept (marked not
