@@ -15,6 +15,8 @@ import {
   hlLine,
   migrateAgents,
   strToEnv,
+  looksSecret,
+  maskValue,
   parseSetup,
   taskJson,
   DEFAULT_POLICY,
@@ -348,5 +350,45 @@ describe("setup tasks", () => {
       .toEqual({ onFailure: "continue" });
     expect(buildConfig([], [], [], [], { continueOnFailure: false, timeoutSecs: 600 }).setupPolicy)
       .toEqual({ onFailure: "stop", timeoutSecs: 600 });
+  });
+});
+
+// #82 — masking decides what LEAVES the app. It never changes what is saved,
+// because a masked config written back to disk would provision the literal
+// bullets into every worktree.
+describe("secret masking", () => {
+  it("recognises the shapes a credential key takes", () => {
+    for (const k of ["GITHUB_TOKEN", "jwtSecret", "DB_PASSWORD", "db_passwd", "API_KEY", "apiKey", "PRIVATE_KEY", "CREDENTIAL_JSON", "SIGNING_KEY"]) {
+      expect(looksSecret(k)).toBe(true);
+    }
+  });
+
+  it("leaves ordinary keys alone", () => {
+    for (const k of ["PORT", "NODE_ENV", "PG_DB", "LOG_LEVEL", "HOST"]) {
+      expect(looksSecret(k)).toBe(false);
+    }
+  });
+
+  it("masks a secret value", () => {
+    expect(maskValue("DB_PASSWORD", "hunter2")).toBe("••••••••");
+  });
+
+  // the point of the preview is checking a template, so hiding the template
+  // would make it useless — and a reference is the mechanism, not the secret
+  it("never masks a template reference", () => {
+    expect(maskValue("DB_PASSWORD", "${WT_DB_PASS}")).toBe("${WT_DB_PASS}");
+  });
+
+  it("leaves an empty value empty rather than inventing bullets", () => {
+    expect(maskValue("API_KEY", "")).toBe("");
+    expect(maskValue("API_KEY", "   ")).toBe("   ");
+  });
+
+  it("masks in buildConfig only when asked", () => {
+    const withSecret = [card({ keys: [{ id: "k", k: "API_KEY", v: "abc123" }] })];
+    const plain = buildConfig(withSecret, [], [], []) as { provision: { keys: Record<string, string> }[] };
+    const masked = buildConfig(withSecret, [], [], [], undefined, true) as { provision: { keys: Record<string, string> }[] };
+    expect(plain.provision[0].keys.API_KEY).toBe("abc123");
+    expect(masked.provision[0].keys.API_KEY).toBe("••••••••");
   });
 });

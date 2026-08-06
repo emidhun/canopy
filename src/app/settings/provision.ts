@@ -5,7 +5,7 @@
 // These live apart from the page components so they can be tested directly and
 // shared: SettingsView's save path and the Files/Setup pages both reach for
 // them. Nothing here touches React, Tauri or the DOM.
-import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, ServiceCfg, SetupPolicy, SetupTask } from "../../ipc";
+import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask } from "../../ipc";
 
 /* ── client-side provision model (stable ids for React keys) ──
    The counter resets on every page load, and service ids generated here are
@@ -43,6 +43,24 @@ export function fromCards(cards: FileCardT[]): ProvisionEntry[] {
 
 export const DEFAULT_POLICY: SetupPolicy = { continueOnFailure: false, timeoutSecs: 0 };
 
+export const DEFAULT_SECURITY: SecurityCfg = { maskSecrets: true, maskInExports: false, sshKey: "", credentialHelper: "" };
+
+/* Key fragments that mean "this value is a credential". Matched
+   case-insensitively as substrings, so GITHUB_TOKEN, jwtSecret and DB_PASSWORD
+   all hit. Kept in step with the same list in services.rs. */
+const SECRET_HINTS = ["secret", "token", "password", "passwd", "apikey", "api_key", "private", "credential", "signing"];
+
+export const looksSecret = (key: string) => {
+  const k = key.toLowerCase();
+  return SECRET_HINTS.some((h) => k.includes(h));
+};
+
+/** A provisioned value as it should be SHOWN. Template references like
+    `${WT_DB_NAME}` are never masked — they are the mechanism, not a secret,
+    and hiding them would make the preview useless for checking a template. */
+export const maskValue = (key: string, value: string) =>
+  looksSecret(key) && value.trim() && !value.includes("${") ? "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" : value;
+
 /** Serialize a setup task the way the backend does: a plain task stays a bare
     string, so turning one option on for one task doesn't rewrite every line. */
 export const taskJson = (t: SetupTask): unknown =>
@@ -66,14 +84,14 @@ export function parseSetup(raw: unknown): SetupTask[] {
   );
 }
 
-export function buildConfig(cards: FileCardT[], setup: SetupTask[], teardown: string[], migrate: string[], policy?: SetupPolicy) {
+export function buildConfig(cards: FileCardT[], setup: SetupTask[], teardown: string[], migrate: string[], policy?: SetupPolicy, mask = false) {
   const cfg: Record<string, unknown> = {
     $schema: "canopy://worktree-manager/v1",
     provision: cards.filter((c) => c.path.trim()).map((c) => {
       const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
       if (c.from.trim()) o.from = c.from.trim();
       if (c.format === "text") o.interpolate = c.interpolate;
-      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
+      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, mask ? maskValue(k.k, k.v) : k.v])); }
       return o;
     }),
     setup: setup.filter((t) => t.cmd.trim()).map(taskJson),

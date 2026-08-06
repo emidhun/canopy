@@ -21,6 +21,40 @@ pub struct Settings {
     /// so the list can't grow without bound.
     #[serde(default)]
     pub pinned_worktrees: Vec<String>,
+    #[serde(default)]
+    pub security: SecurityCfg,
+}
+
+/// Secret handling and git credentials.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SecurityCfg {
+    /// render secret-looking values as bullets in the config preview and in
+    /// streamed setup output
+    pub mask_secrets: bool,
+    /// export key NAMES but not their values
+    pub mask_in_exports: bool,
+    /// SSH identity for git network operations; empty = git's own default
+    pub ssh_key: String,
+    /// git credential helper for HTTPS remotes; empty = git's own default
+    pub credential_helper: String,
+}
+
+impl Default for SecurityCfg {
+    fn default() -> Self {
+        Self {
+            // On by default: the cost of masking a value that wasn't a secret
+            // is one extra click to see it, and the cost of the reverse is a
+            // token in a screenshot.
+            mask_secrets: true,
+            // Off by default: an export is normally a file you commit to your
+            // own repo, where the values are the point. Masking silently would
+            // produce a config that provisions the string "••••••••".
+            mask_in_exports: false,
+            ssh_key: String::new(),
+            credential_helper: String::new(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -32,6 +66,7 @@ impl Default for Settings {
             repos: Vec::new(),
             show_switch_branch: true,
             pinned_worktrees: Vec::new(),
+            security: SecurityCfg::default(),
         }
     }
 }
