@@ -72,6 +72,15 @@ export interface ProvisionEntry {
   interpolate: boolean;
   /** ordered [key, value-template] pairs (ignored for `text`) */
   keys: [string, string][];
+  /** seed | upsert | copy. Empty derives from `format`, which is what every
+      config written before modes existed means. */
+  mode: string;
+  /** keep | overwrite — what to do when the target already exists */
+  onConflict: string;
+  /** create | always — whether later setup runs re-apply it */
+  applyOn: string;
+  /** octal permissions, e.g. "0600"; empty leaves the file's mode alone */
+  fileMode: string;
 }
 
 /** The repo's `.worktreemanager.json` as exchanged with Settings. `teardown` /

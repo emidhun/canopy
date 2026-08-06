@@ -1093,6 +1093,18 @@ pub struct ProvisionEntry {
     /// ordered (key, value-template) pairs
     #[serde(default)]
     pub keys: Vec<(String, String)>,
+    /// seed | upsert | copy; empty = derive from `format`
+    #[serde(default)]
+    pub mode: String,
+    /// keep | overwrite
+    #[serde(default)]
+    pub on_conflict: String,
+    /// create | always
+    #[serde(default)]
+    pub apply_on: String,
+    /// octal, e.g. "0600"; empty = leave the file's mode alone
+    #[serde(default)]
+    pub file_mode: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1111,7 +1123,17 @@ pub struct RepoConfig {
 
 impl From<crate::setup::ProvisionFile> for ProvisionEntry {
     fn from(p: crate::setup::ProvisionFile) -> Self {
-        ProvisionEntry { path: p.path, format: p.format, from: p.from, interpolate: p.interpolate, keys: p.keys }
+        ProvisionEntry {
+            path: p.path,
+            format: p.format,
+            from: p.from,
+            interpolate: p.interpolate,
+            keys: p.keys,
+            mode: p.mode,
+            on_conflict: p.on_conflict,
+            apply_on: p.apply_on,
+            file_mode: p.file_mode,
+        }
     }
 }
 
@@ -1123,6 +1145,10 @@ impl From<ProvisionEntry> for crate::setup::ProvisionFile {
             from: e.from,
             interpolate: e.interpolate,
             keys: e.keys,
+            mode: e.mode,
+            on_conflict: e.on_conflict,
+            apply_on: e.apply_on,
+            file_mode: e.file_mode,
         }
     }
 }

@@ -40,6 +40,51 @@ pub struct ProvisionFile {
     pub interpolate: bool,
     /// ordered (key, value-template) pairs upserted into the file (not for text)
     pub keys: Vec<(String, String)>,
+    /// How the file is applied. Empty = derive from `format`, which is what
+    /// every existing config means: keyed formats upsert, `text` copies.
+    /// Explicit values: "seed" | "upsert" | "copy".
+    pub mode: String,
+    /// What to do when the target already exists, for seed/copy.
+    /// "keep" (default) | "overwrite".
+    pub on_conflict: String,
+    /// When it runs: "create" (only on a new worktree) | "always" (default —
+    /// create and every later setup/reset run).
+    pub apply_on: String,
+    /// Octal permissions applied after writing, e.g. "0600". Empty = leave the
+    /// file's own mode alone. Unix only; ignored on Windows.
+    pub file_mode: String,
+}
+
+/// The strategy a provision entry actually uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProvisionMode {
+    /// write only when the target is missing; never touch an existing file
+    Seed,
+    /// merge named keys, preserving every other line
+    Upsert,
+    /// replace the whole file from source (optionally interpolating)
+    Copy,
+}
+
+impl ProvisionFile {
+    /// Resolve the strategy: an explicit `mode` wins, otherwise it is derived
+    /// from the format exactly as it always was — so a config written before
+    /// modes existed behaves identically.
+    pub fn resolved_mode(&self) -> ProvisionMode {
+        match self.mode.trim() {
+            "seed" => ProvisionMode::Seed,
+            "upsert" => ProvisionMode::Upsert,
+            "copy" | "replace" => ProvisionMode::Copy,
+            _ if self.format == "text" => ProvisionMode::Copy,
+            _ => ProvisionMode::Upsert,
+        }
+    }
+
+    /// Does this entry run outside worktree creation? Default yes — that is
+    /// what provisioning did before this was configurable.
+    pub fn applies_on_setup(&self) -> bool {
+        self.apply_on.trim() != "create"
+    }
 }
 
 #[derive(Default, Clone)]
@@ -85,7 +130,18 @@ fn parse_provision(v: &serde_json::Value) -> Vec<ProvisionFile> {
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
-                    Some(ProvisionFile { path, format, from, interpolate, keys })
+                    let str_field = |k: &str| o.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    Some(ProvisionFile {
+                        path,
+                        format,
+                        from,
+                        interpolate,
+                        keys,
+                        mode: str_field("mode"),
+                        on_conflict: str_field("onConflict"),
+                        apply_on: str_field("applyOn"),
+                        file_mode: str_field("fileMode"),
+                    })
                 })
                 .collect()
         })
@@ -128,6 +184,10 @@ pub fn read_config(wt_path: &str, repo_path: &str) -> WtmConfig {
                         from: String::new(),
                         interpolate: false,
                         keys: legacy_env,
+                        mode: String::new(),
+                        on_conflict: String::new(),
+                        apply_on: String::new(),
+                        file_mode: String::new(),
                     },
                 );
             }
@@ -161,10 +221,28 @@ fn provision_to_json(provision: &[ProvisionFile]) -> serde_json::Value {
                 if !p.from.trim().is_empty() {
                     o.insert("from".into(), serde_json::Value::String(p.from.clone()));
                 }
-                if p.format == "text" {
+                // `mode` is written explicitly now; when the user never chose
+                // one it is still written as the derived value, so the file
+                // says what it does instead of relying on the reader deriving
+                // the same thing.
+                let mode = match p.resolved_mode() {
+                    ProvisionMode::Seed => "seed",
+                    ProvisionMode::Upsert => "upsert",
+                    ProvisionMode::Copy => "copy",
+                };
+                o.insert("mode".into(), serde_json::Value::String(mode.into()));
+                if !p.on_conflict.trim().is_empty() {
+                    o.insert("onConflict".into(), serde_json::Value::String(p.on_conflict.trim().into()));
+                }
+                if !p.apply_on.trim().is_empty() {
+                    o.insert("applyOn".into(), serde_json::Value::String(p.apply_on.trim().into()));
+                }
+                if !p.file_mode.trim().is_empty() {
+                    o.insert("fileMode".into(), serde_json::Value::String(p.file_mode.trim().into()));
+                }
+                if p.resolved_mode() == ProvisionMode::Copy {
                     o.insert("interpolate".into(), serde_json::Value::Bool(p.interpolate));
                 } else {
-                    o.insert("mode".into(), serde_json::Value::String("upsert".into()));
                     let mut keys = serde_json::Map::new();
                     for (k, v) in p.keys.iter().filter(|(k, _)| !k.trim().is_empty()) {
                         keys.insert(k.clone(), serde_json::Value::String(v.clone()));
@@ -467,39 +545,94 @@ fn provision_file(wt_path: &str, repo_path: &str, pf: &ProvisionFile, vars: &Has
     }
     let src_rel = if pf.from.trim().is_empty() { pf.path.as_str() } else { pf.from.as_str() };
     let src = Path::new(repo_path).join(src_rel);
+    let exists = target.exists();
+    // "keep" is the default for a reason: overwriting a file the user has
+    // edited by hand is the one provisioning outcome that destroys work.
+    let overwrite = pf.on_conflict.trim() == "overwrite";
 
-    if pf.format == "text" {
-        let content = if target.exists() {
-            std::fs::read_to_string(&target).unwrap_or_default()
-        } else if src.exists() {
-            std::fs::read_to_string(&src).map_err(|e| format!("read {}: {e}", src.display()))?
-        } else {
-            String::new()
-        };
-        let out = if pf.interpolate { interpolate(&content, vars) } else { content };
-        return std::fs::write(&target, out).map_err(|e| format!("write {}: {e}", target.display()));
+    match pf.resolved_mode() {
+        ProvisionMode::Seed => {
+            // Seed is create-only. An existing file is left completely alone
+            // unless the entry explicitly asks to overwrite it.
+            if exists && !overwrite {
+                return Ok(());
+            }
+            if src.exists() {
+                std::fs::copy(&src, &target).map_err(|e| format!("seed {}: {e}", target.display()))?;
+            } else if !exists {
+                std::fs::write(&target, "").map_err(|e| format!("create {}: {e}", target.display()))?;
+            }
+        }
+        ProvisionMode::Copy => {
+            if exists && !overwrite {
+                // Preserve the previous behaviour for `text`: re-interpolate
+                // what is already there rather than re-copying from source, so
+                // a hand-edited file keeps its edits.
+                let content = std::fs::read_to_string(&target).unwrap_or_default();
+                let out = if pf.interpolate { interpolate(&content, vars) } else { content };
+                std::fs::write(&target, out).map_err(|e| format!("write {}: {e}", target.display()))?;
+            } else {
+                let content = if src.exists() {
+                    std::fs::read_to_string(&src).map_err(|e| format!("read {}: {e}", src.display()))?
+                } else {
+                    String::new()
+                };
+                let out = if pf.interpolate { interpolate(&content, vars) } else { content };
+                std::fs::write(&target, out).map_err(|e| format!("write {}: {e}", target.display()))?;
+            }
+        }
+        ProvisionMode::Upsert => {
+            // seed from source if the target doesn't exist yet, then merge keys
+            if !exists && src.exists() {
+                std::fs::copy(&src, &target).map_err(|e| format!("seed {}: {e}", target.display()))?;
+            }
+            let resolved: Vec<(String, String)> = pf
+                .keys
+                .iter()
+                .filter(|(k, _)| !k.trim().is_empty())
+                .map(|(k, tpl)| (k.clone(), interpolate(tpl, vars)))
+                .collect();
+            if !resolved.is_empty() {
+                let existing = std::fs::read_to_string(&target).unwrap_or_default();
+                let body = match pf.format.as_str() {
+                    "json" => upsert_json_str(&existing, &resolved)?,
+                    "yaml" => upsert_yaml_str(&existing, &resolved),
+                    _ => upsert_dotenv_str(&existing, &resolved),
+                };
+                std::fs::write(&target, body).map_err(|e| format!("write {}: {e}", target.display()))?;
+            }
+        }
     }
 
-    // key formats: seed from source if the target doesn't exist yet
-    if !target.exists() && src.exists() {
-        std::fs::copy(&src, &target).map_err(|e| format!("seed {}: {e}", target.display()))?;
-    }
-    let resolved: Vec<(String, String)> = pf
-        .keys
-        .iter()
-        .filter(|(k, _)| !k.trim().is_empty())
-        .map(|(k, tpl)| (k.clone(), interpolate(tpl, vars)))
-        .collect();
-    if resolved.is_empty() {
+    apply_file_mode(&target, &pf.file_mode)
+}
+
+/// Apply an octal permission string to a provisioned file.
+///
+/// This exists for the case that motivates it: a `.env` holding credentials
+/// should be `0600`, not whatever umask produced. A malformed value is an
+/// error rather than being ignored — silently leaving a secrets file
+/// world-readable is exactly the failure this option is meant to prevent.
+fn apply_file_mode(target: &Path, mode: &str) -> Result<(), String> {
+    let mode = mode.trim();
+    if mode.is_empty() {
         return Ok(());
     }
-    let existing = std::fs::read_to_string(&target).unwrap_or_default();
-    let body = match pf.format.as_str() {
-        "json" => upsert_json_str(&existing, &resolved)?,
-        "yaml" => upsert_yaml_str(&existing, &resolved),
-        _ => upsert_dotenv_str(&existing, &resolved),
-    };
-    std::fs::write(&target, body).map_err(|e| format!("write {}: {e}", target.display()))
+    let parsed = u32::from_str_radix(mode.trim_start_matches("0o"), 8)
+        .map_err(|_| format!("file mode '{mode}' is not octal (e.g. 0600)"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(target, std::fs::Permissions::from_mode(parsed))
+            .map_err(|e| format!("chmod {}: {e}", target.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows has no POSIX mode bits; the value is still validated above so
+        // a config is portable, but there is nothing to apply.
+        let _ = (target, parsed);
+    }
+    Ok(())
 }
 
 /// Re-apply every key-based provisioned file's keys with fresh `vars` (e.g. after
@@ -507,7 +640,11 @@ fn provision_file(wt_path: &str, repo_path: &str, pf: &ProvisionFile, vars: &Has
 /// `text` files so their contents aren't re-copied.
 pub fn reapply_provision(wt_path: &str, repo_path: &str, vars: &HashMap<String, String>) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
-    for pf in cfg.provision.iter().filter(|p| p.format != "text") {
+    for pf in cfg
+        .provision
+        .iter()
+        .filter(|p| p.resolved_mode() == ProvisionMode::Upsert && p.applies_on_setup())
+    {
         provision_file(wt_path, repo_path, pf, vars)?;
     }
     Ok(())
@@ -683,6 +820,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn provision_modes_and_conflict_policy() {
+        let dir = std::env::temp_dir().join("canopy_provision_mode_test_xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        let vars = HashMap::new();
+        let target = dir.join("out.env");
+
+        // An entry with no explicit mode behaves exactly as it always did:
+        // keyed formats upsert, `text` copies.
+        let legacy = ProvisionFile { path: "out.env".into(), format: "dotenv".into(), keys: vec![("A".into(), "1".into())], ..Default::default() };
+        assert_eq!(legacy.resolved_mode(), ProvisionMode::Upsert);
+        let legacy_text = ProvisionFile { path: "t.txt".into(), format: "text".into(), ..Default::default() };
+        assert_eq!(legacy_text.resolved_mode(), ProvisionMode::Copy);
+
+        // seed: creates when missing …
+        let seed = ProvisionFile { path: "out.env".into(), format: "dotenv".into(), mode: "seed".into(), ..Default::default() };
+        provision_file(d, d, &seed, &vars).unwrap();
+        assert!(target.exists(), "seed creates the file");
+        std::fs::write(&target, "HAND=edited\n").unwrap();
+        // … and never touches it again, which is the whole point
+        provision_file(d, d, &seed, &vars).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "HAND=edited\n", "seed leaves an existing file alone");
+
+        // upsert merges without disturbing other lines
+        provision_file(d, d, &legacy, &vars).unwrap();
+        let body = std::fs::read_to_string(&target).unwrap();
+        assert!(body.contains("HAND=edited"), "upsert preserves untouched lines");
+        assert!(body.contains("A=1"), "upsert adds the key");
+
+        // copy with the default keep policy re-interpolates in place rather
+        // than clobbering hand edits
+        let copy = ProvisionFile { path: "out.env".into(), format: "text".into(), mode: "copy".into(), ..Default::default() };
+        provision_file(d, d, &copy, &vars).unwrap();
+        assert!(std::fs::read_to_string(&target).unwrap().contains("HAND=edited"), "copy keeps by default");
+
+        // overwrite is opt-in and does replace
+        std::fs::write(dir.join("src.txt"), "FROM=source\n").unwrap();
+        let clobber = ProvisionFile {
+            path: "out.env".into(),
+            format: "text".into(),
+            from: "src.txt".into(),
+            mode: "copy".into(),
+            on_conflict: "overwrite".into(),
+            ..Default::default()
+        };
+        provision_file(d, d, &clobber, &vars).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "FROM=source\n", "overwrite replaces");
+
+        // applyOn: "create" entries are skipped by later setup runs
+        assert!(legacy.applies_on_setup(), "default applies on every run");
+        let once = ProvisionFile { apply_on: "create".into(), ..legacy.clone() };
+        assert!(!once.applies_on_setup());
+
+        // a malformed file mode is an error, not a silent no-op — the whole
+        // point of the option is not leaving a secrets file world-readable
+        let bad = ProvisionFile { path: "out.env".into(), format: "dotenv".into(), file_mode: "rw-".into(), ..Default::default() };
+        assert!(provision_file(d, d, &bad, &vars).unwrap_err().contains("octal"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn wt_slug_is_db_safe() {
         assert_eq!(wt_slug("/Users/me/wt/Feat-X.2"), "feat_x_2");
         assert_eq!(wt_slug("/w/plain"), "plain");
@@ -767,6 +967,7 @@ mod tests {
             from: String::new(),
             interpolate: false,
             keys: vec![("A".into(), "1".into())],
+            ..Default::default()
         }];
         write_repo_config(dir.to_str().unwrap(), &prov, &["echo hi".into()]).unwrap();
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
@@ -815,6 +1016,7 @@ mod tests {
             from: from.into(),
             interpolate: false,
             keys: vec![("K".into(), "v".into())],
+            ..Default::default()
         };
         let d = dir.to_str().unwrap();
         assert!(provision_file(d, d, &mk("../escape.env", ""), &vars).is_err(), "rejects ..");

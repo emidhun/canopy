@@ -901,7 +901,14 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
         t: "Writing .worktreemanager.json",
         run: async () => {
           if (!ctx.repo) throw new Error("repo not resolved");
-          const provision: ProvisionEntry[] = envPairs.length ? [{ path: ".env", format: "dotenv", from: "", interpolate: false, keys: envPairs }] : [];
+          const provision: ProvisionEntry[] = envPairs.length
+            ? [{
+                path: ".env", format: "dotenv", from: "", interpolate: false, keys: envPairs,
+                // Onboarding writes the defaults explicitly rather than leaving
+                // them blank, so the generated config says what it does.
+                mode: "upsert", onConflict: "", applyOn: "", fileMode: "",
+              }]
+            : [];
           await ipc.saveRepoConfig(ctx.repo.id, provision, setupCmds);
           return `${envPairs.length} env ${envPairs.length === 1 ? "key" : "keys"} · ${setupCmds.length} setup`;
         },

@@ -102,19 +102,30 @@ const VARS: { t: string; d: string }[] = [
 let _uid = 0;
 const uid = (p: string) => `${p}-${++_uid}`;
 type KeyRow = { id: string; k: string; v: string };
-type FileCardT = { id: string; path: string; format: ProvisionFormat; from: string; interpolate: boolean; keys: KeyRow[] };
+type FileCardT = {
+  id: string; path: string; format: ProvisionFormat; from: string; interpolate: boolean; keys: KeyRow[];
+  /** "" derives from the format, exactly as the backend does */
+  mode: string; onConflict: string; applyOn: string; fileMode: string;
+};
+
+/** The strategy an entry actually uses — mirrors ProvisionFile::resolved_mode
+    so the radios show what will happen, not what was typed. */
+const resolvedMode = (c: { mode: string; format: ProvisionFormat }): "seed" | "upsert" | "copy" =>
+  c.mode === "seed" || c.mode === "upsert" || c.mode === "copy" ? c.mode : c.format === "text" ? "copy" : "upsert";
 
 function toCards(entries: ProvisionEntry[]): FileCardT[] {
   return entries.map((e) => ({
     id: uid("f"), path: e.path, format: e.format, from: e.from || "", interpolate: !!e.interpolate,
     keys: (e.keys || []).map(([k, v]) => ({ id: uid("k"), k, v })),
+    mode: e.mode || "", onConflict: e.onConflict || "", applyOn: e.applyOn || "", fileMode: e.fileMode || "",
   }));
 }
 function fromCards(cards: FileCardT[]): ProvisionEntry[] {
   return cards.filter((c) => c.path.trim()).map((c) => ({
     path: c.path.trim(), format: c.format, from: c.from.trim(),
-    interpolate: c.format === "text" ? c.interpolate : false,
-    keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
+    interpolate: resolvedMode(c) === "copy" ? c.interpolate : false,
+    keys: resolvedMode(c) === "copy" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
+    mode: c.mode, onConflict: c.onConflict, applyOn: c.applyOn, fileMode: c.fileMode.trim(),
   }));
 }
 function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
@@ -123,8 +134,13 @@ function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], mi
     provision: cards.filter((c) => c.path.trim()).map((c) => {
       const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
       if (c.from.trim()) o.from = c.from.trim();
-      if (c.format === "text") o.interpolate = c.interpolate;
-      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
+      const m = resolvedMode(c);
+      o.mode = m;
+      if (c.onConflict) o.onConflict = c.onConflict;
+      if (c.applyOn) o.applyOn = c.applyOn;
+      if (c.fileMode.trim()) o.fileMode = c.fileMode.trim();
+      if (m === "copy") o.interpolate = c.interpolate;
+      else o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]));
       return o;
     }),
     setup: setup.filter((s) => s.trim()),
@@ -170,8 +186,8 @@ const MOCK: Settings = {
   }],
 };
 const MOCK_CARDS: ProvisionEntry[] = [
-  { path: ".env", format: "dotenv", from: ".env", interpolate: false, keys: [["PG_DB", "${INT_DB_NAME}"], ["PORT", "${WT_SERVICE_PORT}"]] },
-  { path: "ee/.env", format: "dotenv", from: "ee/.env", interpolate: false, keys: [["LICENSE_KEY", ""]] },
+  { path: ".env", format: "dotenv", from: ".env", interpolate: false, keys: [["PG_DB", "${INT_DB_NAME}"], ["PORT", "${WT_SERVICE_PORT}"]], mode: "", onConflict: "", applyOn: "", fileMode: "" },
+  { path: "ee/.env", format: "dotenv", from: "ee/.env", interpolate: false, keys: [["LICENSE_KEY", ""]], mode: "", onConflict: "", applyOn: "", fileMode: "0600" },
 ];
 const MOCK_SETUP = ["pnpm install", "pnpm --filter server db:migrate", "pnpm build:plugins"];
 
@@ -448,7 +464,8 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
 
 /* ══════════════════════════ real: Files ════════════════════════════════ */
 const FMTS: ProvisionFormat[] = ["dotenv", "json", "yaml", "text"];
-function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
+function FilesPage({ cards, setCards, markDirty, flash, repo }: PageProps) {
+  const repoPath = repo?.path ?? "";
   const [selId, setSelId] = useState<string | null>(cards[0]?.id ?? null);
   const sel = cards.find((c) => c.id === selId) || cards[0] || null;
   const keyRef = useRef<number | null>(null);
@@ -482,7 +499,7 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
           ))}
         </div>
         <div className="row" style={{ marginTop: 8 }}>
-          <button className="btn" onClick={() => { const n: FileCardT = { id: uid("f"), path: "", format: "dotenv", from: "", interpolate: false, keys: [] }; setCards(cards.concat([n])); setSelId(n.id); markDirty("files"); }}><Plus size={11} />Add file</button>
+          <button className="btn" onClick={() => { const n: FileCardT = { id: uid("f"), path: "", format: "dotenv", from: "", interpolate: false, keys: [], mode: "", onConflict: "", applyOn: "", fileMode: "" }; setCards(cards.concat([n])); setSelId(n.id); markDirty("files"); }}><Plus size={11} />Add file</button>
           <span className="hint" style={{ marginTop: 0 }}>Any path, any format. Env overrides take precedence.</span>
         </div>
       </div>
@@ -505,27 +522,39 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
             <div className="sbody">
               <div className="row">
                 <input className="inp mono gr" value={sel.from} placeholder="same path in the repo root" onChange={(e) => patch({ from: e.target.value })} />
-                <button className="ico" title="Browse for a source file (coming soon)" onClick={() => flash("Choosing a source file isn't wired yet")}><Finder size={12} /></button>
+                <button className="ico" title="Browse for a source file" onClick={async () => {
+                  if (!hasBackend()) return flash("Browsing needs the desktop app");
+                  try {
+                    const picked = await openDialog({ title: "Choose a source file", multiple: false, directory: false });
+                    if (typeof picked !== "string") return;
+                    // `from` is repo-relative — an absolute path outside the
+                    // repo is rejected by the backend's containment check, so
+                    // say so here rather than saving something that will fail.
+                    const root = repoPath ? repoPath.replace(/\/$/, "") + "/" : "";
+                    if (root && picked.startsWith(root)) patch({ from: picked.slice(root.length) });
+                    else flash("Pick a file inside the repository — sources are repo-relative");
+                  } catch (e) { flash(errText(e)); }
+                }}><Finder size={12} /></button>
               </div>
               <div className="hint">Leave empty to read the same path from the repo root.</div>
             </div>
 
             <div className="stp done"><span className="num">3</span><span className="st"><b>Strategy</b><span>how it is applied</span></span></div>
             <div className="sbody">
-              {/* the backend derives strategy from the format (keyed → upsert,
-                  text → copy + interpolate); an independent mode isn't stored yet */}
               <div className="strat">
-                {([["seed", "Seed if missing", "create only when the file does not exist"], ["upsert", "Upsert keys", "add or update named keys, leave the rest alone"], ["replace", "Copy + interpolate", "overwrite the whole file from source"]] as [string, string, string][]).map(([v, t, d]) => {
-                  const cur = sel.format === "text" ? "replace" : "upsert";
+                {([["seed", "Seed if missing", "create only when the file does not exist"], ["upsert", "Upsert keys", "add or update named keys, leave the rest alone"], ["copy", "Copy + interpolate", "replace the whole file from source"]] as [string, string, string][]).map(([v, t, d]) => {
+                  const cur = resolvedMode(sel);
                   return (
                     <label key={v} className={cur === v ? "on" : ""}>
-                      <input type="radio" name={"mode-" + sel.id} checked={cur === v} disabled readOnly />
+                      <input type="radio" name={"mode-" + sel.id} checked={cur === v} onChange={() => patch({ mode: v })} />
                       <b>{t}</b><span>{d}</span>
                     </label>
                   );
                 })}
               </div>
-              <div className="hint">Derived from the format for now — an independent strategy isn't stored yet.</div>
+              <div className="hint">
+                {sel.mode ? "Chosen explicitly." : `Derived from the format (${sel.format}). Pick one to set it explicitly.`}
+              </div>
             </div>
 
             <div className={"stp" + ((sel.format === "text" ? sel.interpolate : sel.keys.length) ? " done" : "")}>
@@ -567,13 +596,26 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
               )}
             </div>
           </div>
-          <Adv n="not wired yet">
-            <Soon>The on-conflict policy, when-to-apply trigger and file mode aren't stored yet — keys are upserted on create and reset.</Soon>
-            <div className="soonwrap fgrid">
-              <span className="lb">On conflict</span><select className="inp" disabled><option>Keep existing value</option></select>
-              <span className="lb">Apply on</span><select className="inp" disabled><option>Create and reset</option></select>
-              <span className="lb">File mode</span><input className="inp mono" disabled defaultValue="0644" style={{ width: 90 }} />
+          <Adv>
+            <div className="fgrid">
+              <span className="lb">On conflict</span>
+              <select className="inp" value={sel.onConflict || "keep"} onChange={(e) => patch({ onConflict: e.target.value === "keep" ? "" : e.target.value })}>
+                <option value="keep">Keep the existing file</option>
+                <option value="overwrite">Overwrite it</option>
+              </select>
+              <span className="lb">Apply on</span>
+              <select className="inp" value={sel.applyOn || "always"} onChange={(e) => patch({ applyOn: e.target.value === "always" ? "" : e.target.value })}>
+                <option value="always">Create and every setup run</option>
+                <option value="create">Only when the worktree is created</option>
+              </select>
+              <span className="lb">File mode</span>
+              <input className="inp mono" style={{ width: 90 }} value={sel.fileMode} placeholder="unchanged" onChange={(e) => patch({ fileMode: e.target.value })} />
             </div>
+            <p className="hint">
+              Keeping the existing file is the default: overwriting one someone edited by hand is the only provisioning
+              outcome that destroys work. File mode is octal (<span className="mono">0600</span> for a file holding
+              credentials) and applies on Unix; a malformed value is rejected rather than silently ignored.
+            </p>
           </Adv>
         </div>
       )}
