@@ -294,6 +294,34 @@ fn upsert_dotenv_str(existing: &str, pairs: &[(String, String)]) -> String {
     body
 }
 
+/// Read a dotenv file into ordered `(key, value)` pairs, preserving file order
+/// and skipping comments/blanks. Handles the `export KEY=` form and strips one
+/// layer of matching quotes — the same shapes `upsert_dotenv_str` writes and
+/// tolerates. Deliberately not a full shell parser: no `$VAR` expansion, since
+/// the point is to show what is literally on disk.
+pub fn parse_dotenv(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((head, value)) = line.split_once('=') else { continue };
+        let key = head.trim().strip_prefix("export ").map(str::trim).unwrap_or_else(|| head.trim());
+        if key.is_empty() {
+            continue;
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        out.push((key.to_string(), value.to_string()));
+    }
+    out
+}
+
 /// Set a dotted key (`development.database`) to a string value inside a JSON
 /// object, creating intermediate objects as needed.
 fn set_dotted_json(root: &mut serde_json::Value, dotted: &str, value: &str) {
@@ -681,6 +709,19 @@ async fn run_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_dotenv_reads_the_shapes_we_write() {
+        let text = "# comment\n\nPORT=3160\nexport PG_DB=tj_history\nQUOTED=\"a b\"\nSINGLE='c d'\nEMPTY=\nURL=postgres://h/db?x=1\nnot a pair\n";
+        let pairs = parse_dotenv(text);
+        assert_eq!(pairs[0], ("PORT".into(), "3160".into()));
+        assert_eq!(pairs[1], ("PG_DB".into(), "tj_history".into()), "export prefix stripped");
+        assert_eq!(pairs[2], ("QUOTED".into(), "a b".into()), "one layer of double quotes");
+        assert_eq!(pairs[3], ("SINGLE".into(), "c d".into()), "one layer of single quotes");
+        assert_eq!(pairs[4], ("EMPTY".into(), String::new()));
+        assert_eq!(pairs[5], ("URL".into(), "postgres://h/db?x=1".into()), "only the first = splits");
+        assert_eq!(pairs.len(), 6, "comments, blanks and non-pairs skipped");
+    }
 
     #[test]
     fn wt_slug_is_db_safe() {

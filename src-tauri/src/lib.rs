@@ -286,6 +286,7 @@ pub fn run() {
             commands::terminal_close,
             commands::write_worktree_context,
             commands::resolve_agent_command,
+            commands::service_env,
             commands::service_start,
             commands::service_stop,
             commands::service_restart,

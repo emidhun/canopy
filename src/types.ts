@@ -6,7 +6,12 @@ export interface ServiceNode {
   serviceId: string;
   name: string;
   kind: SvcKind;
+  /** the port actually used — an override if set, else the derived one */
   port: number | null;
+  /** base port + index × 10, ignoring any override. Lets the detail modal say
+      whether the current value is derived or overridden, and gives Esc
+      something meaningful to revert to. */
+  derivedPort: number | null;
   status: SvcStatus;
 }
 

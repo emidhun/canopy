@@ -22,7 +22,14 @@ pub struct ServiceNode {
     pub service_id: String,
     pub name: String,
     pub kind: String,
+    /// the port the service actually uses — an override if one is set, else
+    /// the derived one
     pub port: Option<u32>,
+    /// what `base_port + index*10` yields, ignoring any override. Carried
+    /// alongside `port` so the detail modal can say whether the current value
+    /// is derived or overridden, and so Esc can revert to something meaningful
+    /// rather than to whatever the modal happened to open with.
+    pub derived_port: Option<u32>,
     pub status: SvcStatus,
 }
 
@@ -323,6 +330,7 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
                     let key = svc_key(&wt.path, &s.id);
                     ServiceNode {
                         port: s.base_port.map(|p| effective_port(&overrides, &key, p as u32, idx)),
+                        derived_port: s.base_port.map(|p| p as u32 + idx * 10),
                         status: statuses.get(&key).copied().unwrap_or(SvcStatus::Stopped),
                         svc_key: key,
                         service_id: s.id.clone(),
