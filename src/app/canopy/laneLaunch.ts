@@ -23,6 +23,7 @@ const defaultAgent = (legacy: string): AgentCfg => ({
   name: "Claude",
   command: legacy.trim() || "claude",
   promptOnLaunch: true,
+  waitingPatterns: "",
 });
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`;
 

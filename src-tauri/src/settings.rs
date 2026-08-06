@@ -76,6 +76,15 @@ pub struct AgentCfg {
     pub command: String,
     /// Append Canopy's initial handoff as the first CLI prompt argument.
     pub prompt_on_launch: bool,
+    /// Extra literal snippets (one per line) that mean "this agent is blocked
+    /// on a human". Matched case-insensitively against the terminal tail after
+    /// ANSI stripping, on top of the built-in prompt shapes.
+    ///
+    /// Literal, not regex: a pattern that failed to compile would silently
+    /// disable waiting-detection for the profile, which is a worse failure
+    /// than a snippet that simply never matches.
+    #[serde(default)]
+    pub waiting_patterns: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

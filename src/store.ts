@@ -38,6 +38,10 @@ export interface LaneSession {
   command?: string;
   /** false once the PTY exits — the tab stays so its output can be read/restarted */
   running: boolean;
+  /** what a *running* agent session is doing, from the backend's PTY
+      detector. Absent until the first `terminal:state` arrives, and always
+      absent for shells — which is why `agentState()` defaults it to "busy". */
+  activity?: "busy" | "waiting";
   /** bumped on restart so the pane remounts and creates a fresh PTY */
   gen: number;
 }
@@ -606,6 +610,20 @@ export function initSync(): () => void {
       }
       useStore.setState((st) => ({
         sessions: { ...st.sessions, [wtKey]: (st.sessions[wtKey] ?? []).map((s) => (s.id === e.id ? { ...s, running: false } : s)) },
+      }));
+    }),
+  );
+
+  // agent activity: the backend emits only on a transition, so this is a
+  // direct assignment rather than a reconcile.
+  track(
+    on.terminalState((e) => {
+      const wtKey = wtOf(e.id);
+      useStore.setState((st) => ({
+        sessions: {
+          ...st.sessions,
+          [wtKey]: (st.sessions[wtKey] ?? []).map((s) => (s.id === e.id ? { ...s, activity: e.state } : s)),
+        },
       }));
     }),
   );

@@ -334,8 +334,8 @@ pub async fn terminal_open(
 }
 
 #[tauri::command]
-pub async fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
-    terminal::write(&table, &id, &data).map_err(CanopyError::terminal)
+pub async fn terminal_write(app: AppHandle, table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
+    terminal::write(&app, &table, &id, &data).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]

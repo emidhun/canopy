@@ -101,7 +101,14 @@ pub fn run() {
 
             stats::spawn_stats_task(handle.clone());
 
-            // 1s visibility poll feeding the WINDOWS_VISIBLE cache
+            // 1s visibility poll feeding the WINDOWS_VISIBLE cache, plus the
+            // agent-activity sweep. Both are cheap and want the same cadence:
+            // "an agent is waiting on you" is the second-highest priority
+            // state in the app, so a second is about the longest it can go
+            // unnoticed and still feel immediate. The sweep runs even while
+            // every window is hidden — the tray badge and the attention queue
+            // are exactly what someone checks when the app isn't on screen —
+            // and it emits only on a transition, never on the tick.
             {
                 let handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -111,6 +118,7 @@ pub fn run() {
                             any_window_visible(&handle),
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        terminal::poll_states(&handle);
                     }
                 });
             }
