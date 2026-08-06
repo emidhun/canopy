@@ -2,12 +2,16 @@
 import { useState } from "react";
 import Modal, { Hint, Spacer } from "../../canopy/Modal";
 import { Download, Finder, Pull, Trash } from "../../../icons";
-import { TRow, Adv, Soon } from "../primitives";
+import { TRow, Adv } from "../primitives";
+import { errText, hasBackend, ipc, type WorktreeDefaults } from "../../../ipc";
+import { DEFAULT_WT_DEFAULTS } from "../provision";
 import type { PageProps } from "../types";
 
 export default function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onExportJson, onImportJson }: PageProps) {
   const [confirm, setConfirm] = useState(false);
   if (!repo) return null;
+  const wd = repo.worktreeDefaults ?? DEFAULT_WT_DEFAULTS;
+  const setWd = (p: Partial<WorktreeDefaults>) => { patchRepo({ worktreeDefaults: { ...wd, ...p } }); markDirty("repo-general"); };
   return (
     <>
       <div className="sec">
@@ -16,20 +20,20 @@ export default function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onR
           <span className="lb">Name</span><input className="inp" value={repo.name} onChange={(e) => { patchRepo({ name: e.target.value }); markDirty("repo-general"); }} />
           <span className="lb">Path</span>
           <div className="row"><input className="inp mono gr" value={repo.path} readOnly />
-            <button className="ico" title="Reveal in Finder (coming soon)" onClick={() => flash("Revealing a repo in Finder isn't wired yet")}><Finder size={12} /></button></div>
+            <button className="ico" title="Reveal in Finder" onClick={() => { if (!hasBackend()) return flash("Needs the desktop app"); ipc.revealRepo(repo.id).catch((e) => flash(errText(e))); }}><Finder size={12} /></button></div>
           <span className="lb">Worktree root</span><input className="inp mono" value={repo.worktreeDir} placeholder=".worktrees" onChange={(e) => { patchRepo({ worktreeDir: e.target.value }); markDirty("repo-general"); }} />
           <span className="lb">Default base</span>
-          <select className="inp" disabled title="Not stored per repo yet"><option>main</option></select>
+          <input className="inp mono" value={repo.defaultBase} placeholder="main" onChange={(e) => { patchRepo({ defaultBase: e.target.value }); markDirty("repo-general"); }} />
         </div>
       </div>
       <div className="sec">
         <div className="slab">Defaults for new worktrees</div>
-        <Soon>These defaults aren't stored per repo yet — Canopy runs setup and provisions files on create today.</Soon>
-        <div className="soonwrap">
-          <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created." on disabled />
-          <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes." on={false} disabled />
-          <TRow title="Create an isolated database" hint="One database per worktree, named from the branch slug." on disabled />
-        </div>
+        <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created. Off leaves it unprovisioned until you press Run setup."
+          on={wd.runSetup} onToggle={() => setWd({ runSetup: !wd.runSetup })} />
+        <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes. Ignored when setup is skipped — a service started against an unprovisioned worktree just crashes."
+          on={wd.startServices} onToggle={() => setWd({ startServices: !wd.startServices })} />
+        <TRow title="Create an isolated database" hint="Gives the worktree its own database name from the branch slug. Off points ${WT_DB_NAME} at the main checkout's PG_DB, so worktrees share one database."
+          on={wd.isolatedDatabase} onToggle={() => setWd({ isolatedDatabase: !wd.isolatedDatabase })} />
       </div>
       <div className="sec">
         <div className="slab">Configuration file</div>

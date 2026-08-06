@@ -5,7 +5,7 @@
 // These live apart from the page components so they can be tested directly and
 // shared: SettingsView's save path and the Files/Setup pages both reach for
 // them. Nothing here touches React, Tauri or the DOM.
-import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask } from "../../ipc";
+import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, SecurityCfg, ServiceCfg, SetupPolicy, SetupTask, WorktreeDefaults } from "../../ipc";
 
 /* ── client-side provision model (stable ids for React keys) ──
    The counter resets on every page load, and service ids generated here are
@@ -42,6 +42,8 @@ export function fromCards(cards: FileCardT[]): ProvisionEntry[] {
 }
 
 export const DEFAULT_POLICY: SetupPolicy = { continueOnFailure: false, timeoutSecs: 0 };
+
+export const DEFAULT_WT_DEFAULTS: WorktreeDefaults = { runSetup: true, startServices: false, isolatedDatabase: true };
 
 export const DEFAULT_SECURITY: SecurityCfg = { maskSecrets: true, maskInExports: false, sshKey: "", credentialHelper: "" };
 

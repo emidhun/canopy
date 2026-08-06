@@ -1,12 +1,12 @@
 // Fixtures the Settings editors render against when there is no Tauri backend
 // (browser preview / mock mode). Never used when hasBackend() is true.
 import { type ProvisionEntry, type Settings, type SetupTask } from "../../ipc";
-import { DEFAULT_SECURITY } from "./provision";
+import { DEFAULT_SECURITY, DEFAULT_WT_DEFAULTS } from "./provision";
 
 export const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, pinnedWorktrees: [], security: DEFAULT_SECURITY,
   repos: [{
-    id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "", defaultBase: "main", worktreeDefaults: DEFAULT_WT_DEFAULTS,
     services: [
       { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" }, health: "" },
       { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" }, health: "" },
@@ -18,7 +18,7 @@ export const MOCK: Settings = {
     // a second repo, freshly added and not configured yet — it gives the repo
     // picker something to switch between, and it is what the per-repo scoping
     // of refused rows is tested against
-    id: "canopy", name: "Canopy", path: "~/code/canopy", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    id: "canopy", name: "Canopy", path: "~/code/canopy", worktreeDir: ".worktrees", resetDb: "", migrateDb: "", defaultBase: "main", worktreeDefaults: DEFAULT_WT_DEFAULTS,
     services: [],
     customCommands: [],
     agentCommand: "claude",
