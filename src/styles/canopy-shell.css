@@ -378,16 +378,20 @@
   width: 100%;
   height: var(--h-control-xs);
   padding: 0 var(--sp-3);
-  border: 1px solid var(--divider);
-  background: var(--surface-well);
+  /* the box (border + fill) is revealed on hover / while open — at rest the
+     control reads as a plain label so it doesn't compete with the list */
+  border: 1px solid transparent;
+  background: none;
   color: var(--text-secondary);
   border-radius: var(--r-md);
   font: var(--fs-small) var(--sans);
   cursor: pointer;
-  transition: border-color var(--dur), color var(--dur);
+  transition: border-color var(--dur), background var(--dur), color var(--dur);
 }
-.cxs-repobtn:hover {
+.cxs-repobtn:hover,
+.cxs-repobtn[aria-expanded="true"] {
   border-color: var(--border-pop);
+  background: var(--surface-well);
   color: var(--text-primary);
 }
 .cxs-repobtn > svg:first-child {

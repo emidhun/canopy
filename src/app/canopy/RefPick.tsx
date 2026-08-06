@@ -72,10 +72,16 @@ export default function RefPick({
           placeholder={value || placeholder}
           spellCheck={false}
           autoFocus={autoFocus}
-          onFocus={() => setOpen(true)}
+          // Open only on an explicit click (the field wrapper) or when typing —
+          // never on bare focus, or the modal's focus trap / focus returning
+          // after a pick would re-open the menu on its own.
           onChange={(e) => {
             setQ(e.target.value);
             setOpen(true);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" || e.key === "Enter") setOpen(true);
+            else if (e.key === "Escape") setOpen(false);
           }}
         />
         <Chevron size={12} />
