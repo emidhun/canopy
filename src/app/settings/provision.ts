@@ -5,7 +5,7 @@
 // These live apart from the page components so they can be tested directly and
 // shared: SettingsView's save path and the Files/Setup pages both reach for
 // them. Nothing here touches React, Tauri or the DOM.
-import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, ServiceCfg } from "../../ipc";
+import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, ServiceCfg, SetupPolicy, SetupTask } from "../../ipc";
 
 /* ── client-side provision model (stable ids for React keys) ──
    The counter resets on every page load, and service ids generated here are
@@ -41,7 +41,32 @@ export function fromCards(cards: FileCardT[]): ProvisionEntry[] {
   }));
 }
 
-export function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
+export const DEFAULT_POLICY: SetupPolicy = { continueOnFailure: false, timeoutSecs: 0 };
+
+/** Serialize a setup task the way the backend does: a plain task stays a bare
+    string, so turning one option on for one task doesn't rewrite every line. */
+export const taskJson = (t: SetupTask): unknown =>
+  t.cwd.trim() === "" && t.enabled
+    ? t.cmd
+    : { cmd: t.cmd, ...(t.cwd.trim() ? { cwd: t.cwd.trim() } : {}), ...(t.enabled ? {} : { enabled: false }) };
+
+/** Normalise an imported config's setup array, which may use either shape. */
+export function parseSetup(raw: unknown): SetupTask[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((x: unknown): SetupTask[] =>
+    typeof x === "string"
+      ? [{ cmd: x, cwd: "", enabled: true }]
+      : x && typeof x === "object" && typeof (x as { cmd?: unknown }).cmd === "string"
+        ? [{
+            cmd: String((x as { cmd: string }).cmd),
+            cwd: String((x as { cwd?: string }).cwd ?? ""),
+            enabled: (x as { enabled?: boolean }).enabled !== false,
+          }]
+        : [],
+  );
+}
+
+export function buildConfig(cards: FileCardT[], setup: SetupTask[], teardown: string[], migrate: string[], policy?: SetupPolicy) {
   const cfg: Record<string, unknown> = {
     $schema: "canopy://worktree-manager/v1",
     provision: cards.filter((c) => c.path.trim()).map((c) => {
@@ -51,8 +76,14 @@ export function buildConfig(cards: FileCardT[], setup: string[], teardown: strin
       else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
       return o;
     }),
-    setup: setup.filter((s) => s.trim()),
+    setup: setup.filter((t) => t.cmd.trim()).map(taskJson),
   };
+  if (policy && (policy.continueOnFailure || policy.timeoutSecs > 0)) {
+    cfg.setupPolicy = {
+      onFailure: policy.continueOnFailure ? "continue" : "stop",
+      ...(policy.timeoutSecs > 0 ? { timeoutSecs: policy.timeoutSecs } : {}),
+    };
+  }
   if (teardown.length) cfg.teardown = teardown;
   if (migrate.length) cfg.migrate = migrate;
   return cfg;

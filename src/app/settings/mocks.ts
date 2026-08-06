@@ -1,6 +1,6 @@
 // Fixtures the Settings editors render against when there is no Tauri backend
 // (browser preview / mock mode). Never used when hasBackend() is true.
-import { type ProvisionEntry, type Settings } from "../../ipc";
+import { type ProvisionEntry, type Settings, type SetupTask } from "../../ipc";
 
 export const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
@@ -28,4 +28,8 @@ export const MOCK_CARDS: ProvisionEntry[] = [
   { path: ".env", format: "dotenv", from: ".env", interpolate: false, keys: [["PG_DB", "${INT_DB_NAME}"], ["PORT", "${WT_SERVICE_PORT}"]] },
   { path: "ee/.env", format: "dotenv", from: "ee/.env", interpolate: false, keys: [["LICENSE_KEY", ""]] },
 ];
-export const MOCK_SETUP = ["pnpm install", "pnpm --filter server db:migrate", "pnpm build:plugins"];
+export const MOCK_SETUP: SetupTask[] = [
+  { cmd: "pnpm install", cwd: "", enabled: true },
+  { cmd: "pnpm --filter server db:migrate", cwd: "server", enabled: true },
+  { cmd: "pnpm build:plugins", cwd: "", enabled: false },
+];

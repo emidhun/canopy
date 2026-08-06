@@ -19,7 +19,7 @@
 // reference of the real keybindings.
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { errText, hasBackend, ipc, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type Settings } from "../../ipc";
+import { errText, hasBackend, ipc, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type Settings, type SetupPolicy, type SetupTask } from "../../ipc";
 import { useStore } from "../../store";
 import {
   Braces, Check, Chevron, Copy, Download, Fork, More, Plus, Pull, Refresh, Search,
@@ -28,7 +28,7 @@ import {
 import { ALLPAGES, ICONS, pageOf, PLATFORM, REPOPAGES, REPO_PAGE_IDS, type PageId, type PageMeta } from "./catalog";
 import type { PageProps } from "./types";
 import { MOCK, MOCK_CARDS, MOCK_SETUP } from "./mocks";
-import { buildConfig, cleanRepo, fromCards, normalizeRepo, toCards, type FileCardT } from "./provision";
+import { buildConfig, cleanRepo, DEFAULT_POLICY, fromCards, normalizeRepo, parseSetup, toCards, type FileCardT } from "./provision";
 import { describeIncomplete, incompleteRows, type IncompleteRow } from "./incomplete";
 import SearchOverlay from "./SearchOverlay";
 import Preview from "./Preview";
@@ -73,7 +73,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const clearInvalid = () => setInvalidByRepo((m) => (m.size ? new Map() : m));
 
   const [cardsByRepo, setCardsByRepo] = useState<Record<string, FileCardT[]>>({});
-  const [setupByRepo, setSetupByRepo] = useState<Record<string, string[]>>({});
+  const [setupByRepo, setSetupByRepo] = useState<Record<string, SetupTask[]>>({});
+  const [policyByRepo, setPolicyByRepo] = useState<Record<string, SetupPolicy>>({});
   const [extrasByRepo, setExtrasByRepo] = useState<Record<string, { teardown: string[]; migrate: string[] }>>({});
   const dirtyRepos = useRef<Set<string>>(new Set());
   const repoMenuRef = useRef<HTMLDivElement>(null);
@@ -108,6 +109,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         ipc.getRepoConfig(r.id).then((c) => {
           setCardsByRepo((m) => ({ ...m, [r.id]: toCards(c.provision) }));
           setSetupByRepo((m) => ({ ...m, [r.id]: c.setup }));
+          setPolicyByRepo((m) => ({ ...m, [r.id]: c.setupPolicy ?? DEFAULT_POLICY }));
           setExtrasByRepo((m) => ({ ...m, [r.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
         }).catch(() => {});
       });
@@ -178,9 +180,11 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const patchRepo = (p: Partial<RepoCfg>) => patch({ repos: settings.repos.map((r, ri) => (ri === repoIndex ? { ...r, ...p } : r)) });
   const cards = (repo && cardsByRepo[repo.id]) || [];
   const setup = (repo && setupByRepo[repo.id]) || [];
+  const policy = (repo && policyByRepo[repo.id]) || DEFAULT_POLICY;
   const extras = (repo && extrasByRepo[repo.id]) || { teardown: [], migrate: [] };
   const setCards = (next: FileCardT[]) => { if (repo) setCardsByRepo((m) => ({ ...m, [repo.id]: next })); };
-  const setSetup = (next: string[]) => { if (repo) setSetupByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const setSetup = (next: SetupTask[]) => { if (repo) setSetupByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const setPolicy = (next: SetupPolicy) => { if (repo) setPolicyByRepo((m) => ({ ...m, [repo.id]: next })); };
   const isRepoPage = REPO_PAGE_IDS.has(page);
   const p = pageOf(page);
 
@@ -223,7 +227,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         const failures: string[] = [];
         await Promise.all(
           cleaned.repos.filter((r) => dirtyRepos.current.has(r.id)).map((r) =>
-            ipc.saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((c) => c.trim()))
+            ipc.saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((t) => t.cmd.trim()), policyByRepo[r.id])
               .then(() => dirtyRepos.current.delete(r.id))
               .catch((e) => failures.push(`${r.name}: ${e}`)),
           ),
@@ -276,7 +280,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
 
   /* ── .worktreemanager.json import / export (mirrors the previous repo
         config editor: native save + backend write out, FileReader in) ── */
-  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
   const copyJson = () => {
     if (!repo) return;
     navigator.clipboard?.writeText(configJson()).then(() => showToast("Copied .worktreemanager.json"), () => showToast("Copy failed"));
@@ -309,7 +313,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           : [];
         setCards(toCards(list));
         markDirty("files");
-        if (Array.isArray(parsed.setup)) { setSetup(parsed.setup.filter((x: unknown) => typeof x === "string")); markDirty("setup"); }
+        // an imported config may use either shape — normalise on the way in
+        if (Array.isArray(parsed.setup)) { setSetup(parseSetup(parsed.setup)); markDirty("setup"); }
         setPage("files");
         showToast(list.length ? `Imported ${list.length} file${list.length > 1 ? "s" : ""} — review, then Save` : "No provision entries found");
       } catch {
@@ -336,7 +341,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid: (repo && invalidByRepo.get(repo.id)) || NO_INVALID };
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, policy, setPolicy, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid: (repo && invalidByRepo.get(repo.id)) || NO_INVALID };
   const body = () => {
     if (isRepoPage && !repo) {
       return (
@@ -470,7 +475,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="pbody">
             <div className={"pmain" + (flashId?.startsWith(page + "-") ? " flashrow" : "")}>{body()}</div>
             {preview && isRepoPage && repo && (
-              <Preview cards={cards} setup={setup} extras={extras} onClose={() => setPreview(false)} />
+              <Preview cards={cards} setup={setup} extras={extras} policy={policy} onClose={() => setPreview(false)} />
             )}
           </div>
         </div>

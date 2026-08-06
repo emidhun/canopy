@@ -42,12 +42,49 @@ pub struct ProvisionFile {
     pub keys: Vec<(String, String)>,
 }
 
+/// One setup task.
+///
+/// The config accepts a bare string *or* an object, and a bare string parses
+/// to an enabled task in the worktree root. That is what makes this change
+/// invisible to every existing `.worktreemanager.json`: the old array of
+/// strings still means exactly what it always did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetupTask {
+    pub cmd: String,
+    /// working directory relative to the worktree root; empty = the root
+    pub cwd: String,
+    /// a disabled task is skipped, but stays in the file — the point is to
+    /// turn one off without losing how it was written
+    pub enabled: bool,
+}
+
+impl SetupTask {
+    pub fn plain(cmd: impl Into<String>) -> Self {
+        Self { cmd: cmd.into(), cwd: String::new(), enabled: true }
+    }
+}
+
+/// What to do when a setup task fails, and how long any one may run.
+///
+/// The defaults are the existing behaviour: stop at the first failure (a task
+/// list normally encodes an order, so continuing past a failed install just
+/// produces a second, more confusing failure) and use the built-in one-hour
+/// per-step ceiling.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SetupPolicy {
+    /// keep going after a failed task instead of stopping at the first one
+    pub continue_on_failure: bool,
+    /// per-task ceiling in seconds; 0 = the built-in one hour
+    pub timeout_secs: u64,
+}
+
 #[derive(Default, Clone)]
 pub struct WtmConfig {
     /// files seeded + templated into the worktree (the ".env" root file is just
     /// one entry — legacy top-level `env` is migrated into this list on read)
     pub provision: Vec<ProvisionFile>,
-    pub setup: Vec<String>,
+    pub setup: Vec<SetupTask>,
+    pub setup_policy: SetupPolicy,
     /// commands run before a worktree is deleted (e.g. drop its database)
     pub teardown: Vec<String>,
     /// commands run by the "Run migration" action
@@ -92,6 +129,42 @@ fn parse_provision(v: &serde_json::Value) -> Vec<ProvisionFile> {
         .unwrap_or_default()
 }
 
+/// Parse the `setup` array: a bare string is a plain enabled task, an object
+/// may carry `cwd` and `enabled`. Anything else is skipped rather than
+/// silently becoming an empty command.
+fn parse_setup(v: &serde_json::Value) -> Vec<SetupTask> {
+    v.get("setup")
+        .and_then(|s| s.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| match item {
+                    serde_json::Value::String(s) => Some(SetupTask::plain(s.clone())),
+                    serde_json::Value::Object(o) => {
+                        let cmd = o.get("cmd").and_then(|c| c.as_str())?.to_string();
+                        Some(SetupTask {
+                            cmd,
+                            cwd: o.get("cwd").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                            enabled: o.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_policy(v: &serde_json::Value) -> SetupPolicy {
+    let p = v.get("setupPolicy");
+    SetupPolicy {
+        continue_on_failure: p
+            .and_then(|p| p.get("onFailure"))
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("continue")),
+        timeout_secs: p.and_then(|p| p.get("timeoutSecs")).and_then(|x| x.as_u64()).unwrap_or(0),
+    }
+}
+
 pub fn read_config(wt_path: &str, repo_path: &str) -> WtmConfig {
     for dir in [wt_path, repo_path] {
         for name in CONFIG_NAMES {
@@ -104,7 +177,8 @@ pub fn read_config(wt_path: &str, repo_path: &str) -> WtmConfig {
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
                     .unwrap_or_default()
             };
-            let setup = arr("setup");
+            let setup = parse_setup(&v);
+            let setup_policy = parse_policy(&v);
             let teardown = arr("teardown");
             let migrate = arr("migrate");
             let mut provision = parse_provision(&v);
@@ -132,7 +206,7 @@ pub fn read_config(wt_path: &str, repo_path: &str) -> WtmConfig {
                 );
             }
             if !setup.is_empty() || !provision.is_empty() || !teardown.is_empty() || !migrate.is_empty() {
-                return WtmConfig { provision, setup, teardown, migrate };
+                return WtmConfig { provision, setup, setup_policy, teardown, migrate };
             }
         }
     }
@@ -181,7 +255,12 @@ fn provision_to_json(provision: &[ProvisionFile]) -> serde_json::Value {
 /// setup commands. Preserves other top-level keys (teardown/migrate) and drops
 /// the legacy `env` block, which is now folded into `provision`. An existing but
 /// malformed file is an ERROR — rewriting it would silently drop those keys.
-pub fn write_repo_config(repo_path: &str, provision: &[ProvisionFile], setup: &[String]) -> Result<(), String> {
+pub fn write_repo_config(
+    repo_path: &str,
+    provision: &[ProvisionFile],
+    setup: &[SetupTask],
+    policy: Option<&SetupPolicy>,
+) -> Result<(), String> {
     let path = Path::new(repo_path).join(".worktreemanager.json");
     let mut root: serde_json::Value = match std::fs::read_to_string(&path) {
         Ok(txt) if !txt.trim().is_empty() => serde_json::from_str(&txt).map_err(|e| {
@@ -197,13 +276,51 @@ pub fn write_repo_config(repo_path: &str, provision: &[ProvisionFile], setup: &[
     }
     root["$schema"] = serde_json::Value::String("canopy://worktree-manager/v1".into());
     root["provision"] = provision_to_json(provision);
+    // A plain task round-trips as a bare string, so turning one option on for
+    // one task doesn't rewrite the whole list into objects and produce a diff
+    // that touches every line.
     root["setup"] = serde_json::Value::Array(
         setup
             .iter()
-            .filter(|c| !c.trim().is_empty())
-            .map(|c| serde_json::Value::String(c.clone()))
+            .filter(|t| !t.cmd.trim().is_empty())
+            .map(|t| {
+                if t.cwd.trim().is_empty() && t.enabled {
+                    serde_json::Value::String(t.cmd.clone())
+                } else {
+                    let mut o = serde_json::Map::new();
+                    o.insert("cmd".into(), serde_json::Value::String(t.cmd.clone()));
+                    if !t.cwd.trim().is_empty() {
+                        o.insert("cwd".into(), serde_json::Value::String(t.cwd.trim().to_string()));
+                    }
+                    if !t.enabled {
+                        o.insert("enabled".into(), serde_json::Value::Bool(false));
+                    }
+                    serde_json::Value::Object(o)
+                }
+            })
             .collect(),
     );
+    match policy {
+        // Only written when it differs from the built-in behaviour, so a repo
+        // that never touched it keeps a config file without the key.
+        Some(p) if *p != SetupPolicy::default() => {
+            let mut o = serde_json::Map::new();
+            o.insert(
+                "onFailure".into(),
+                serde_json::Value::String(if p.continue_on_failure { "continue" } else { "stop" }.into()),
+            );
+            if p.timeout_secs > 0 {
+                o.insert("timeoutSecs".into(), serde_json::Value::from(p.timeout_secs));
+            }
+            root["setupPolicy"] = serde_json::Value::Object(o);
+        }
+        Some(_) => {
+            if let Some(obj) = root.as_object_mut() {
+                obj.remove("setupPolicy");
+            }
+        }
+        None => {}
+    }
     let body = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     std::fs::write(&path, body + "\n").map_err(|e| e.to_string())
 }
@@ -521,18 +638,83 @@ pub async fn run_setup(
     wt_path: &str,
     repo_path: &str,
     vars: &HashMap<String, String>,
+    dry_run: bool,
     mut progress: impl FnMut(String),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
 
     if !cfg.provision.is_empty() {
-        progress(format!("provisioning {} file(s)", cfg.provision.len()));
+        progress(format!("provisioning {} file(s){}", cfg.provision.len(), if dry_run { " — dry run" } else { "" }));
         for pf in &cfg.provision {
             progress(format!("  → {} ({})", pf.path, pf.format));
-            provision_file(wt_path, repo_path, pf, vars)?;
+            if !dry_run {
+                provision_file(wt_path, repo_path, pf, vars)?;
+            }
         }
     }
-    run_commands(wt_path, repo_path, &cfg.setup, vars, "setup", &mut progress).await
+    run_tasks(wt_path, repo_path, &cfg.setup, &cfg.setup_policy, vars, dry_run, &mut progress).await
+}
+
+/// Run the setup task list, honouring per-task cwd/enable and the failure and
+/// timeout policy. With `dry_run`, it reports exactly what WOULD run — same
+/// order, same working directories, same skips — and executes nothing.
+#[allow(clippy::too_many_arguments)]
+async fn run_tasks(
+    wt_path: &str,
+    repo_path: &str,
+    tasks: &[SetupTask],
+    policy: &SetupPolicy,
+    vars: &HashMap<String, String>,
+    dry_run: bool,
+    progress: &mut impl FnMut(String),
+) -> Result<(), String> {
+    let live: Vec<&SetupTask> = tasks.iter().filter(|t| !t.cmd.trim().is_empty()).collect();
+    let total = live.iter().filter(|t| t.enabled).count();
+    let mut failures: Vec<String> = Vec::new();
+    let mut n = 0usize;
+
+    for task in live {
+        // A disabled task is reported, not omitted: "why didn't my migration
+        // run?" is answered by seeing it listed as skipped.
+        if !task.enabled {
+            progress(format!("setup — skipped (disabled): {}", task.cmd));
+            continue;
+        }
+        n += 1;
+        let where_ = if task.cwd.trim().is_empty() { String::new() } else { format!(" (in {})", task.cwd.trim()) };
+        if dry_run {
+            progress(format!("setup [{n}/{total}]: {}{where_} — dry run, not executed", task.cmd));
+            continue;
+        }
+        progress(format!("setup [{n}/{total}]: {}{where_}", task.cmd));
+
+        // A per-task cwd must stay inside the worktree, for the same reason a
+        // provision path must: this string comes from a repo config file.
+        let cwd = if task.cwd.trim().is_empty() {
+            wt_path.to_string()
+        } else {
+            check_contained(task.cwd.trim(), "task cwd")?;
+            Path::new(wt_path).join(task.cwd.trim()).to_string_lossy().into_owned()
+        };
+
+        let one = [task.cmd.clone()];
+        let result = run_commands_in(&cwd, wt_path, repo_path, &one, vars, "setup", policy.timeout_secs, progress).await;
+        if let Err(e) = result {
+            if !policy.continue_on_failure {
+                return Err(e);
+            }
+            progress(format!("setup — continuing after failure: {e}"));
+            failures.push(e);
+        }
+    }
+
+    match failures.len() {
+        0 => Ok(()),
+        // With continue-on-failure the run finished, but it did NOT succeed —
+        // reporting Ok here would mark the worktree provisioned when it isn't.
+        1 => Err(failures.remove(0)),
+        k => Err(format!("{k} setup tasks failed:\n{}", failures.join("\n"))),
+    }
 }
 
 /// Run a worktree's teardown commands (e.g. drop its database) before deletion.
@@ -592,13 +774,31 @@ async fn run_commands(
     label: &str,
     progress: &mut impl FnMut(String),
 ) -> Result<(), String> {
+    run_commands_in(wt_path, wt_path, repo_path, cmds, vars, label, 0, progress).await
+}
+
+/// As `run_commands`, but with an explicit working directory and per-step
+/// timeout. `wt_path` stays separate from `cwd` because WT_PATH/WTM_WORKTREE
+/// must keep pointing at the worktree root even when a task runs in a
+/// subdirectory — a task in `server/` still belongs to the same worktree.
+#[allow(clippy::too_many_arguments)]
+async fn run_commands_in(
+    cwd: &str,
+    wt_path: &str,
+    repo_path: &str,
+    cmds: &[String],
+    vars: &HashMap<String, String>,
+    label: &str,
+    timeout_secs: u64,
+    progress: &mut impl FnMut(String),
+) -> Result<(), String> {
     for (i, cmd) in cmds.iter().enumerate() {
         progress(format!("{label} [{}/{}]: {cmd}", i + 1, cmds.len()));
-        let wrapped = crate::toolchain::with_pinned_node(wt_path, cmd);
+        let wrapped = crate::toolchain::with_pinned_node(cwd, cmd);
         let (shell, shargs) = crate::toolchain::shell_argv(&wrapped);
         let mut child = Command::new(shell)
             .args(&shargs)
-            .current_dir(wt_path)
+            .current_dir(cwd)
             .envs(vars) // WT_*/WM_* etc.
             .env("WTM_REPO", repo_path)
             .env("WTM_WORKTREE", wt_path)
@@ -628,7 +828,12 @@ async fn run_commands(
         // hard ceiling per command: npm installs legitimately run long, but a
         // command stuck on a dead registry or waiting for input it can never
         // get (stdin is null) must not hang setup forever.
-        const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+        const DEFAULT_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+        let step_timeout = if timeout_secs == 0 {
+            DEFAULT_STEP_TIMEOUT
+        } else {
+            std::time::Duration::from_secs(timeout_secs)
+        };
         let run_fut = async {
             let (mut out_done, mut err_done) = (false, false);
             while !(out_done && err_done) {
@@ -651,12 +856,12 @@ async fn run_commands(
             }
             child.wait().await
         };
-        let status = match tokio::time::timeout(STEP_TIMEOUT, run_fut).await {
+        let status = match tokio::time::timeout(step_timeout, run_fut).await {
             Ok(res) => res.map_err(|e| format!("{label} wait failed: {e}"))?,
             Err(_) => {
                 // kills the shell; its own children get EOF on the shared pipes
                 let _ = child.kill().await;
-                return Err(format!("{label} step timed out after {}min: {cmd}", STEP_TIMEOUT.as_secs() / 60));
+                return Err(format!("{label} step timed out after {}s: {cmd}", step_timeout.as_secs()));
             }
         };
         if !status.success() {
@@ -681,6 +886,57 @@ async fn run_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_accepts_strings_and_objects_and_round_trips_plainly() {
+        let dir = std::env::temp_dir().join("canopy_setup_tasks_test_xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+
+        // A pre-existing config — a bare array of strings — must keep meaning
+        // exactly what it always did.
+        std::fs::write(dir.join(".worktreemanager.json"), r#"{ "setup": ["pnpm install", "pnpm db:migrate"] }"#).unwrap();
+        let c = read_repo_config(d);
+        assert_eq!(c.setup, vec![SetupTask::plain("pnpm install"), SetupTask::plain("pnpm db:migrate")]);
+        assert_eq!(c.setup_policy, SetupPolicy::default(), "no policy key = built-in behaviour");
+
+        // Objects carry cwd/enabled; a mixed array is fine.
+        std::fs::write(
+            dir.join(".worktreemanager.json"),
+            r#"{ "setup": ["pnpm install", {"cmd":"pnpm build","cwd":"server"}, {"cmd":"seed","enabled":false}, 42],
+                 "setupPolicy": {"onFailure":"continue","timeoutSecs":90} }"#,
+        )
+        .unwrap();
+        let c = read_repo_config(d);
+        assert_eq!(c.setup.len(), 3, "a non-string, non-object entry is skipped, not turned into an empty command");
+        assert_eq!(c.setup[1].cwd, "server");
+        assert!(c.setup[0].enabled, "enabled defaults to true");
+        assert!(!c.setup[2].enabled);
+        assert!(c.setup_policy.continue_on_failure);
+        assert_eq!(c.setup_policy.timeout_secs, 90);
+
+        // Writing back: a plain task stays a bare string, so enabling one
+        // option on one task doesn't rewrite every line of the file.
+        let tasks = vec![
+            SetupTask::plain("pnpm install"),
+            SetupTask { cmd: "pnpm build".into(), cwd: "server".into(), enabled: true },
+            SetupTask { cmd: "seed".into(), cwd: String::new(), enabled: false },
+        ];
+        write_repo_config(d, &[], &tasks, Some(&SetupPolicy::default())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".worktreemanager.json")).unwrap()).unwrap();
+        assert_eq!(v["setup"][0], "pnpm install", "plain task round-trips as a string");
+        assert_eq!(v["setup"][1]["cwd"], "server");
+        assert_eq!(v["setup"][2]["enabled"], false);
+        assert!(v.get("setupPolicy").is_none(), "a default policy is not written");
+
+        write_repo_config(d, &[], &tasks, Some(&SetupPolicy { continue_on_failure: true, timeout_secs: 30 })).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".worktreemanager.json")).unwrap()).unwrap();
+        assert_eq!(v["setupPolicy"]["onFailure"], "continue");
+        assert_eq!(v["setupPolicy"]["timeoutSecs"], 30);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn wt_slug_is_db_safe() {
@@ -768,7 +1024,7 @@ mod tests {
             interpolate: false,
             keys: vec![("A".into(), "1".into())],
         }];
-        write_repo_config(dir.to_str().unwrap(), &prov, &["echo hi".into()]).unwrap();
+        write_repo_config(dir.to_str().unwrap(), &prov, &[SetupTask::plain("echo hi")], None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
         assert!(v.get("env").is_none(), "legacy env dropped");
         assert_eq!(v["teardown"][0], "dropdb", "teardown preserved");
@@ -778,7 +1034,7 @@ mod tests {
 
         // malformed existing file → hard error, file untouched
         std::fs::write(&cfg_path, "{ not json").unwrap();
-        let err = write_repo_config(dir.to_str().unwrap(), &prov, &[]).unwrap_err();
+        let err = write_repo_config(dir.to_str().unwrap(), &prov, &[], None).unwrap_err();
         assert!(err.contains("malformed"), "refuses to overwrite: {err}");
         assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), "{ not json", "file untouched");
         let _ = std::fs::remove_dir_all(&dir);
@@ -799,7 +1055,7 @@ mod tests {
         assert_eq!(c.provision[0].path, ".env");
         assert_eq!(c.provision[0].format, "dotenv");
         assert_eq!(c.provision[0].keys, vec![("PG_DB".to_string(), "${WT_DB_NAME}".to_string())]);
-        assert_eq!(c.setup, vec!["echo hi"]);
+        assert_eq!(c.setup, vec![SetupTask::plain("echo hi")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
