@@ -99,6 +99,8 @@ export interface Settings {
   /** opt-in experiment flags by id; unknown ids are ignored */
   experiments: Record<string, boolean>;
   notifications: NotifyCfg;
+  /** keybinding overrides: action id → binding ("Mod+k"). See app/keys.ts. */
+  keybindings: Record<string, string>;
 }
 export interface SecurityCfg {
   /** render secret-looking values as bullets in the preview and in streamed
@@ -165,6 +167,7 @@ export interface NotifyCfg {
   sound: boolean;
   /** count | dot | off */
   badge: string;
+
 
 }
 

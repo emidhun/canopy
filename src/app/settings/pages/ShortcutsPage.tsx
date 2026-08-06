@@ -1,79 +1,93 @@
-// Shortcuts — a reference of the real keybindings.
-import { useState } from "react";
-import { Search } from "../../../icons";
+// Shortcuts — the real keybindings, and the page that remaps them.
+//
+// Rendered from the registry the keydown handler dispatches off, so the two
+// cannot drift: a row here exists because something listens for it.
+import { useEffect, useState } from "react";
+import { Refresh, Search } from "../../../icons";
+import { KEY_ACTIONS, conflicts, displayBinding, normalizeBinding, resolveBindings } from "../../keys";
+import type { PageProps } from "../types";
 
-/* Every binding the app actually listens for, grouped by where it applies.
-   This table is a reference, so it is only worth having if it is exhaustive
-   and true — an entry here without a listener behind it is worse than a gap.
-   Sources: App.tsx (global + worktree), SettingsView (settings), Modal's
-   usePrimaryAction (dialogs), Palette / SearchOverlay (lists), SidebarNav
-   (selection chords) and Popover.tsx (the menu-bar window). */
-const KEYS: [string, string, string][] = [
-  // global
-  ["Command palette", "⌘ K", "Global"],
-  ["New worktree", "⌘ N", "Global"],
-  ["Add repository", "⇧ ⌘ N", "Global"],
-  ["Toggle worktree list", "⌘ B", "Global"],
-  ["Cross-worktree overview", "⌘ O", "Global"],
-  ["Settings", "⌘ ,", "Global"],
-  ["Increase text size", "⌘ +", "Global"],
-  ["Decrease text size", "⌘ -", "Global"],
-  ["Reset text size", "⌘ 0", "Global"],
-  // worktree
-  ["Run next action", "⏎", "Worktree"],
-  ["Switch branch", "⌘ \\", "Worktree"],
-  ["Sync submodules", "⇧ ⌘ S", "Worktree"],
-  ["Pull everything", "⌘ ⏎", "Pull menu"],
-  // layouts
-  ["Runtime layout", "⌘ 1", "Worktree"],
-  ["Split logs + agent", "⌘ 2", "Worktree"],
-  ["Agent layout", "⌘ 3", "Worktree"],
-  ["Terminal + logs layout", "⌘ 4", "Worktree"],
-  ["Terminal layout", "⌘ 5", "Worktree"],
-  // dialogs
-  ["Confirm the primary action", "⌘ ⏎", "Dialogs"],
-  ["Confirm a simple prompt", "⏎", "Dialogs"],
-  ["Close the dialog", "esc", "Dialogs"],
-  // lists and menus
-  ["Move through a list", "↑ ↓", "Lists"],
-  ["Choose the highlighted row", "⏎", "Lists"],
-  ["Close a menu or popover", "esc", "Lists"],
-  ["Add to the selection", "⌘ click", "Worktree list"],
-  ["Select a range", "⇧ click", "Worktree list"],
-  // settings
-  ["Search all settings", "⌘ F", "Settings"],
-  ["Save changes", "⌘ S", "Settings"],
-  ["Toggle the JSON preview", "⌘ P", "Settings"],
-  // menu-bar window
-  ["Focus the search field", "⌘ K", "Menu bar"],
-  ["New worktree", "⌘ N", "Menu bar"],
-  ["Settings", "⌘ ,", "Menu bar"],
-  ["Start or focus the highlighted worktree", "⏎", "Menu bar"],
-  ["Clear the search field", "esc", "Menu bar"],
-];
-
-export default function ShortcutsPage() {
+export default function ShortcutsPage({ settings, patch, markDirty, flash }: PageProps) {
   const [q, setQ] = useState("");
-  const rows = KEYS.filter(([a, b, c]) => !q || (a + b + c).toLowerCase().includes(q.toLowerCase()));
+  /** the action currently capturing a keystroke, if any */
+  const [capturing, setCapturing] = useState<string | null>(null);
+
+  const bindings = resolveBindings(settings);
+  const clashing = conflicts(bindings);
+  const rows = KEY_ACTIONS.filter((a) => !q || (a.label + a.scope + displayBinding(bindings[a.id])).toLowerCase().includes(q.toLowerCase()));
+
+  // While capturing, the whole keyboard belongs to this row — otherwise
+  // pressing ⌘O to rebind it would ALSO switch to the overview underneath.
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturing(null); return; }
+      // a bare modifier is not a binding — wait for the real key
+      if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;
+      const next = normalizeBinding(e);
+      patch({ keybindings: { ...(settings.keybindings ?? {}), [capturing]: next } });
+      markDirty("shortcuts");
+      setCapturing(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [capturing, settings.keybindings, patch, markDirty]);
+
+  const reset = (id: string) => {
+    const next = { ...(settings.keybindings ?? {}) };
+    delete next[id];
+    patch({ keybindings: next });
+    markDirty("shortcuts");
+  };
+
   return (
     <div className="sec">
       <div className="row" style={{ marginBottom: 10 }}>
         <div className="navsearch" style={{ margin: 0, flex: 1, maxWidth: 260 }}>
           <Search size={12} /><input placeholder="Filter shortcuts…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        <span style={{ flex: 1 }} />
+        <button className="btn" onClick={() => { patch({ keybindings: {} }); markDirty("shortcuts"); flash("Shortcuts restored to defaults"); }}>
+          <Refresh size={11} />Restore defaults
+        </button>
       </div>
       <table className="keys">
-        <thead><tr><th>Command</th><th>Keys</th><th>Scope</th></tr></thead>
-        {/* keyed by all three columns: the command name alone is not unique —
-            "New worktree" and "Settings" each exist in two scopes (the main
-            window and the menu bar) */}
-        <tbody>{rows.map(([a, b, c]) => (
-          <tr key={a + b + c}><td>{a}</td>
-            <td><span className="kbdk">{b.split(" ").map((k, i) => <i key={i}>{k}</i>)}</span></td>
-            <td style={{ color: "var(--text-tertiary)" }}>{c}</td></tr>))}</tbody>
+        <thead><tr><th>Command</th><th>Keys</th><th>Scope</th><th /></tr></thead>
+        <tbody>{rows.map((a) => {
+          const overridden = !!settings.keybindings?.[a.id];
+          return (
+            <tr key={a.id} style={clashing.has(a.id) ? { color: "var(--state-error)" } : undefined}>
+              <td>{a.label}</td>
+              <td>
+                <button
+                  className={"kbdk" + (capturing === a.id ? " is-capturing" : "")}
+                  disabled={a.fixed}
+                  title={a.fixed ? "Fixed — dismissing things must always work" : "Click, then press the keys you want"}
+                  onClick={() => !a.fixed && setCapturing(a.id)}
+                  style={{ background: "none", border: 0, padding: 0, cursor: a.fixed ? "default" : "pointer" }}
+                >
+                  {capturing === a.id ? <i>press keys…</i> : displayBinding(bindings[a.id]).split(" ").map((k, i) => <i key={i}>{k}</i>)}
+                </button>
+              </td>
+              <td style={{ color: "var(--text-tertiary)" }}>{a.scope}</td>
+              <td style={{ textAlign: "right" }}>
+                {overridden && <span className="ico" title="Restore the default" onClick={() => reset(a.id)}><Refresh size={11} /></span>}
+              </td>
+            </tr>
+          );
+        })}</tbody>
       </table>
       {rows.length === 0 && <div className="srempty">No shortcuts match “{q}”.</div>}
-      <div className="hint" style={{ marginTop: 12 }}>Shortcuts aren't remappable yet.</div>
+      {clashing.size > 0 && (
+        <div className="hint" style={{ marginTop: 12, color: "var(--state-error)" }}>
+          Two shortcuts share a binding. Both are shown in red; the one higher in this list is the one that fires.
+        </div>
+      )}
+      <div className="hint" style={{ marginTop: 12 }}>
+        Click a shortcut and press the keys you want. Esc cancels. ⌘ and Ctrl are the same binding — one setting works on every platform.
+      </div>
     </div>
   );
 }
