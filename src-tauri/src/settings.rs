@@ -103,6 +103,14 @@ pub struct ServiceCfg {
     pub cwd: String,
     pub base_port: Option<u16>,
     pub env: HashMap<String, String>,
+    /// Readiness probe path, e.g. `/api/health`. Empty = none, and the service
+    /// counts as running the moment its process is alive (today's behaviour).
+    ///
+    /// A path, not a URL: the host is always localhost and the port is the
+    /// service's own derived one, so accepting a full URL would let a health
+    /// check silently point at a different service — or a different machine.
+    #[serde(default)]
+    pub health: String,
 }
 
 /// Persisted runtime state (not user-edited): stable port index per worktree,

@@ -852,6 +852,9 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
         cwd: s.dir.trim(),
         basePort: s.port.trim() ? parseInt(s.port, 10) || null : null,
         env: {},
+        // Onboarding can't know a repo's readiness path, and guessing one
+        // would hold every service in "starting" until it timed out.
+        health: "",
       }));
 
     if (!hasBackend()) {
