@@ -55,8 +55,13 @@ pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(),
         *state.settings.write() = new_settings.clone();
     }
     settings::save_settings(&app, &new_settings).map_err(CanopyError::config)?;
+    // await only the structural rebuild (the tree must reflect the new
+    // services/repos when this resolves); git meta is 2 spawns per worktree
+    // and arrives via worktree:git events — holding the Save button on it
+    // meant seconds of spinner for a millisecond write
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
-    refresh_all_git_meta(&app).await;
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_all_git_meta(&app2).await });
     Ok(())
 }
 
@@ -105,7 +110,9 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
     let (repo, updated) = updated;
     settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
-    refresh_all_git_meta(&app).await;
+    // meta arrives via worktree:git events — same reasoning as save_settings
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_all_git_meta(&app2).await });
     Ok(repo)
 }
 
