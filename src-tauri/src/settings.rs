@@ -13,6 +13,14 @@ pub struct Settings {
     pub repos: Vec<RepoCfg>,
     /// show the in-place "Switch branch" action in the worktree header
     pub show_switch_branch: bool,
+    /// Worktrees the user pinned to the top of the sidebar, by `wt_key`.
+    ///
+    /// Lives here rather than in `RuntimeState` because it is a *preference*,
+    /// not derived state: it should travel with the config file, be editable by
+    /// hand, and survive a state-file reset. Pruned when a worktree is removed
+    /// so the list can't grow without bound.
+    #[serde(default)]
+    pub pinned_worktrees: Vec<String>,
 }
 
 impl Default for Settings {
@@ -23,6 +31,7 @@ impl Default for Settings {
             terminal: String::new(),
             repos: Vec::new(),
             show_switch_branch: true,
+            pinned_worktrees: Vec::new(),
         }
     }
 }
@@ -232,6 +241,19 @@ mod tests {
         assert_eq!(loaded.terminal, "", "defaults on parse failure");
         let backup = path.with_extension("json.corrupt");
         assert_eq!(fs::read_to_string(&backup).unwrap(), "{ truncated", "original quarantined");
+
+        // a settings file written before pinning existed must still load, with
+        // an empty pin list rather than falling back to full defaults
+        fs::write(&path, r#"{"version":1,"terminal":"iTerm","repos":[]}"#).unwrap();
+        let loaded: Settings = load_json(&path);
+        assert_eq!(loaded.terminal, "iTerm", "pre-pinning settings still parse");
+        assert!(loaded.pinned_worktrees.is_empty(), "absent pin list defaults to empty");
+
+        // pins round-trip
+        let s = Settings { pinned_worktrees: vec!["/wt/a".into()], ..Default::default() };
+        save_json(&path, &s).unwrap();
+        let loaded: Settings = load_json(&path);
+        assert_eq!(loaded.pinned_worktrees, vec!["/wt/a".to_string()]);
 
         // unchanged content → no rewrite (mtime-stable persistence)
         fs::write(&path, serde_json::to_string_pretty(&s).unwrap()).unwrap();

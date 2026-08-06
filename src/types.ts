@@ -25,6 +25,9 @@ export interface WorktreeNode {
   isMain: boolean;
   git: GitMeta | null;
   dbName: string | null;
+  /** pinned to the top of the sidebar (persisted in Settings, denormalized
+      here so every window gets it from the tree it already subscribes to) */
+  pinned: boolean;
   services: ServiceNode[];
 }
 

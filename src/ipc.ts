@@ -57,6 +57,8 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  /** worktrees pinned to the top of the sidebar, by wtKey */
+  pinnedWorktrees: string[];
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
@@ -165,6 +167,7 @@ export const ipc = {
   worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
+  setWorktreePinned: (wtKey: string, pinned: boolean) => invoke<void>("set_worktree_pinned", { wtKey, pinned }),
 };
 
 export interface GitEvent extends GitMeta {

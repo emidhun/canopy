@@ -675,6 +675,30 @@ pub async fn quit_app(app: AppHandle) -> Result<(), CanopyError> {
     Ok(())
 }
 
+/// Pin or unpin a worktree in the sidebar. Persists to `Settings` and
+/// republishes the tree, which is what carries the flag to every window.
+#[tauri::command]
+pub async fn set_worktree_pinned(app: AppHandle, wt_key: String, pinned: bool) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let updated = {
+        let state = app.state::<AppState>();
+        let mut s = state.settings.write();
+        let has = s.pinned_worktrees.iter().any(|k| k == &wt_key);
+        if has == pinned {
+            return Ok(()); // already in the requested state — no write, no event
+        }
+        if pinned {
+            s.pinned_worktrees.push(wt_key.clone());
+        } else {
+            s.pinned_worktrees.retain(|k| k != &wt_key);
+        }
+        s.clone()
+    };
+    settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(())
+}
+
 // ── worktree create / remove ──
 
 #[derive(serde::Serialize, Clone)]
