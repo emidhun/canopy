@@ -1,7 +1,15 @@
 // Typed IPC surface — invoke wrappers + event payloads, mirroring src-tauri.
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { GitMeta, LogLine, RepoNode, SubmoduleStatus, SvcStatus } from "./types";
+
+/** Window-scoped listen: registers with THIS window as the event target, so
+ * the backend can `emit_filter` high-volume events (terminal:data,
+ * service:log, service:stats) to only the windows that consume them. A
+ * broadcast `emit` still reaches window-scoped listeners. */
+const listen = <T,>(event: string, cb: (e: { payload: T }) => void): Promise<UnlistenFn> =>
+  getCurrentWebviewWindow().listen<T>(event, cb);
 
 export interface ServiceCfg {
   id: string;
@@ -154,7 +162,7 @@ export const ipc = {
   createWorktree: (args: { repoId: string; branch: string; base?: string; createBranch: boolean }) =>
     invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
   runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),
-  worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[] }>("worktree_dirty_report", { wtKey }),
+  worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
 };
@@ -222,6 +230,40 @@ export const on = {
   terminalExit: (cb: (e: TerminalExitEvent) => void): Promise<UnlistenFn> =>
     listen<TerminalExitEvent>("terminal:exit", (e) => cb(e.payload)),
 };
+
+/** Structured backend error — every command rejects with `{ code, message }`. */
+export interface BackendError {
+  code:
+    | "git"
+    | "db"
+    | "setup"
+    | "process"
+    | "terminal"
+    | "config"
+    | "not_found"
+    | "invalid_input"
+    | "conflict"
+    | "internal";
+  message: string;
+}
+
+/** Human-readable message from any rejection (structured backend error, plain
+ * string from a plugin, or an Error). Use instead of `String(e)`. */
+export function errText(e: unknown): string {
+  if (e && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    if (typeof o.message === "string") return o.message;
+  }
+  return String(e);
+}
+
+/** The backend error code, when the rejection carries one. */
+export function errCode(e: unknown): BackendError["code"] | null {
+  if (e && typeof e === "object" && typeof (e as Record<string, unknown>).code === "string") {
+    return (e as BackendError).code;
+  }
+  return null;
+}
 
 /** True when running inside the Tauri webview (false in a plain browser tab). */
 export const hasBackend = () => "__TAURI_INTERNALS__" in window;

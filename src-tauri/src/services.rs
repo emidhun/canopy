@@ -3,14 +3,17 @@ use crate::state::{AppState, SvcStatus};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 pub const LOG_CAP: usize = 160;
-const LOG_FLUSH_MS: u64 = 80;
+// Flush cadence for log batches. 200ms caps store-update/render pressure at
+// 5/sec per noisy service (was 12.5/sec at 80ms) — meaningful on low-spec
+// machines during a webpack burst, imperceptible as log-tail latency.
+const LOG_FLUSH_MS: u64 = 200;
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,10 +34,42 @@ impl LogLine {
 fn chrono_time() -> String {
     // HH:MM:SS local time without pulling in chrono
     let now = std::time::SystemTime::now();
-    let secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-    let offset = crate::proc::local_utc_offset_secs();
+    let secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let offset = cached_utc_offset(secs);
     let local = (secs as i64 + offset).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", local / 3600, (local % 3600) / 60, local % 60)
+}
+
+/// Local UTC offset with a 60s cache — the exact value only shifts on a DST
+/// boundary, and computing it per log line meant a localtime_r call for every
+/// line of a webpack burst. Timestamp and offset are packed into ONE atomic
+/// (see `pack_offset`) so a racing reader can never pair a fresh timestamp
+/// with a stale offset.
+fn cached_utc_offset(now_secs: u64) -> i64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static PACKED: AtomicU64 = AtomicU64::new(0);
+    let p = PACKED.load(Ordering::Relaxed);
+    if p != 0 {
+        let (ts, off) = unpack_offset(p);
+        if now_secs.saturating_sub(ts) <= 60 {
+            return off;
+        }
+    }
+    let fresh = crate::proc::local_utc_offset_secs().clamp(-OFFSET_BIAS, OFFSET_BIAS);
+    PACKED.store(pack_offset(now_secs, fresh), Ordering::Relaxed);
+    fresh
+}
+
+/// UTC offsets span ±14h (= ±50400s) < 2^17, so `offset + BIAS` fits the low
+/// 20 bits and the fetch timestamp takes the rest: `ts << 20 | offset + BIAS`.
+const OFFSET_BIAS: i64 = 50_400;
+
+fn pack_offset(ts_secs: u64, offset: i64) -> u64 {
+    (ts_secs << 20) | ((offset + OFFSET_BIAS) as u64)
+}
+
+fn unpack_offset(p: u64) -> (u64, i64) {
+    (p >> 20, ((p & 0xF_FFFF) as i64) - OFFSET_BIAS)
 }
 
 pub struct ProcEntry {
@@ -42,6 +77,9 @@ pub struct ProcEntry {
     /// process-group / job handle used to tear down the whole child tree
     pub group: crate::proc::ProcGroup,
     pub started_at: Instant,
+    /// read only by the Unix crash-orphan persist (Windows has none — the Job
+    /// Object's KILL_ON_JOB_CLOSE makes the OS reap the tree)
+    #[cfg_attr(windows, allow(dead_code))]
     pub started_unix: u64,
     /// generation guard: stop() bumps this so a stale waiter doesn't clobber state
     pub generation: u64,
@@ -51,13 +89,14 @@ pub struct ProcEntry {
 pub struct ProcTable {
     pub procs: Mutex<HashMap<String, ProcEntry>>,
     pub logs: Mutex<HashMap<String, VecDeque<LogLine>>>,
-    pub resetting: Mutex<HashMap<String, bool>>,
+    /// open append handles for the on-disk service logs (see `persist_log_lines`)
+    pub log_files: Mutex<HashMap<String, LogSink>>,
     generation: Mutex<u64>,
 }
 
 impl ProcTable {
     fn next_gen(&self) -> u64 {
-        let mut g = self.generation.lock().unwrap();
+        let mut g = self.generation.lock();
         *g += 1;
         *g
     }
@@ -76,10 +115,10 @@ struct StatusEvent<'a> {
 
 pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Option<u64>, exit_code: Option<i32>) {
     let state = app.state::<AppState>();
-    state.statuses.write().unwrap().insert(key.to_string(), status);
+    state.statuses.write().insert(key.to_string(), status);
     // patch cached tree so late get_tree calls see fresh statuses
     {
-        let mut tree = state.tree.write().unwrap();
+        let mut tree = state.tree.write();
         for r in tree.iter_mut() {
             for w in r.worktrees.iter_mut() {
                 for s in w.services.iter_mut() {
@@ -93,23 +132,126 @@ pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Opt
     let _ = app.emit("service:status", &StatusEvent { svc_key: key, status, started_at, exit_code });
 }
 
+
+/// Deliver to the main window's listeners only — the popover subscribes to the
+/// shared store but renders no logs/stats, and log bursts are the hottest
+/// event in the app.
+fn main_window_only(t: &tauri::EventTarget) -> bool {
+    matches!(t, tauri::EventTarget::WebviewWindow { label } if label == "main")
+}
+
 pub fn push_log(app: &AppHandle, key: &str, line: LogLine) {
     let table = app.state::<ProcTable>();
     {
-        let mut logs = table.logs.lock().unwrap();
+        let mut logs = table.logs.lock();
         let buf = logs.entry(key.to_string()).or_default();
         buf.push_back(line.clone());
         while buf.len() > LOG_CAP {
             buf.pop_front();
         }
     }
+    persist_log_lines(app, key, std::slice::from_ref(&line));
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
     struct LogEvent<'a> {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: vec![line] });
+    // ring + disk always record; the emit is skipped while nothing is on
+    // screen (the UI re-snapshots the ring via get_logs on tab select,
+    // primeLogs, and window focus)
+    if crate::windows_visible() {
+        let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: vec![line] }, main_window_only);
+    }
+}
+
+/// Cap for one on-disk service log before it rolls to `<name>.1.log`.
+const SVC_LOG_ROTATE_BYTES: u64 = 2 * 1024 * 1024;
+/// Longest generated log filename stem; beyond this the flattened svc_key is
+/// truncated and hashed, since 255 bytes is the per-component limit on APFS,
+/// ext4 and NTFS alike and deep worktree paths flatten into long names.
+const LOG_NAME_MAX: usize = 120;
+
+/// Open sink for one service's on-disk log. Holding the handle (and counting
+/// bytes in-process) keeps the steady-state cost of a flush to a single
+/// `write` — the log pump fires every 80ms per running service, so resolving
+/// the directory and reopening the file each time was pure syscall overhead.
+pub struct LogSink {
+    file: std::fs::File,
+    written: u64,
+}
+
+/// `<app-log-dir>/services`, resolved and created once per run.
+fn service_log_dir(app: &AppHandle) -> Option<&'static std::path::PathBuf> {
+    static DIR: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = app.path().app_log_dir().ok()?.join("services");
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir)
+    })
+    .as_ref()
+}
+
+/// svc_key (`<wt path>::<service id>`) flattened to a filesystem-safe stem,
+/// length-bounded so a deep worktree path can't overflow the 255-byte
+/// filename limit.
+fn log_file_stem(key: &str) -> String {
+    let flat: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
+        .collect();
+    if flat.len() <= LOG_NAME_MAX {
+        return flat;
+    }
+    // keep the tail (worktree + service, the part a human recognizes) and
+    // prefix a cheap hash of the whole key so distinct services never collide
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let tail: String = flat.chars().skip(flat.chars().count() - (LOG_NAME_MAX - 17)).collect();
+    format!("{h:016x}_{tail}")
+}
+
+/// Append log lines to a per-service file under `<app-log-dir>/services/`.
+/// The in-memory ring keeps only LOG_CAP lines — a crash 500 lines in would
+/// otherwise lose its own cause. Best-effort: log I/O never fails a service op.
+fn persist_log_lines(app: &AppHandle, key: &str, lines: &[LogLine]) {
+    use std::io::Write;
+    if lines.is_empty() {
+        return;
+    }
+    let Some(dir) = service_log_dir(app) else { return };
+    let mut body = String::new();
+    for l in lines {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "{} [{}] {}", l.t, l.lv, l.text);
+    }
+
+    let table = app.state::<ProcTable>();
+    let mut sinks = table.log_files.lock();
+    let stem = log_file_stem(key);
+    let path = dir.join(format!("{stem}.log"));
+
+    // rotate on the byte count we already track — no metadata() syscall
+    if let Some(s) = sinks.get(key) {
+        if s.written + body.len() as u64 > SVC_LOG_ROTATE_BYTES {
+            sinks.remove(key); // drop the handle before renaming (Windows)
+            let _ = std::fs::rename(&path, dir.join(format!("{stem}.1.log")));
+        }
+    }
+    let sink = match sinks.entry(key.to_string()) {
+        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+        std::collections::hash_map::Entry::Vacant(e) => {
+            let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+            let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+            e.insert(LogSink { file, written })
+        }
+    };
+    if sink.file.write_all(body.as_bytes()).is_ok() {
+        sink.written += body.len() as u64;
+    }
 }
 
 /// Persist live service pgids so a crash can be swept on next launch. Unix-only:
@@ -122,7 +264,6 @@ fn persist_orphans(app: &AppHandle) {
     let orphans: Vec<OrphanProc> = table
         .procs
         .lock()
-        .unwrap()
         .iter()
         .map(|(k, p)| OrphanProc {
             svc_key: k.clone(),
@@ -132,7 +273,7 @@ fn persist_orphans(app: &AppHandle) {
         .collect();
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.orphans = orphans;
         rt.clone()
     };
@@ -145,12 +286,12 @@ fn persist_orphans(_app: &AppHandle) {}
 /// Resolve a service's config + worktree env (PORT etc.) from settings.
 fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, HashMap<String, String>), String> {
     let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
+    let tree = state.tree.read();
     for r in tree.iter() {
         for w in r.worktrees.iter() {
             for s in w.services.iter() {
                 if s.svc_key == key {
-                    let settings = state.settings.read().unwrap();
+                    let settings = state.settings.read();
                     let repo = settings.repos.iter().find(|rc| rc.id == r.repo_id).ok_or("repo gone")?;
                     let cfg = repo
                         .services
@@ -185,7 +326,7 @@ fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, Ha
 pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     {
         let table = app.state::<ProcTable>();
-        if table.procs.lock().unwrap().contains_key(key) {
+        if table.procs.lock().contains_key(key) {
             return Ok(()); // already running
         }
     }
@@ -244,7 +385,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     let generation = {
         let table = app.state::<ProcTable>();
         let generation = table.next_gen();
-        table.procs.lock().unwrap().insert(
+        table.procs.lock().insert(
             key.to_string(),
             ProcEntry { pid, group, started_at: Instant::now(), started_unix, generation },
         );
@@ -308,7 +449,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
             let status = child.wait().await;
             let table = app.state::<ProcTable>();
             {
-                let mut procs = table.procs.lock().unwrap();
+                let mut procs = table.procs.lock();
                 match procs.get(&key) {
                     Some(p) if p.generation == generation => {
                         procs.remove(&key);
@@ -343,7 +484,7 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
 fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
     let table = app.state::<ProcTable>();
     {
-        let mut logs = table.logs.lock().unwrap();
+        let mut logs = table.logs.lock();
         let buf = logs.entry(key.to_string()).or_default();
         for l in batch.iter() {
             buf.push_back(l.clone());
@@ -352,26 +493,37 @@ fn flush_batch(app: &AppHandle, key: &str, batch: &mut Vec<LogLine>) {
             buf.pop_front();
         }
     }
+    persist_log_lines(app, key, batch);
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
     struct LogEvent<'a> {
         svc_key: &'a str,
         lines: Vec<LogLine>,
     }
-    let _ = app.emit("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) });
+    // see push_log: recorded always, emitted only when someone can see it
+    if crate::windows_visible() {
+        let _ = app.emit_filter("service:log", &LogEvent { svc_key: key, lines: std::mem::take(batch) }, main_window_only);
+    } else {
+        batch.clear();
+    }
 }
 
-fn classify_line(text: &str, from_stderr: bool) -> &'static str {
-    let lower = text.to_lowercase();
-    if lower.contains("error") || lower.contains("fatal") || lower.contains("err!") {
+/// Case-insensitive substring search without allocating (the old
+/// `to_lowercase()` copied every log line — thousands per webpack burst).
+fn contains_ci(hay: &str, needle: &str) -> bool {
+    let (h, n) = (hay.as_bytes(), needle.as_bytes());
+    !n.is_empty() && h.len() >= n.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
+fn classify_line(text: &str, _from_stderr: bool) -> &'static str {
+    if contains_ci(text, "error") || contains_ci(text, "fatal") || contains_ci(text, "err!") {
         "err"
-    } else if lower.contains("warn") {
+    } else if contains_ci(text, "warn") {
         "warn"
-    } else if lower.contains("listening") || lower.contains("compiled successfully") || lower.contains("ready") {
+    } else if contains_ci(text, "listening") || contains_ci(text, "compiled successfully") || contains_ci(text, "ready") {
         "ok"
-    } else if from_stderr {
-        "info" // many dev tools log normal output to stderr
     } else {
+        // stderr alone isn't an error — many dev tools log normal output there
         "info"
     }
 }
@@ -381,7 +533,7 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     // generation so a restart during the grace window isn't hard-killed by us.
     let generation = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         match procs.get(key) {
             Some(p) => {
                 crate::proc::terminate_group(&p.group);
@@ -399,7 +551,7 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STOP_GRACE).await;
         let table = app2.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         if let Some(p) = procs.get(&key2) {
             if p.generation == generation {
                 crate::proc::kill_group(&p.group);
@@ -409,21 +561,45 @@ pub async fn stop_service(app: &AppHandle, key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Wait up to `ticks * 150ms` for the waiter task to reap `key`.
+async fn wait_reaped(app: &AppHandle, key: &str, ticks: u32) -> bool {
+    for _ in 0..ticks {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let table = app.state::<ProcTable>();
+        if !table.procs.lock().contains_key(key) {
+            return true;
+        }
+    }
+    false
+}
+
 pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
     let was_running = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         procs.contains_key(key)
     };
     if was_running {
         push_log(app, key, LogLine::now("warn", "restarting…"));
         stop_service(app, key).await?;
-        // wait for the waiter to reap (status -> stopped/error)
-        for _ in 0..40 {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            let table = app.state::<ProcTable>();
-            if !table.procs.lock().unwrap().contains_key(key) {
-                break;
+        // stop() SIGTERMs now and SIGKILLs at the 3s grace mark; give the
+        // waiter up to 6s to reap before escalating ourselves.
+        if !wait_reaped(app, key, 40).await {
+            {
+                let table = app.state::<ProcTable>();
+                let procs = table.procs.lock();
+                if let Some(p) = procs.get(key) {
+                    crate::proc::kill_group(&p.group);
+                }
+            }
+            if !wait_reaped(app, key, 20).await {
+                // start_service would see the stale entry and return Ok(())
+                // doing nothing — the restart MUST fail loudly instead, or a
+                // port/database change reports applied while the old process
+                // keeps serving the old config.
+                let msg = "restart failed: previous process did not exit (SIGKILL sent) — try again";
+                push_log(app, key, LogLine::now("err", msg));
+                return Err(msg.into());
             }
         }
     }
@@ -434,7 +610,7 @@ pub async fn restart_service(app: &AppHandle, key: &str) -> Result<(), String> {
 pub async fn stop_all(app: &AppHandle) {
     let keys: Vec<String> = {
         let table = app.state::<ProcTable>();
-        let procs = table.procs.lock().unwrap();
+        let procs = table.procs.lock();
         procs.keys().cloned().collect()
     };
     for k in &keys {
@@ -442,7 +618,7 @@ pub async fn stop_all(app: &AppHandle) {
     }
     for _ in 0..40 {
         let table = app.state::<ProcTable>();
-        let empty = table.procs.lock().unwrap().is_empty();
+        let empty = table.procs.lock().is_empty();
         if empty {
             break;
         }
@@ -452,13 +628,7 @@ pub async fn stop_all(app: &AppHandle) {
 
 /// Worktree-level: collect svc keys of one worktree.
 pub fn worktree_svc_keys(app: &AppHandle, wt_key: &str) -> Vec<String> {
-    let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
-    tree.iter()
-        .flat_map(|r| r.worktrees.iter())
-        .filter(|w| w.wt_key == wt_key)
-        .flat_map(|w| w.services.iter().map(|s| s.svc_key.clone()))
-        .collect()
+    app.state::<AppState>().wt_service_keys(wt_key)
 }
 
 /// Reset DB: runs the repo's resetDb command in the worktree root; output goes
@@ -466,8 +636,8 @@ pub fn worktree_svc_keys(app: &AppHandle, wt_key: &str) -> Vec<String> {
 pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
     let (cmd_str, log_key) = {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let settings = state.settings.read().unwrap();
+        let tree = state.tree.read();
+        let settings = state.settings.read();
         let mut found = None;
         for r in tree.iter() {
             for w in r.worktrees.iter() {
@@ -489,14 +659,8 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
         found.ok_or("unknown worktree")?
     };
 
-    {
-        let table = app.state::<ProcTable>();
-        let mut resetting = table.resetting.lock().unwrap();
-        if resetting.get(wt_key).copied().unwrap_or(false) {
-            return Err("Reset already in progress".into());
-        }
-        resetting.insert(wt_key.to_string(), true);
-    }
+    // concurrency guard: the command layer holds the per-worktree OpLease
+    // (state::try_lease) for the whole reset — no separate flag needed.
 
     #[derive(Serialize, Clone)]
     #[serde(rename_all = "camelCase")]
@@ -519,11 +683,6 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
         .current_dir(wt_key)
         .output()
         .await;
-
-    {
-        let table = app.state::<ProcTable>();
-        table.resetting.lock().unwrap().remove(wt_key);
-    }
 
     match out {
         Ok(o) if o.status.success() => {
@@ -559,7 +718,7 @@ pub async fn reset_db(app: &AppHandle, wt_key: &str) -> Result<(), String> {
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
-        let rt = state.runtime.read().unwrap();
+        let rt = state.runtime.read();
         rt.orphans.clone()
     };
     for o in &orphans {
@@ -568,7 +727,7 @@ pub fn sweep_orphans(app: &AppHandle) {
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
         if alive && proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
-            eprintln!("[wtm] sweeping orphan pgid {} ({})", o.pgid, o.svc_key);
+            log::warn!("sweeping orphan pgid {} ({})", o.pgid, o.svc_key);
             unsafe {
                 libc::killpg(o.pgid, libc::SIGTERM);
             }
@@ -576,7 +735,7 @@ pub fn sweep_orphans(app: &AppHandle) {
     }
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.orphans.clear();
         rt.clone()
     };
@@ -587,22 +746,95 @@ pub fn sweep_orphans(app: &AppHandle) {
 pub fn sweep_orphans(_app: &AppHandle) {}
 
 /// Compare recorded spawn time against the process's actual start time (±5s).
-/// Unix-only (uses `ps`); only the Unix crash sweep calls it.
+/// This is the guard against PID recycling: after a reboot (or enough process
+/// churn) the persisted pgid can belong to an unrelated process — the sweep
+/// must never SIGTERM that. Unix-only; only the Unix crash sweep calls it.
 #[cfg(unix)]
 pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
-        .output();
-    let Ok(out) = out else { return false };
-    if !out.status.success() {
-        return false;
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        false,
+        ProcessRefreshKind::nothing(),
+    );
+    let Some(p) = sys.process(Pid::from_u32(pid)) else { return false };
+    let actual = p.start_time(); // seconds since the epoch
+    // an unreadable start time (0) fails the match — skipping a sweep is safe,
+    // killing an innocent process group is not
+    actual != 0 && actual.abs_diff(recorded_secs) <= 5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_line, log_file_stem, LOG_NAME_MAX};
+
+    #[test]
+    fn log_file_stem_is_safe_and_length_bounded() {
+        let short = log_file_stem("/Users/me/wt/feat::frontend");
+        assert_eq!(short, "_Users_me_wt_feat__frontend", "separators flattened");
+
+        // a deep path must not overflow the 255-byte filename limit
+        let deep = format!("/Users/me/{}/wt::server", "nested-dir/".repeat(40));
+        let stem = log_file_stem(&deep);
+        assert!(stem.len() <= LOG_NAME_MAX, "bounded: {}", stem.len());
+        assert!(stem.ends_with("wt__server"), "keeps the recognizable tail: {stem}");
+
+        // two long keys differing only at the head still get distinct names
+        let a = log_file_stem(&format!("/a/{}/wt::server", "x/".repeat(80)));
+        let b = log_file_stem(&format!("/b/{}/wt::server", "x/".repeat(80)));
+        assert_ne!(a, b, "hash prefix disambiguates truncated names");
     }
-    let lstart = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if lstart.is_empty() {
-        return false;
+
+    /// The PID-recycling guard must recognize a live process's real start time
+    /// (this also proves sysinfo delivers a non-zero start_time on this OS —
+    /// the guard fails closed to "no match" when it can't read one).
+    #[test]
+    #[cfg(unix)]
+    fn own_process_start_time_matches_itself() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let pid = std::process::id();
+        use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing(),
+        );
+        let start = sys.process(Pid::from_u32(pid)).map(|p| p.start_time()).unwrap_or(0);
+        assert!(start > 0, "sysinfo must expose a start time");
+        assert!(super::proc_start_time_matches(pid, start), "exact start time matches");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        assert!(!super::proc_start_time_matches(pid, now + 3600), "wrong time must not match");
     }
-    // The pgid-existence check plus a sane recorded time is sufficient for v1;
-    // parsing lstart exactly would require another shell-out.
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    recorded_secs <= now
+
+    #[test]
+    fn classifies_log_levels() {
+        assert_eq!(classify_line("Error: boom", false), "err");
+        assert_eq!(classify_line("npm WARN deprecated", false), "warn");
+        assert_eq!(classify_line("webpack compiled successfully", false), "ok");
+        assert_eq!(classify_line("Listening on :3000", true), "ok");
+        assert_eq!(classify_line("plain build output", true), "info", "stderr alone isn't an error");
+    }
+
+    #[test]
+    fn contains_ci_edge_cases() {
+        assert!(super::contains_ci("XxErRoRxX", "error"), "mid-word, mixed case");
+        assert!(!super::contains_ci("err", "error"), "needle longer than hay");
+        assert!(!super::contains_ci("", "e"), "empty hay");
+        assert!(!super::contains_ci("anything", ""), "empty needle matches nothing (never classifies)");
+    }
+
+    /// The packed-atomic cache must round-trip both extremes of the legal
+    /// UTC-offset range without the timestamp and offset bleeding into each
+    /// other's bits.
+    #[test]
+    fn offset_packing_round_trips() {
+        use super::{pack_offset, unpack_offset, OFFSET_BIAS};
+        for &off in &[-OFFSET_BIAS, -3600, 0, 19800 /* +05:30 */, OFFSET_BIAS] {
+            for &ts in &[0u64, 1_722_500_000, u64::MAX >> 21] {
+                assert_eq!(unpack_offset(pack_offset(ts, off)), (ts, off), "ts={ts} off={off}");
+            }
+        }
+    }
 }

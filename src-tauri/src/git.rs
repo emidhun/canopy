@@ -1,14 +1,40 @@
 use serde::Serialize;
+use std::time::Duration;
 use tokio::process::Command;
 
+/// Local git operations (status, rev-parse, checkout…). Generous — a checkout
+/// on a huge repo takes time — but bounded: an unresponsive git (dead network
+/// mount, wedged index.lock) must not hang a command forever.
+const GIT_TIMEOUT: Duration = Duration::from_secs(300);
+/// Network operations (fetch, pull, submodule clone/update) get longer.
+const GIT_NETWORK_TIMEOUT: Duration = Duration::from_secs(900);
+
 pub async fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    run_git_with_timeout(cwd, args, GIT_TIMEOUT).await
+}
+
+/// For fetch/pull/submodule-transfer calls — same semantics, longer leash.
+async fn run_git_net(cwd: &str, args: &[&str]) -> Result<String, String> {
+    run_git_with_timeout(cwd, args, GIT_NETWORK_TIMEOUT).await
+}
+
+async fn run_git_with_timeout(cwd: &str, args: &[&str], dur: Duration) -> Result<String, String> {
+    let fut = Command::new("git")
         .arg("-C")
         .arg(cwd)
         .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("failed to run git: {e}"))?;
+        .kill_on_drop(true) // a timed-out git must not linger
+        .output();
+    let out = match tokio::time::timeout(dur, fut).await {
+        Ok(res) => res.map_err(|e| format!("failed to run git: {e}"))?,
+        Err(_) => {
+            return Err(format!(
+                "git {} timed out after {}s",
+                args.first().copied().unwrap_or(""),
+                dur.as_secs()
+            ))
+        }
+    };
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -26,14 +52,18 @@ pub struct WorktreeInfo {
 /// `git worktree list --porcelain` — first entry is the main working tree.
 pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     let out = run_git(repo_path, &["worktree", "list", "--porcelain"]).await?;
+    Ok(parse_worktree_list(&out))
+}
 
+/// Pure parser for `git worktree list --porcelain` output.
+fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
     struct Entry {
         path: String,
         branch: Option<String>,
         bare: bool,
     }
     let mut entries: Vec<Entry> = Vec::new();
-    for line in out.lines() {
+    for line in porcelain.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
             entries.push(Entry { path: p.to_string(), branch: None, bare: false });
         } else if let Some(e) = entries.last_mut() {
@@ -47,7 +77,7 @@ pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String
         }
     }
 
-    Ok(entries
+    entries
         .into_iter()
         .filter(|e| !e.bare)
         .enumerate()
@@ -56,7 +86,7 @@ pub async fn list_worktrees(repo_path: &str) -> Result<Vec<WorktreeInfo>, String
             branch: e.branch.unwrap_or_else(|| "(detached)".into()),
             is_main: i == 0,
         })
-        .collect())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
@@ -71,6 +101,17 @@ pub struct GitMeta {
 
 pub async fn git_meta(wt_path: &str) -> Result<GitMeta, String> {
     let status = run_git(wt_path, &["status", "--porcelain=v2", "--branch"]).await?;
+    let mut meta = parse_status_meta(&status);
+    if let Ok(log) = run_git(wt_path, &["log", "-1", "--format=%ct%x09%s"]).await {
+        let (ts, msg) = parse_last_commit(&log);
+        meta.last_commit_ts = ts;
+        meta.last_commit_msg = msg;
+    }
+    Ok(meta)
+}
+
+/// Pure parser for `git status --porcelain=v2 --branch`: ahead/behind + dirty.
+fn parse_status_meta(status: &str) -> GitMeta {
     let mut meta = GitMeta::default();
     for line in status.lines() {
         if let Some(ab) = line.strip_prefix("# branch.ab ") {
@@ -82,16 +123,19 @@ pub async fn git_meta(wt_path: &str) -> Result<GitMeta, String> {
                     meta.behind = b.parse().unwrap_or(0);
                 }
             }
-        } else if !line.starts_with('#') {
+        } else if !line.starts_with('#') && !line.trim().is_empty() {
             meta.dirty = true;
         }
     }
-    if let Ok(log) = run_git(wt_path, &["log", "-1", "--format=%ct%x09%s"]).await {
-        let mut it = log.trim_end().splitn(2, '\t');
-        meta.last_commit_ts = it.next().and_then(|t| t.parse().ok()).unwrap_or(0);
-        meta.last_commit_msg = it.next().unwrap_or("").to_string();
-    }
-    Ok(meta)
+    meta
+}
+
+/// Pure parser for `git log -1 --format=%ct%x09%s`.
+fn parse_last_commit(log: &str) -> (i64, String) {
+    let mut it = log.trim_end().splitn(2, '\t');
+    let ts = it.next().and_then(|t| t.trim().parse().ok()).unwrap_or(0);
+    let msg = it.next().unwrap_or("").to_string();
+    (ts, msg)
 }
 
 /// (name, path) pairs from a worktree's .gitmodules (empty if none).
@@ -126,7 +170,7 @@ pub async fn pull(wt_path: &str) -> Result<String, String> {
     // Superproject fast-forward. A worktree branch with no upstream (or a
     // non-ff remote) shouldn't block pulling submodules that DO track a branch,
     // so this failure is soft — recorded, then we still update submodules.
-    let super_res = run_git(wt_path, &["pull", "--ff-only"]).await;
+    let super_res = run_git_net(wt_path, &["pull", "--ff-only"]).await;
 
     let mods = submodule_entries(wt_path).await;
     if mods.is_empty() {
@@ -153,16 +197,16 @@ pub async fn pull(wt_path: &str) -> Result<String, String> {
         // -c protocol.file.allow=always: submodules with local/relative URLs
         // would otherwise be blocked by git's file-protocol default
         let result = if on_branch {
-            run_git(&sm_path, &["pull", "--ff-only"]).await.map(|_| pulled += 1)
+            run_git_net(&sm_path, &["pull", "--ff-only"]).await.map(|_| pulled += 1)
         } else if tracks_branch {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--remote", "--recursive", "--", sm],
             )
             .await
             .map(|_| pulled += 1)
         } else {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
             )
@@ -307,17 +351,17 @@ pub async fn pull_submodule(wt_path: &str, sm: &str) -> Result<String, String> {
     .unwrap_or(false);
 
     if on_branch {
-        run_git(&sm_path, &["pull", "--ff-only"]).await?;
+        run_git_net(&sm_path, &["pull", "--ff-only"]).await?;
         Ok("pulled".into())
     } else if tracks_branch {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--remote", "--recursive", "--", sm],
         )
         .await?;
         Ok("pulled".into())
     } else {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
         )
@@ -388,7 +432,7 @@ pub async fn switch_branch(wt_path: &str, branch: &str, create: bool, base: Opti
     // sync submodules to the new branch's pins (no-op when there are none).
     // The branch HAS switched at this point, so a sync failure says so.
     if !submodule_entries(wt_path).await.is_empty() {
-        run_git(
+        run_git_net(
             wt_path,
             &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"],
         )
@@ -404,7 +448,7 @@ pub async fn fetch_submodules(wt_path: &str) -> usize {
     let mut n = 0usize;
     for (_name, sm) in submodule_entries(wt_path).await {
         let sm_path = format!("{wt_path}/{sm}");
-        if run_git(&sm_path, &["fetch", "--prune"]).await.is_ok() {
+        if run_git_net(&sm_path, &["fetch", "--prune"]).await.is_ok() {
             n += 1;
         }
     }
@@ -422,7 +466,7 @@ pub struct Branches {
 /// `git fetch --all --prune` to refresh remote-tracking branches, recursing
 /// into submodules so their objects are fetched too.
 pub async fn fetch_all(repo_path: &str) -> Result<(), String> {
-    run_git(repo_path, &["fetch", "--all", "--prune", "--recurse-submodules"])
+    run_git_net(repo_path, &["fetch", "--all", "--prune", "--recurse-submodules"])
         .await
         .map(|_| ())
 }
@@ -526,7 +570,7 @@ pub async fn create_worktree(
         // -c protocol.file.allow=always: submodules with relative/local URLs
         // would otherwise be blocked by git's file-protocol default
         let result = if with_ref {
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--reference", &reference, "--", sm],
             )
@@ -536,7 +580,7 @@ pub async fn create_worktree(
         };
         if result.is_err() {
             progress(format!("submodule {sm}: falling back to full clone"));
-            run_git(
+            run_git_net(
                 wt_path,
                 &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive", "--", sm],
             )
@@ -550,18 +594,23 @@ pub async fn create_worktree(
 #[serde(rename_all = "camelCase")]
 pub struct DirtyReport {
     pub dirty: bool,
+    /// first entries only (see `total` for the full count)
     pub details: Vec<String>,
+    /// total changed paths — `details` is capped for display
+    pub total: usize,
 }
 
-/// Dirty check covering the worktree AND its submodules.
-pub async fn dirty_report(wt_path: &str) -> DirtyReport {
-    let mut details = Vec::new();
-    if let Ok(out) = run_git(wt_path, &["status", "--porcelain", "--ignore-submodules=none"]).await {
-        for l in out.lines().take(10) {
-            details.push(l.to_string());
-        }
-    }
-    DirtyReport { dirty: !details.is_empty(), details }
+/// Dirty check covering the worktree AND its submodules. A failed `git status`
+/// (index.lock held, corrupt repo, permissions) is an ERROR, never "clean" —
+/// this report is what arms a `worktree remove --force`.
+pub async fn dirty_report(wt_path: &str) -> Result<DirtyReport, String> {
+    let out = run_git(wt_path, &["status", "--porcelain", "--ignore-submodules=none"]).await?;
+    let lines: Vec<&str> = out.lines().filter(|l| !l.trim().is_empty()).collect();
+    Ok(DirtyReport {
+        dirty: !lines.is_empty(),
+        details: lines.iter().take(10).map(|l| l.to_string()).collect(),
+        total: lines.len(),
+    })
 }
 
 /// Remove a worktree. `--force` is required for any worktree containing
@@ -581,4 +630,156 @@ pub async fn remove_worktree(
     }
     let _ = run_git(repo_path, &["worktree", "prune"]).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_worktree_porcelain() {
+        let out = "worktree /repo\nHEAD abc123\nbranch refs/heads/main\n\n\
+                   worktree /repo-worktrees/feat\nHEAD def456\nbranch refs/heads/feat\n\n\
+                   worktree /repo-worktrees/det\nHEAD 987fed\ndetached\n";
+        let wts = parse_worktree_list(out);
+        assert_eq!(wts.len(), 3);
+        assert!(wts[0].is_main && wts[0].branch == "main" && wts[0].path == "/repo");
+        assert!(!wts[1].is_main && wts[1].branch == "feat");
+        assert_eq!(wts[2].branch, "(detached)");
+    }
+
+    #[test]
+    fn skips_bare_entries() {
+        let out = "worktree /repo.git\nbare\n\nworktree /wt\nHEAD abc\nbranch refs/heads/x\n";
+        let wts = parse_worktree_list(out);
+        assert_eq!(wts.len(), 1);
+        assert_eq!(wts[0].path, "/wt");
+        // NOTE: is_main is positional over the filtered list — a bare main repo
+        // promotes the first linked worktree, which matches git's ordering.
+        assert!(wts[0].is_main);
+    }
+
+    #[test]
+    fn parses_status_ahead_behind_dirty() {
+        let s = "# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +3 -1\n\
+                 1 .M N... 100644 100644 100644 abc def src/x.rs\n";
+        let m = parse_status_meta(s);
+        assert_eq!((m.ahead, m.behind, m.dirty), (3, 1, true));
+        let clean = "# branch.oid abc\n# branch.head main\n# branch.ab +0 -0\n";
+        let m = parse_status_meta(clean);
+        assert_eq!((m.ahead, m.behind, m.dirty), (0, 0, false));
+    }
+
+    #[test]
+    fn parses_last_commit_line() {
+        let (ts, msg) = parse_last_commit("1722500000\tfix: tab\tin message\n");
+        assert_eq!(ts, 1722500000);
+        assert_eq!(msg, "fix: tab\tin message", "only the first tab splits");
+        assert_eq!(parse_last_commit(""), (0, String::new()));
+    }
+
+    // ── integration: the real git CLI against throwaway repos ──
+    //
+    // These exercise the actual plumbing (worktree add/list/remove, status,
+    // meta) on whatever git the machine has — the same binary users run.
+    // Paths are compared by count/branch, never by string equality, because
+    // git canonicalizes (macOS /var → /private/var) and Windows mixes
+    // separators.
+
+    fn unique_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("canopy-git-{tag}-{}", std::process::id()))
+    }
+
+    async fn init_repo(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let d = dir.to_str().unwrap();
+        run_git(d, &["init"]).await.unwrap();
+        // CI runners have no global identity; commits fail without one
+        run_git(d, &["config", "user.email", "canopy-test@localhost"]).await.unwrap();
+        run_git(d, &["config", "user.name", "canopy-test"]).await.unwrap();
+        run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run_git(d, &["add", "."]).await.unwrap();
+        run_git(d, &["commit", "-m", "init"]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worktree_lifecycle_against_a_real_repo() {
+        let repo = unique_dir("life");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+
+        let wts = list_worktrees(rp).await.unwrap();
+        assert_eq!(wts.len(), 1, "fresh repo = one main checkout");
+        assert!(wts[0].is_main);
+
+        // meta: clean → dirty → clean
+        let m = git_meta(rp).await.unwrap();
+        assert!(!m.dirty);
+        assert_eq!(m.last_commit_msg, "init");
+        assert!(m.last_commit_ts > 0);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        assert!(git_meta(rp).await.unwrap().dirty, "edit must show as dirty");
+        run_git(rp, &["checkout", "--", "."]).await.unwrap();
+
+        // linked worktree on a new branch
+        let wt = unique_dir("life-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        let wtp_owned = wt.to_str().unwrap().to_string();
+        let wtp = wtp_owned.as_str();
+        create_worktree(rp, wtp, "feat-x", Some("HEAD"), true, |_| {}).await.unwrap();
+        assert!(wt.join("a.txt").exists(), "checkout materialized");
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 2);
+        let head = run_git(wtp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), "feat-x");
+
+        // dirty report: clean, then counts an untracked file
+        let r = dirty_report(wtp).await.unwrap();
+        assert!(!r.dirty && r.total == 0, "{r:?}");
+        std::fs::write(wt.join("b.txt"), "x").unwrap();
+        let r = dirty_report(wtp).await.unwrap();
+        assert!(r.dirty && r.total == 1, "{r:?}");
+
+        // remove (--force covers the untracked file) + branch deletion
+        remove_worktree(rp, wtp, Some("feat-x"), true).await.unwrap();
+        assert!(!wt.exists(), "worktree directory removed");
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 1);
+        let branches = run_git(rp, &["branch", "--list", "feat-x"]).await.unwrap();
+        assert!(branches.trim().is_empty(), "branch deleted: {branches:?}");
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[tokio::test]
+    async fn switch_branch_in_place_and_back() {
+        let repo = unique_dir("switch");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+        let original = list_worktrees(rp).await.unwrap()[0].branch.clone();
+
+        switch_branch(rp, "feat-y", true, None).await.unwrap();
+        let head = run_git(rp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), "feat-y");
+
+        // plain checkout back (create=false path)
+        switch_branch(rp, &original, false, None).await.unwrap();
+        let head = run_git(rp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
+        assert_eq!(head.trim(), original);
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// Data-loss guard: this report arms `worktree remove --force`, and a
+    /// failed probe must be an ERROR the UI fails closed on — never `clean`.
+    #[tokio::test]
+    async fn dirty_report_fails_closed_on_a_broken_repo() {
+        let missing = unique_dir("never-created");
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(
+            dirty_report(missing.to_str().unwrap()).await.is_err(),
+            "missing path must error, not report clean"
+        );
+    }
 }

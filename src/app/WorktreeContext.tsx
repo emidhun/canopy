@@ -4,7 +4,7 @@
 // that travels with the branch is an open product question — see the handoff.
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { Chevron, Copy, Doc, File, Info, Link as LinkIcon, Plus, Sparkle } from "../icons";
-import { hasBackend, ipc } from "../ipc";
+import { errText, hasBackend, ipc } from "../ipc";
 import type { RepoNode, WorktreeNode } from "../types";
 
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim());
@@ -18,7 +18,7 @@ async function openLink(url: string, onToast: (m: string) => void) {
       window.open(url, "_blank", "noopener");
     }
   } catch (e) {
-    onToast(`Couldn't open link — ${String(e)}`);
+    onToast(`Couldn't open link — ${errText(e)}`);
   }
 }
 
@@ -27,7 +27,7 @@ async function copyPrBody(ctx: WtContext, onToast: (m: string) => void) {
     await navigator.clipboard.writeText(composeContextMd(ctx));
     onToast("Context copied as PR body");
   } catch (e) {
-    onToast(`Couldn't copy — ${String(e)}`);
+    onToast(`Couldn't copy — ${errText(e)}`);
   }
 }
 
@@ -198,7 +198,7 @@ export function ContextEditor({
       if (isUrl(value)) openLink(value, onToast);
       else onToast("That resource is not a browser link");
     } else if (hasBackend()) {
-      ipc.openFileInEditor(wtKey, value).catch((err) => onToast(`Couldn't open file — ${String(err)}`));
+      ipc.openFileInEditor(wtKey, value).catch((err) => onToast(`Couldn't open file — ${errText(err)}`));
     } else onToast("Opening files needs the desktop app");
   };
   return (

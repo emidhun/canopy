@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -370,7 +370,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
   const test = (i: number, cmd: string) => {
     if (!hasBackend() || !selKey) { flash("Open a worktree to test a command"); return; }
     setRan({ i, state: "running" });
-    ipc.runCustomCommand(selKey, cmd).then(() => setRan({ i, state: "done" })).catch((e) => { setRan(null); flash(`Command failed — ${String(e)}`); });
+    ipc.runCustomCommand(selKey, cmd).then(() => setRan({ i, state: "done" })).catch((e) => { setRan(null); flash(`Command failed — ${errText(e)}`); });
   };
   return (
     <div className="sec">
@@ -1074,7 +1074,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       setRepoId(added.id);
       setPage("repo-general");
       showToast("Repository added — configure it below");
-    } catch (e) { showToast(String(e)); }
+    } catch (e) { showToast(errText(e)); }
   }
 
   async function removeRepo() {
@@ -1087,7 +1087,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       setRepoId(fresh.repos[0]?.id ?? "");
       setPage("general");
       showToast(`Removed ${repo.name}`);
-    } catch (e) { showToast(String(e)); }
+    } catch (e) { showToast(errText(e)); }
   }
 
   const goTo = (r: { page: PageId; label: string }) => {

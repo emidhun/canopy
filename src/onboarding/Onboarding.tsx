@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import "../styles/onboarding.css";
-import { hasBackend, ipc, type ProvisionEntry, type RepoDetection, type ServiceCfg } from "../ipc";
+import { errText, hasBackend, ipc, type ProvisionEntry, type RepoDetection, type ServiceCfg } from "../ipc";
 import { useStore } from "../store";
 import { Check, Cog, Fork, Globe, Package, Server, Spinner } from "../icons";
 
@@ -178,7 +178,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
       setScanned(false);
     } catch (e) {
       setDet(null);
-      setDetErr(String(e));
+      setDetErr(errText(e));
     } finally {
       setDetecting(false);
     }
@@ -203,7 +203,7 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
     try {
       // register the repo (idempotent — ignore "already registered")
       await ipc.addRepo(det.top).catch((e) => {
-        if (!String(e).toLowerCase().includes("already")) throw e;
+        if (!errText(e).toLowerCase().includes("already")) throw e;
       });
       const settings = await ipc.getSettings();
       const repo = settings.repos.find((r) => r.path === det.top);

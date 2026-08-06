@@ -4,7 +4,7 @@ import { create } from "zustand";
 import type { LogLine, RepoNode, ServiceNode, SvcStats, SvcStatus, WorktreeNode } from "./types";
 import { isLive } from "./types";
 import { genLine, logTime, mockTree } from "./mock";
-import { hasBackend, ipc, on } from "./ipc";
+import { errText, hasBackend, ipc, on } from "./ipc";
 
 const LOG_CAP = 160;
 const CPU_SAMPLES = 7; // the service-detail sparkline shows seven slots
@@ -243,7 +243,7 @@ export const useStore = create<State>((set, get) => {
     setStatus(svcKey, "starting");
     ipc.serviceStart(svcKey).catch((e) => {
       setStatus(svcKey, "error");
-      showToast(String(e));
+      showToast(errText(e));
     });
   }
   function stop(svcKey: string) {
@@ -251,7 +251,7 @@ export const useStore = create<State>((set, get) => {
     const svc = findSvc(get().tree, svcKey);
     if (!svc || svc.status === "stopped") return;
     setStatus(svcKey, "stopping");
-    ipc.serviceStop(svcKey).catch((e) => showToast(String(e)));
+    ipc.serviceStop(svcKey).catch((e) => showToast(errText(e)));
   }
 
   const mock = hasBackend() ? [] : mockTree();
@@ -399,13 +399,13 @@ export const useStore = create<State>((set, get) => {
         return;
       }
       setStatus(svcKey, "stopping");
-      ipc.serviceRestart(svcKey).catch((e) => showToast(String(e)));
+      ipc.serviceRestart(svcKey).catch((e) => showToast(errText(e)));
     },
     startAll: (wtKey) => {
       if (hasBackend()) {
         const f = findWt(get().tree, wtKey);
         f?.wt.services.forEach((s) => !isLive(s.status) && setStatus(s.svcKey, "starting"));
-        ipc.worktreeStartAll(wtKey).catch((e) => showToast(String(e)));
+        ipc.worktreeStartAll(wtKey).catch((e) => showToast(errText(e)));
         return;
       }
       const f = findWt(get().tree, wtKey);
@@ -415,7 +415,7 @@ export const useStore = create<State>((set, get) => {
       if (hasBackend()) {
         const f = findWt(get().tree, wtKey);
         f?.wt.services.forEach((s) => isLive(s.status) && setStatus(s.svcKey, "stopping"));
-        ipc.worktreeStopAll(wtKey).catch((e) => showToast(String(e)));
+        ipc.worktreeStopAll(wtKey).catch((e) => showToast(errText(e)));
         return;
       }
       const f = findWt(get().tree, wtKey);
@@ -447,7 +447,7 @@ export const useStore = create<State>((set, get) => {
       }
       // resetting flag + completion arrive via reset:status events
       showToast(`Resetting database — ${label}…`);
-      ipc.resetDb(wtKey).catch((e) => showToast(String(e)));
+      ipc.resetDb(wtKey).catch((e) => showToast(errText(e)));
     },
     gitPull: (wtKey) => {
       const label = wtLabel(get().tree, wtKey);
@@ -459,7 +459,7 @@ export const useStore = create<State>((set, get) => {
       ipc
         .gitPull(wtKey)
         .then((summary) => showToast(`✓ ${summary} — ${label}`))
-        .catch((e) => showToast(`Pull failed — ${String(e)}`));
+        .catch((e) => showToast(`Pull failed — ${errText(e)}`));
     },
     openWorktree: (wtKey, where) => {
       const labels = { editor: "Opening in editor", finder: "Revealing in Finder", terminal: "Opening Terminal" };
@@ -467,10 +467,10 @@ export const useStore = create<State>((set, get) => {
       if (!hasBackend()) return;
       const call =
         where === "editor" ? ipc.openInEditor(wtKey) : where === "finder" ? ipc.revealInFinder(wtKey) : ipc.openTerminal(wtKey);
-      call.catch((e) => showToast(String(e)));
+      call.catch((e) => showToast(errText(e)));
     },
     openPort: (port) => {
-      if (hasBackend()) ipc.openPort(port).catch((e) => showToast(String(e)));
+      if (hasBackend()) ipc.openPort(port).catch((e) => showToast(errText(e)));
       else showToast(`Opening http://localhost:${port}`);
     },
     openManager: () => {

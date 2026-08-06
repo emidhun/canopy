@@ -1,3 +1,4 @@
+use crate::error::CanopyError;
 use crate::git;
 use crate::services::{self, LogLine, ProcTable};
 use crate::settings::{self, RepoCfg, Settings};
@@ -5,26 +6,37 @@ use crate::state::{refresh_all_git_meta, refresh_git_meta, refresh_tree, AppStat
 use crate::terminal::{self, TermTable};
 use tauri::{AppHandle, Manager, State};
 
+/// Uniform containment: commands that act on a `wt_key` only accept keys the
+/// tree actually knows. Without this, a compromised webview could point
+/// git/db/terminal operations at arbitrary filesystem paths.
+fn ensure_known_worktree(app: &AppHandle, wt_key: &str) -> Result<(), CanopyError> {
+    if app.state::<AppState>().wt_context(wt_key).is_some() {
+        Ok(())
+    } else {
+        Err(CanopyError::not_found("unknown worktree"))
+    }
+}
+
 #[tauri::command]
-pub async fn get_tree(app: AppHandle) -> Result<Vec<RepoNode>, String> {
+pub async fn get_tree(app: AppHandle) -> Result<Vec<RepoNode>, CanopyError> {
     let cached = {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
+        let tree = state.tree.read();
         tree.clone()
     };
     if cached.is_empty() {
-        refresh_tree(&app).await
+        refresh_tree(&app).await.map_err(CanopyError::internal)
     } else {
         Ok(cached)
     }
 }
 
 #[tauri::command]
-pub async fn refresh(app: AppHandle, wt_key: Option<String>) -> Result<(), String> {
+pub async fn refresh(app: AppHandle, wt_key: Option<String>) -> Result<(), CanopyError> {
     match wt_key {
         Some(key) => refresh_git_meta(&app, &key).await,
         None => {
-            refresh_tree(&app).await?;
+            refresh_tree(&app).await.map_err(CanopyError::internal)?;
             refresh_all_git_meta(&app).await;
         }
     }
@@ -33,25 +45,30 @@ pub async fn refresh(app: AppHandle, wt_key: Option<String>) -> Result<(), Strin
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings.read().unwrap().clone()
+    state.settings.read().clone()
 }
 
 #[tauri::command]
-pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(), String> {
+pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(), CanopyError> {
     {
         let state = app.state::<AppState>();
-        *state.settings.write().unwrap() = new_settings.clone();
+        *state.settings.write() = new_settings.clone();
     }
-    settings::save_settings(&app, &new_settings)?;
-    refresh_tree(&app).await?;
-    refresh_all_git_meta(&app).await;
+    settings::save_settings(&app, &new_settings).map_err(CanopyError::config)?;
+    // await only the structural rebuild (the tree must reflect the new
+    // services/repos when this resolves); git meta is 2 spawns per worktree
+    // and arrives via worktree:git events — holding the Save button on it
+    // meant seconds of spinner for a millisecond write
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_all_git_meta(&app2).await });
     Ok(())
 }
 
 /// Validate + register a repo; returns the canonical repo config that was added.
 #[tauri::command]
-pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, String> {
-    let top = git::validate_repo(&path).await?;
+pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyError> {
+    let top = git::validate_repo(&path).await.map_err(CanopyError::git)?;
     let name = std::path::Path::new(&top)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -72,16 +89,30 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, String> {
 
     let updated = {
         let state = app.state::<AppState>();
-        let mut s = state.settings.write().unwrap();
+        let mut s = state.settings.write();
         if s.repos.iter().any(|r| r.path == repo.path) {
-            return Err("Repository already registered".into());
+            return Err(CanopyError::conflict("Repository already registered"));
+        }
+        // repo lookups key on `id`, so two different paths must never share one
+        // (e.g. ~/work/tooljet + ~/client/tooljet) — suffix until unique.
+        let mut repo = repo;
+        let base = repo.id.clone();
+        let mut n = 2;
+        while s.repos.iter().any(|r| r.id == repo.id) {
+            repo.id = format!("{base}-{n}");
+            n += 1;
         }
         s.repos.push(repo.clone());
-        s.clone()
+        let updated = s.clone();
+        drop(s);
+        (repo, updated)
     };
-    settings::save_settings(&app, &updated)?;
-    refresh_tree(&app).await?;
-    refresh_all_git_meta(&app).await;
+    let (repo, updated) = updated;
+    settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    // meta arrives via worktree:git events — same reasoning as save_settings
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move { refresh_all_git_meta(&app2).await });
     Ok(repo)
 }
 
@@ -110,8 +141,8 @@ pub struct ScriptEntry {
 /// branch/origin, guess the stack from manifest files, and list package.json
 /// scripts. Read-only — registers nothing.
 #[tauri::command]
-pub async fn detect_repo(path: String) -> Result<RepoDetection, String> {
-    let top = git::validate_repo(&path).await?;
+pub async fn detect_repo(path: String) -> Result<RepoDetection, CanopyError> {
+    let top = git::validate_repo(&path).await.map_err(CanopyError::git)?;
     let name = std::path::Path::new(&top)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -167,21 +198,53 @@ pub async fn detect_repo(path: String) -> Result<RepoDetection, String> {
 }
 
 #[tauri::command]
-pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), String> {
+pub async fn remove_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyError> {
+    // Deregistering a repo must not leave its dev servers running untracked
+    // or its runtime state (port indices/overrides, statuses, logs) behind.
+    let wt_keys: Vec<String> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        tree.iter()
+            .filter(|r| r.repo_id == repo_id)
+            .flat_map(|r| r.worktrees.iter().map(|w| w.wt_key.clone()))
+            .collect()
+    };
+    for wt in &wt_keys {
+        for key in services::worktree_svc_keys(&app, wt) {
+            let _ = services::stop_service(&app, &key).await;
+        }
+        terminal::close_worktree(&app, &app.state::<TermTable>(), wt);
+    }
+
     let updated = {
         let state = app.state::<AppState>();
-        let mut s = state.settings.write().unwrap();
+        let mut s = state.settings.write();
         s.repos.retain(|r| r.id != repo_id);
         s.clone()
     };
-    settings::save_settings(&app, &updated)?;
-    refresh_tree(&app).await?;
+    settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
+
+    for wt in &wt_keys {
+        crate::state::release_worktree_runtime(&app, &repo_id, wt);
+    }
+    // drop the repo's whole port-index map (covers worktrees no longer listed)
+    {
+        let state = app.state::<AppState>();
+        let runtime = {
+            let mut rt = state.runtime.write();
+            rt.port_indices.remove(&repo_id);
+            rt.clone()
+        };
+        let _ = settings::save_runtime(&app, &runtime);
+    }
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn git_pull(app: AppHandle, wt_key: String) -> Result<String, String> {
-    let summary = git::pull(&wt_key).await?;
+pub async fn git_pull(app: AppHandle, wt_key: String) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let summary = git::pull(&wt_key).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(summary)
 }
@@ -189,31 +252,36 @@ pub async fn git_pull(app: AppHandle, wt_key: String) -> Result<String, String> 
 // ── submodules ──
 
 #[tauri::command]
-pub async fn submodule_status(wt_key: String) -> Result<Vec<git::SubmoduleStatus>, String> {
+pub async fn submodule_status(app: AppHandle, wt_key: String) -> Result<Vec<git::SubmoduleStatus>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     Ok(git::submodule_status(&wt_key).await)
 }
 
 #[tauri::command]
-pub async fn pull_submodule(app: AppHandle, wt_key: String, path: String) -> Result<String, String> {
-    let summary = git::pull_submodule(&wt_key, &path).await?;
+pub async fn pull_submodule(app: AppHandle, wt_key: String, path: String) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let summary = git::pull_submodule(&wt_key, &path).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(summary)
 }
 
 #[tauri::command]
-pub async fn switch_submodule_branch(app: AppHandle, wt_key: String, path: String, branch: String) -> Result<(), String> {
-    git::switch_submodule_branch(&wt_key, &path, &branch).await?;
+pub async fn switch_submodule_branch(app: AppHandle, wt_key: String, path: String, branch: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::switch_submodule_branch(&wt_key, &path, &branch).await.map_err(CanopyError::git)?;
     refresh_git_meta(&app, &wt_key).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn list_submodule_branches(wt_key: String, path: String) -> Result<git::Branches, String> {
-    git::list_submodule_branches(&wt_key, &path).await
+pub async fn list_submodule_branches(app: AppHandle, wt_key: String, path: String) -> Result<git::Branches, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::list_submodule_branches(&wt_key, &path).await.map_err(CanopyError::git)
 }
 
 #[tauri::command]
-pub async fn fetch_submodules(wt_key: String) -> Result<usize, String> {
+pub async fn fetch_submodules(app: AppHandle, wt_key: String) -> Result<usize, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
     Ok(git::fetch_submodules(&wt_key).await)
 }
 
@@ -225,8 +293,9 @@ pub async fn switch_worktree_branch(
     branch: String,
     create: bool,
     base: Option<String>,
-) -> Result<(), String> {
-    git::switch_branch(&wt_key, &branch, create, base.as_deref()).await?;
+) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::switch_branch(&wt_key, &branch, create, base.as_deref()).await.map_err(CanopyError::git)?;
     let _ = refresh_tree(&app).await;
     refresh_git_meta(&app, &wt_key).await;
     Ok(())
@@ -239,7 +308,6 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
     table
         .logs
         .lock()
-        .unwrap()
         .get(&svc_key)
         .map(|b| b.iter().cloned().collect())
         .unwrap_or_default()
@@ -247,8 +315,12 @@ pub fn get_logs(table: State<'_, ProcTable>, svc_key: String) -> Vec<LogLine> {
 
 // ── embedded terminals (agent lane) ──
 
+// async so they run on the runtime thread pool: open does openpty + spawn,
+// get_buffer base64-encodes up to 256KB, and write can block on a stalled
+// child — none of that belongs on the main (UI) thread.
+
 #[tauri::command]
-pub fn terminal_open(
+pub async fn terminal_open(
     app: AppHandle,
     table: State<'_, TermTable>,
     id: String,
@@ -256,42 +328,45 @@ pub fn terminal_open(
     cols: u16,
     rows: u16,
     command: Option<String>,
-) -> Result<(), String> {
-    terminal::open(&app, &table, &id, &cwd, cols, rows, command)
+) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &cwd)?;
+    terminal::open(&app, &table, &id, &cwd, cols, rows, command).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
-pub fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), String> {
-    terminal::write(&table, &id, &data)
+pub async fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
+    terminal::write(&table, &id, &data).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
-pub fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    terminal::resize(&table, &id, cols, rows)
+pub async fn terminal_resize(table: State<'_, TermTable>, id: String, cols: u16, rows: u16) -> Result<(), CanopyError> {
+    terminal::resize(&table, &id, cols, rows).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
-pub fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Option<terminal::BufferSnapshot> {
-    terminal::get_buffer(&table, &id)
+pub async fn terminal_get_buffer(table: State<'_, TermTable>, id: String) -> Result<Option<terminal::BufferSnapshot>, CanopyError> {
+    Ok(terminal::get_buffer(&table, &id))
 }
 
 #[tauri::command]
-pub fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) {
+pub async fn terminal_close(app: AppHandle, table: State<'_, TermTable>, id: String) -> Result<(), CanopyError> {
     terminal::close_and_persist(&app, &table, &id);
+    Ok(())
 }
 
 /// Ensure a worktree's `.canopy/` exists with a self-ignoring `.gitignore`, then
 /// write `context.md`. Never truncates an existing `.gitignore`.
 #[tauri::command]
-pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), String> {
+pub fn write_worktree_context(app: AppHandle, wt_path: String, contents: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_path)?;
     let dir = std::path::Path::new(&wt_path).join(".canopy");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| CanopyError::setup(format!("mkdir {}: {e}", dir.display())))?;
     let ignore = dir.join(".gitignore");
     if !ignore.exists() {
-        std::fs::write(&ignore, "*\n").map_err(|e| format!("write {}: {e}", ignore.display()))?;
+        std::fs::write(&ignore, "*\n").map_err(|e| CanopyError::setup(format!("write {}: {e}", ignore.display())))?;
     }
     let file = dir.join("context.md");
-    std::fs::write(&file, contents).map_err(|e| format!("write {}: {e}", file.display()))
+    std::fs::write(&file, contents).map_err(|e| CanopyError::setup(format!("write {}: {e}", file.display())))
 }
 
 /// The agent CLI to run for a worktree: the repo's configured `agentCommand`,
@@ -299,14 +374,9 @@ pub fn write_worktree_context(wt_path: String, contents: String) -> Result<(), S
 #[tauri::command]
 pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> String {
     const DEFAULT_AGENT: &str = "claude";
-    let repo_id = {
-        let tree = state.tree.read().unwrap();
-        tree.iter()
-            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-            .map(|r| r.repo_id.clone())
-    };
+    let repo_id = state.wt_context(&wt_key).map(|c| c.repo_id);
     let cmd = repo_id.and_then(|id| {
-        let settings = state.settings.read().unwrap();
+        let settings = state.settings.read();
         settings
             .repos
             .iter()
@@ -320,49 +390,67 @@ pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> Stri
 }
 
 #[tauri::command]
-pub async fn service_start(app: AppHandle, svc_key: String) -> Result<(), String> {
-    services::start_service(&app, &svc_key).await
+pub async fn service_start(app: AppHandle, svc_key: String) -> Result<(), CanopyError> {
+    services::start_service(&app, &svc_key).await.map_err(CanopyError::process)
 }
 
 #[tauri::command]
-pub async fn service_stop(app: AppHandle, svc_key: String) -> Result<(), String> {
-    services::stop_service(&app, &svc_key).await
+pub async fn service_stop(app: AppHandle, svc_key: String) -> Result<(), CanopyError> {
+    services::stop_service(&app, &svc_key).await.map_err(CanopyError::process)
 }
 
 #[tauri::command]
-pub async fn service_restart(app: AppHandle, svc_key: String) -> Result<(), String> {
-    services::restart_service(&app, &svc_key).await
+pub async fn service_restart(app: AppHandle, svc_key: String) -> Result<(), CanopyError> {
+    services::restart_service(&app, &svc_key).await.map_err(CanopyError::process)
 }
 
 #[tauri::command]
-pub async fn worktree_start_all(app: AppHandle, wt_key: String) -> Result<(), String> {
+pub async fn worktree_start_all(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+    // start every service, collecting failures — one bad service must not
+    // silently prevent its siblings from starting
+    let mut errors: Vec<String> = Vec::new();
     for key in services::worktree_svc_keys(&app, &wt_key) {
-        services::start_service(&app, &key).await?;
+        if let Err(e) = services::start_service(&app, &key).await {
+            errors.push(format!("{key}: {e}"));
+        }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!("some services failed to start — {}", errors.join("; "))))
+    }
 }
 
 #[tauri::command]
-pub async fn worktree_stop_all(app: AppHandle, wt_key: String) -> Result<(), String> {
+pub async fn worktree_stop_all(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+    let mut errors: Vec<String> = Vec::new();
     for key in services::worktree_svc_keys(&app, &wt_key) {
-        services::stop_service(&app, &key).await?;
+        if let Err(e) = services::stop_service(&app, &key).await {
+            errors.push(format!("{key}: {e}"));
+        }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!("some services failed to stop — {}", errors.join("; "))))
+    }
 }
 
 #[tauri::command]
-pub async fn reset_db(app: AppHandle, wt_key: String) -> Result<(), String> {
-    services::reset_db(&app, &wt_key).await
+pub async fn reset_db(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+    let _lease = crate::state::try_lease(&app, &wt_key, "reset db")?;
+    services::reset_db(&app, &wt_key).await.map_err(CanopyError::db)
 }
 
 /// Run the worktree's configured DB migration (`migrate` in .worktreemanager.json).
 #[tauri::command]
-pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), String> {
+pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let (repo_path, repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "migrate")?;
     // prefer the Settings "Migrate cmd"; fall back to .worktreemanager.json `migrate`
     let settings_cmd = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.repos.iter().find(|r| r.id == repo_id).map(|r| r.migrate_db.clone()).unwrap_or_default()
     };
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
@@ -387,7 +475,7 @@ pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), String>
         }
         Err(e) => {
             emit_op(&app, &wt_key, "migrate", "error", e.clone());
-            Err(e)
+            Err(CanopyError::setup(e))
         }
     }
 }
@@ -395,11 +483,12 @@ pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), String>
 /// Run a repo-defined custom command in the worktree root, on the pinned Node,
 /// streaming progress via `worktree:op` (op="custom") — same model as migrate.
 #[tauri::command]
-pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String) -> Result<(), String> {
+pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String) -> Result<(), CanopyError> {
     if command.trim().is_empty() {
-        return Err("Empty command".into());
+        return Err(CanopyError::invalid_input("Empty command"));
     }
     let (repo_path, repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "command")?;
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
     let app2 = app.clone();
     let wt2 = wt_key.clone();
@@ -415,7 +504,7 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
         }
         Err(e) => {
             emit_op(&app, &wt_key, "custom", "error", e.clone());
-            Err(e)
+            Err(CanopyError::setup(e))
         }
     }
 }
@@ -423,10 +512,10 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
 // ── open things ──
 
 #[tauri::command]
-pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), String> {
+pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let editor = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.editor.command.clone()
     };
     let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
@@ -434,7 +523,7 @@ pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), String
     tokio::process::Command::new(shell)
         .args(&shargs)
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| CanopyError::process(e.to_string()))?;
     Ok(())
 }
 
@@ -442,17 +531,17 @@ pub async fn open_in_editor(app: AppHandle, wt_key: String) -> Result<(), String
 /// resolved from the worktree root; canonicalization rejects traversal and
 /// symlinks that leave it before any shell command is launched.
 #[tauri::command]
-pub async fn open_file_in_editor(app: AppHandle, wt_key: String, path: String) -> Result<(), String> {
-    let root = std::fs::canonicalize(&wt_key).map_err(|e| format!("worktree path: {e}"))?;
+pub async fn open_file_in_editor(app: AppHandle, wt_key: String, path: String) -> Result<(), CanopyError> {
+    let root = std::fs::canonicalize(&wt_key).map_err(|e| CanopyError::invalid_input(format!("worktree path: {e}")))?;
     let requested = std::path::PathBuf::from(&path);
     let candidate = if requested.is_absolute() { requested } else { root.join(requested) };
-    let file = std::fs::canonicalize(&candidate).map_err(|e| format!("file path: {e}"))?;
+    let file = std::fs::canonicalize(&candidate).map_err(|e| CanopyError::invalid_input(format!("file path: {e}")))?;
     if !file.starts_with(&root) {
-        return Err("File must be inside the selected worktree".into());
+        return Err(CanopyError::invalid_input("File must be inside the selected worktree"));
     }
     let editor = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.editor.command.clone()
     };
     let editor = if editor.trim().is_empty() { "code".to_string() } else { editor };
@@ -461,13 +550,13 @@ pub async fn open_file_in_editor(app: AppHandle, wt_key: String, path: String) -
     tokio::process::Command::new(shell)
         .args(&shargs)
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| CanopyError::process(e.to_string()))?;
     Ok(())
 }
 
 /// Reveal a path in the OS file manager (Finder / Files / Explorer).
 #[tauri::command]
-pub fn reveal_in_finder(wt_key: String) -> Result<(), String> {
+pub fn reveal_in_finder(wt_key: String) -> Result<(), CanopyError> {
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = std::process::Command::new("open");
@@ -491,17 +580,18 @@ pub fn reveal_in_finder(wt_key: String) -> Result<(), String> {
         c.arg(dir);
         c
     };
-    cmd.spawn().map_err(|e| e.to_string())?;
+    cmd.spawn().map_err(|e| CanopyError::process(e.to_string()))?;
     Ok(())
 }
 
 /// Open a terminal at the worktree root. macOS uses the configured terminal app;
 /// Linux tries the user's preference then common emulators.
 #[tauri::command]
-pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), String> {
+#[allow(clippy::needless_return)] // cfg-gated per-OS tails; return keeps them uniform
+pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
     let term = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
+        let s = state.settings.read();
         s.terminal.clone()
     };
 
@@ -511,7 +601,7 @@ pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), String> {
         std::process::Command::new("open")
             .args(["-a", &term, &wt_key])
             .spawn()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| CanopyError::process(e.to_string()))?;
         return Ok(());
     }
 
@@ -539,7 +629,7 @@ pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), String> {
                 return Ok(());
             }
         }
-        return Err("No terminal emulator found — set one in Settings".into());
+        return Err(CanopyError::process("No terminal emulator found — set one in Settings"));
     }
 
     #[cfg(target_os = "windows")]
@@ -548,20 +638,20 @@ pub fn open_terminal(app: AppHandle, wt_key: String) -> Result<(), String> {
         std::process::Command::new("cmd")
             .args(["/C", "start", "cmd", "/K", "cd", "/D", &wt_key])
             .spawn()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| CanopyError::process(e.to_string()))?;
         Ok(())
     }
 }
 
 #[tauri::command]
-pub fn open_port(app: AppHandle, port: u32) -> Result<(), String> {
+pub fn open_port(app: AppHandle, port: u32) -> Result<(), CanopyError> {
     tauri_plugin_opener::OpenerExt::opener(&app)
         .open_url(format!("http://localhost:{port}"), None::<String>)
-        .map_err(|e| e.to_string())
+        .map_err(|e| CanopyError::process(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
+pub async fn show_main_window(app: AppHandle) -> Result<(), CanopyError> {
     // macOS: return to the Dock when a real window is on screen
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
@@ -573,11 +663,13 @@ pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(pop) = app.get_webview_window("popover") {
         let _ = pop.hide();
     }
+    // the background refresh pauses while every window is hidden — catch up now
+    crate::tray::catch_up_refresh(&app);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn quit_app(app: AppHandle) -> Result<(), String> {
+pub async fn quit_app(app: AppHandle) -> Result<(), CanopyError> {
     services::stop_all(&app).await;
     app.exit(0);
     Ok(())
@@ -602,7 +694,7 @@ fn emit_op(app: &AppHandle, wt_key: &str, op: &'static str, state: &'static str,
     );
 }
 
-fn sanitize_branch(branch: &str) -> String {
+pub(crate) fn sanitize_branch(branch: &str) -> String {
     branch
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
@@ -616,11 +708,15 @@ pub async fn create_worktree(
     branch: String,
     base: Option<String>,
     create_branch: bool,
-) -> Result<String, String> {
+) -> Result<String, CanopyError> {
     let repo = {
         let state = app.state::<AppState>();
-        let s = state.settings.read().unwrap();
-        s.repos.iter().find(|r| r.id == repo_id).cloned().ok_or("unknown repo")?
+        let s = state.settings.read();
+        s.repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .cloned()
+            .ok_or_else(|| CanopyError::not_found("unknown repo"))?
     };
     let wt_dir = if repo.worktree_dir.trim().is_empty() {
         format!("{}-worktrees", repo.path)
@@ -629,8 +725,10 @@ pub async fn create_worktree(
     };
     let wt_path = format!("{wt_dir}/{}", sanitize_branch(&branch));
     if std::path::Path::new(&wt_path).exists() {
-        return Err(format!("Path already exists: {wt_path}"));
+        return Err(CanopyError::conflict(format!("Path already exists: {wt_path}")));
     }
+
+    let _lease = crate::state::try_lease(&app, &wt_path, "create")?;
 
     emit_op(&app, &wt_path, "create", "progress", format!("creating worktree for {branch}…"));
 
@@ -657,7 +755,7 @@ pub async fn create_worktree(
 
     if let Err(e) = result {
         emit_op(&app, &wt_path, "create", "error", e.clone());
-        return Err(e);
+        return Err(CanopyError::git(e));
     }
 
     // post-create provisioning (env overrides + setup commands) — see setup.rs.
@@ -671,7 +769,7 @@ pub async fn create_worktree(
     })
     .await;
 
-    refresh_tree(&app).await?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
 
     match setup_result {
@@ -681,7 +779,7 @@ pub async fn create_worktree(
         }
         Err(e) => {
             emit_op(&app, &wt_path, "create", "error", format!("worktree created, but {e}"));
-            Err(format!("Worktree created, but setup failed:\n{e}"))
+            Err(CanopyError::setup(format!("Worktree created, but setup failed:\n{e}")))
         }
     }
 }
@@ -689,20 +787,18 @@ pub async fn create_worktree(
 /// Manually (re)run a worktree's setup commands — for worktrees created before
 /// setup was configured, or to retry after a failure.
 #[tauri::command]
-pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), String> {
-    let (repo_path, repo_id, is_main) = {
-        let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let r = tree
-            .iter()
-            .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-            .ok_or("unknown worktree")?;
-        let is_main = r.worktrees.iter().find(|w| w.wt_key == wt_key).map(|w| w.is_main).unwrap_or(false);
-        (r.path.clone(), r.repo_id.clone(), is_main)
-    };
+pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+    let ctx = app
+        .state::<AppState>()
+        .wt_context(&wt_key)
+        .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
+    let (repo_path, repo_id, is_main) = (ctx.repo_path, ctx.repo_id, ctx.is_main);
     if !crate::setup::has_config(&wt_key, &repo_path) {
-        return Err("Nothing to run — add provisioned files or setup commands in .worktreemanager.json".into());
+        return Err(CanopyError::invalid_input(
+            "Nothing to run — add provisioned files or setup commands in .worktreemanager.json",
+        ));
     }
+    let _lease = crate::state::try_lease(&app, &wt_key, "setup")?;
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, is_main);
     let app3 = app.clone();
     let wt3 = wt_key.clone();
@@ -718,35 +814,29 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), St
         }
         Err(e) => {
             emit_op(&app, &wt_key, "create", "error", e.clone());
-            Err(e)
+            Err(CanopyError::setup(e))
         }
     }
 }
 
 #[tauri::command]
-pub async fn worktree_dirty_report(wt_key: String) -> git::DirtyReport {
-    git::dirty_report(&wt_key).await
+pub async fn worktree_dirty_report(app: AppHandle, wt_key: String) -> Result<git::DirtyReport, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::dirty_report(&wt_key).await.map_err(CanopyError::git)
 }
 
 #[tauri::command]
-pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), String> {
+pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
     // never remove a main checkout; find owning repo + branch
-    let (repo_path, repo_id, branch, is_main) = {
-        let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let mut found = None;
-        for r in tree.iter() {
-            for w in r.worktrees.iter() {
-                if w.wt_key == wt_key {
-                    found = Some((r.path.clone(), r.repo_id.clone(), w.branch.clone(), w.is_main));
-                }
-            }
-        }
-        found.ok_or("unknown worktree")?
-    };
+    let ctx = app
+        .state::<AppState>()
+        .wt_context(&wt_key)
+        .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
+    let (repo_path, repo_id, branch, is_main) = (ctx.repo_path, ctx.repo_id, ctx.branch, ctx.is_main);
     if is_main {
-        return Err("Refusing to remove the main checkout".into());
+        return Err(CanopyError::invalid_input("Refusing to remove the main checkout"));
     }
+    let _lease = crate::state::try_lease(&app, &wt_key, "remove")?;
 
     // stop its services first
     for key in services::worktree_svc_keys(&app, &wt_key) {
@@ -774,159 +864,219 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
     emit_op(&app, &wt_key, "remove", "progress", "removing worktree…");
     match git::remove_worktree(&repo_path, &wt_key, Some(&branch), delete_branch).await {
         Ok(()) => {
+            // reclaim the port index + overrides + statuses + log buffers —
+            // without this, months of worktree churn leak indices and derived
+            // ports creep permanently upward
+            crate::state::release_worktree_runtime(&app, &repo_id, &wt_key);
             emit_op(&app, &wt_key, "remove", "done", "worktree removed");
-            refresh_tree(&app).await?;
+            refresh_tree(&app).await.map_err(CanopyError::internal)?;
             Ok(())
         }
         Err(e) => {
             emit_op(&app, &wt_key, "remove", "error", e.clone());
-            Err(e)
+            Err(CanopyError::git(e))
         }
     }
 }
 
 fn is_running(app: &AppHandle, key: &str) -> bool {
     let table = app.state::<services::ProcTable>();
-    let procs = table.procs.lock().unwrap();
+    let procs = table.procs.lock();
     procs.contains_key(key)
 }
 
 // ── database: list / snapshot / export / switch ──
 
 /// repo path + repo_id for a worktree key.
-fn repo_for_wt(app: &AppHandle, wt_key: &str) -> Result<(String, String), String> {
-    let state = app.state::<AppState>();
-    let tree = state.tree.read().unwrap();
-    tree.iter()
-        .find(|r| r.worktrees.iter().any(|w| w.wt_key == wt_key))
-        .map(|r| (r.path.clone(), r.repo_id.clone()))
-        .ok_or_else(|| "unknown worktree".to_string())
+fn repo_for_wt(app: &AppHandle, wt_key: &str) -> Result<(String, String), CanopyError> {
+    app.state::<AppState>()
+        .wt_context(wt_key)
+        .map(|c| (c.repo_path, c.repo_id))
+        .ok_or_else(|| CanopyError::not_found("unknown worktree"))
 }
 
 #[tauri::command]
-pub async fn list_databases(wt_key: String) -> Result<Vec<String>, String> {
-    crate::db::list_databases(&wt_key).await
+pub async fn list_databases(app: AppHandle, wt_key: String) -> Result<Vec<String>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    crate::db::list_databases(&wt_key).await.map_err(CanopyError::db)
 }
 
 #[tauri::command]
-pub fn current_database(wt_key: String) -> Option<String> {
-    crate::db::current_db(&wt_key)
+pub fn current_database(app: AppHandle, wt_key: String) -> Result<Option<String>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    Ok(crate::db::current_db(&wt_key))
 }
 
 #[tauri::command]
-pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> Result<(), String> {
+pub async fn snapshot_database(app: AppHandle, wt_key: String, name: String) -> Result<(), CanopyError> {
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Err("Snapshot name is required".into());
+        return Err(CanopyError::invalid_input("Snapshot name is required"));
     }
+    ensure_known_worktree(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "snapshot")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
-    crate::db::clone_database(&wt_key, &name, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line)).await?;
+    crate::db::clone_database(&wt_key, &name, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line))
+        .await
+        .map_err(CanopyError::db)?;
     emit_op(&app, &wt_key, "snapshot", "done", format!("snapshot '{name}' created"));
     Ok(())
 }
 
 #[tauri::command]
-pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), String> {
+pub async fn export_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "export")?;
     let app2 = app.clone();
     let wt2 = wt_key.clone();
-    crate::db::export_database(&wt_key, &file_path, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line)).await?;
+    crate::db::export_database(&wt_key, &file_path, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line))
+        .await
+        .map_err(CanopyError::db)?;
     emit_op(&app, &wt_key, "snapshot", "done", "exported to file");
     Ok(())
 }
 
 #[tauri::command]
-pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), String> {
+pub async fn restore_database(app: AppHandle, wt_key: String, file_path: String) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "restore")?;
+    // quiesce: a live connection pool holds locks against --clean drops and
+    // can observe (or block) a half-restored schema. Stop the worktree's
+    // running services, restore, then bring the same ones back.
+    let mut was_running: Vec<String> = Vec::new();
+    for key in services::worktree_svc_keys(&app, &wt_key) {
+        if is_running(&app, &key) {
+            was_running.push(key.clone());
+            let _ = services::stop_service(&app, &key).await;
+        }
+    }
     let app2 = app.clone();
     let wt2 = wt_key.clone();
-    crate::db::restore_database(&wt_key, &file_path, move |line| emit_op(&app2, &wt2, "snapshot", "progress", line)).await?;
-    emit_op(&app, &wt_key, "snapshot", "done", "restore complete");
-    Ok(())
+    let restore = crate::db::restore_database(&wt_key, &file_path, move |line| {
+        emit_op(&app2, &wt2, "snapshot", "progress", line)
+    })
+    .await;
+
+    // restart what we stopped, whether or not the restore succeeded — the
+    // worktree shouldn't be left dead because a dump file was bad
+    let mut restart_errors: Vec<String> = Vec::new();
+    for key in &was_running {
+        if let Err(e) = services::restart_service(&app, key).await {
+            restart_errors.push(format!("{key}: {e}"));
+        }
+    }
+
+    restore.map_err(CanopyError::db)?;
+    if restart_errors.is_empty() {
+        emit_op(&app, &wt_key, "snapshot", "done", "restore complete");
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!(
+            "restore complete, but restart failed — {}",
+            restart_errors.join("; ")
+        )))
+    }
 }
 
 #[tauri::command]
-pub async fn switch_database(app: AppHandle, wt_key: String, db_name: String) -> Result<(), String> {
+pub async fn switch_database(app: AppHandle, wt_key: String, db_name: String) -> Result<(), CanopyError> {
     let (repo_path, _repo_id) = repo_for_wt(&app, &wt_key)?;
+    let _lease = crate::state::try_lease(&app, &wt_key, "switch database")?;
     // repoint PG_DB in the worktree's root .env AND in any provisioned dotenv
     // file (e.g. server/.env) that declares it
     let pairs = [("PG_DB".to_string(), db_name.clone())];
-    crate::setup::set_env_keys(&wt_key, &repo_path, &pairs)?;
-    crate::setup::set_env_keys_in_provisioned(&wt_key, &repo_path, &pairs)?;
-    refresh_tree(&app).await?;
+    crate::setup::set_env_keys(&wt_key, &repo_path, &pairs).map_err(CanopyError::setup)?;
+    crate::setup::set_env_keys_in_provisioned(&wt_key, &repo_path, &pairs).map_err(CanopyError::setup)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
     // auto-restart the server so it connects to the new DB
+    let mut errors: Vec<String> = Vec::new();
     for key in services::worktree_svc_keys(&app, &wt_key) {
         if is_running(&app, &key) {
-            let _ = services::restart_service(&app, &key).await;
+            if let Err(e) = services::restart_service(&app, &key).await {
+                errors.push(format!("{key}: {e}"));
+            }
         }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!(
+            "database switched, but restart failed — {}",
+            errors.join("; ")
+        )))
+    }
 }
 
 /// Override a service's port. Validates range + cross-worktree conflict, updates
 /// the override, re-derives env (so dependent keys follow), and auto-restarts
 /// the worktree's running services so the change takes effect.
 #[tauri::command]
-pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Result<(), String> {
+pub async fn set_service_port(app: AppHandle, svc_key: String, port: u32) -> Result<(), CanopyError> {
     if !(1024..=65535).contains(&port) {
-        return Err("Port must be between 1024 and 65535".into());
+        return Err(CanopyError::invalid_input("Port must be between 1024 and 65535"));
     }
-    // locate the worktree + repo for this service, and check for conflicts
-    let (wt_key, repo_id, repo_path) = {
+    // check cross-worktree conflicts: another service already on this port
+    {
         let state = app.state::<AppState>();
-        let tree = state.tree.read().unwrap();
-        let mut found = None;
+        let tree = state.tree.read();
         for r in tree.iter() {
             for w in r.worktrees.iter() {
                 for s in w.services.iter() {
-                    if s.svc_key == svc_key {
-                        found = Some((w.wt_key.clone(), r.repo_id.clone(), r.path.clone()));
-                    }
-                    // conflict: another service already uses this effective port
                     if s.svc_key != svc_key && s.port == Some(port) {
-                        return Err(format!("Port {port} is already used by {} ({})", s.name, w.branch));
+                        return Err(CanopyError::conflict(format!(
+                            "Port {port} is already used by {} ({})",
+                            s.name, w.branch
+                        )));
                     }
                 }
             }
         }
-        found.ok_or("unknown service")?
-    };
+    }
+    let (wt_key, repo_id, repo_path) = app
+        .state::<AppState>()
+        .service_context(&svc_key)
+        .ok_or_else(|| CanopyError::not_found("unknown service"))?;
 
     // record the override + persist
     {
         let state = app.state::<AppState>();
-        state.runtime.write().unwrap().port_overrides.insert(svc_key.clone(), port);
-        let rt = state.runtime.read().unwrap().clone();
+        state.runtime.write().port_overrides.insert(svc_key.clone(), port);
+        let rt = state.runtime.read().clone();
         let _ = settings::save_runtime(&app, &rt);
     }
 
     // re-derive .env (TOOLJET_SERVER_PORT etc.) from the declarative env block
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
     let _ = crate::setup::reapply_provision(&wt_key, &repo_path, &vars);
-    refresh_tree(&app).await?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
 
     // auto-restart running services of this worktree to apply the new port(s)
+    let mut errors: Vec<String> = Vec::new();
     for key in services::worktree_svc_keys(&app, &wt_key) {
         if is_running(&app, &key) {
-            let _ = services::restart_service(&app, &key).await;
+            if let Err(e) = services::restart_service(&app, &key).await {
+                errors.push(format!("{key}: {e}"));
+            }
         }
     }
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::process(format!("port set, but restart failed — {}", errors.join("; "))))
+    }
 }
 
-fn repo_path(app: &AppHandle, repo_id: &str) -> Result<String, String> {
-    let state = app.state::<AppState>();
-    let s = state.settings.read().unwrap();
-    s.repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .map(|r| r.path.clone())
-        .ok_or_else(|| "unknown repo".to_string())
+fn repo_path(app: &AppHandle, repo_id: &str) -> Result<String, CanopyError> {
+    app.state::<AppState>()
+        .repo_path_by_id(repo_id)
+        .ok_or_else(|| CanopyError::not_found("unknown repo"))
 }
 
 #[tauri::command]
-pub async fn list_branches(app: AppHandle, repo_id: String) -> Result<git::Branches, String> {
+pub async fn list_branches(app: AppHandle, repo_id: String) -> Result<git::Branches, CanopyError> {
     let path = repo_path(&app, &repo_id)?;
-    git::list_branches(&path).await
+    git::list_branches(&path).await.map_err(CanopyError::git)
 }
 
 /// One provisioned-file entry as exchanged with the Settings UI.
@@ -979,7 +1129,7 @@ impl From<ProvisionEntry> for crate::setup::ProvisionFile {
 
 /// Read the repo's `.worktreemanager.json` (provisioned files + setup) for the editor.
 #[tauri::command]
-pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, String> {
+pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, CanopyError> {
     let path = repo_path(&app, &repo_id)?;
     let c = crate::setup::read_repo_config(&path);
     Ok(RepoConfig {
@@ -994,25 +1144,37 @@ pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, St
 /// Settings config Export and by the agent lane (writing `.canopy/context.md`,
 /// whose parent dir may not exist yet).
 #[tauri::command]
-pub fn save_text_file(path: String, contents: String) -> Result<(), String> {
+pub fn save_text_file(path: String, contents: String) -> Result<(), CanopyError> {
     if let Some(dir) = std::path::Path::new(&path).parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| CanopyError::config(format!("mkdir {}: {e}", dir.display())))?;
     }
-    std::fs::write(&path, contents).map_err(|e| format!("write {path}: {e}"))
+    std::fs::write(&path, contents).map_err(|e| CanopyError::config(format!("write {path}: {e}")))
 }
 
 /// Write provisioned files + setup commands to the repo's `.worktreemanager.json`.
 #[tauri::command]
-pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<ProvisionEntry>, setup: Vec<String>) -> Result<(), String> {
+pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<ProvisionEntry>, setup: Vec<String>) -> Result<(), CanopyError> {
     let path = repo_path(&app, &repo_id)?;
     let files: Vec<crate::setup::ProvisionFile> = provision.into_iter().map(Into::into).collect();
-    crate::setup::write_repo_config(&path, &files, &setup)
+    crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.
 #[tauri::command]
-pub async fn fetch_branches(app: AppHandle, repo_id: String) -> Result<git::Branches, String> {
+pub async fn fetch_branches(app: AppHandle, repo_id: String) -> Result<git::Branches, CanopyError> {
     let path = repo_path(&app, &repo_id)?;
-    git::fetch_all(&path).await?;
-    git::list_branches(&path).await
+    git::fetch_all(&path).await.map_err(CanopyError::git)?;
+    git::list_branches(&path).await.map_err(CanopyError::git)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_branch;
+
+    #[test]
+    fn sanitize_branch_maps_separators() {
+        assert_eq!(sanitize_branch("feature/foo-bar"), "feature_foo-bar");
+        assert_eq!(sanitize_branch("v1.2.3"), "v1.2.3");
+        assert_eq!(sanitize_branch("fix db reset"), "fix_db_reset");
+    }
 }

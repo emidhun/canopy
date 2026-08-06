@@ -14,11 +14,14 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::Serialize;
 #[cfg(unix)]
 use crate::settings::TermOrphan;
+// only the Unix orphan persist/sweep reads app state — on Windows the Job
+// Object reaps the tree, so both are stubs and this import would be unused
+#[cfg(unix)]
 use crate::state::AppState;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -35,7 +38,10 @@ const READ_CHUNK: usize = 32 * 1024;
 
 pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// Behind its own Arc<Mutex> so a write blocked by a stalled child (full
+    /// PTY buffer) doesn't hold the sessions table lock — the reader thread
+    /// needs that lock to drain the master, which is what unblocks the write.
+    writer: std::sync::Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     /// raw byte scrollback, capped at SCROLLBACK_CAP
     scrollback: VecDeque<u8>,
@@ -102,6 +108,14 @@ pub struct BufferSnapshot {
     pub seq: u64,
 }
 
+
+/// Terminal bytes go to the windows that render terminals: the main window
+/// and detached `term-*` windows — never the popover.
+fn terminal_windows(t: &tauri::EventTarget) -> bool {
+    matches!(t, tauri::EventTarget::WebviewWindow { label }
+        if label == "main" || label.starts_with("term-"))
+}
+
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -131,13 +145,13 @@ pub fn open(
     rows: u16,
     command: Option<String>,
 ) -> Result<(), String> {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     if sessions.contains_key(id) {
         return Ok(()); // already running — idempotent attach
     }
     // A restart reuses the id; the previous run's retained output would
     // otherwise be replayed as though the new process had printed it.
-    table.exited.lock().unwrap().remove(id);
+    table.exited.lock().remove(id);
 
     let pair = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -191,7 +205,9 @@ pub fn open(
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| format!("reader clone failed: {e}"))?;
-    let writer = pair.master.take_writer().map_err(|e| format!("writer failed: {e}"))?;
+    let writer = std::sync::Arc::new(Mutex::new(
+        pair.master.take_writer().map_err(|e| format!("writer failed: {e}"))?,
+    ));
 
     // the child is its own session leader (the pty setsid's it), so pid == pgid
     let pgid = child.process_id().unwrap_or(0) as i32;
@@ -230,7 +246,7 @@ pub fn open(
                     let mut seq = 0;
                     let mut ours = false;
                     if let Some(table) = app.try_state::<TermTable>() {
-                        if let Some(sess) = table.sessions.lock().unwrap().get_mut(&id) {
+                        if let Some(sess) = table.sessions.lock().get_mut(&id) {
                             // Same generation guard the exit path uses: a restart
                             // reopens this id, and bytes this (now stale) reader
                             // drains afterwards must not be appended to — or
@@ -248,8 +264,14 @@ pub fn open(
                             }
                         }
                     }
-                    if ours {
-                        let _ = app.emit("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
+                    // Skip the emit while nothing is on screen: base64 + JSON +
+                    // waking a hidden webview per chunk is pure waste. The
+                    // scrollback + seq advanced above regardless, and the UI
+                    // resyncs from the snapshot on show / on the next chunk's
+                    // seq-gap check — the same race-free cursor rehydrate
+                    // mechanism it already uses on mount.
+                    if ours && crate::windows_visible() {
+                        let _ = app.emit_filter("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq }, terminal_windows);
                     }
                 }
                 Err(_) => break,
@@ -259,14 +281,14 @@ pub fn open(
         // hasn't already replaced this id (fast reopen), else we'd delete the
         // replacement and emit a false exit.
         let removed = if let Some(table) = app.try_state::<TermTable>() {
-            let mut sessions = table.sessions.lock().unwrap();
+            let mut sessions = table.sessions.lock();
             match sessions.get(&id) {
                 Some(s) if s.generation == generation => {
                     // Keep what it printed: the UI shows an exited tab read-only
                     // until it's closed or restarted, and without this the output
                     // would die with the session the moment the process ended.
                     let sess = sessions.remove(&id).unwrap();
-                    let mut exited = table.exited.lock().unwrap();
+                    let mut exited = table.exited.lock();
                     if exited.len() >= EXITED_CAP {
                         if let Some(oldest) = exited.iter().min_by_key(|(_, b)| b.at).map(|(k, _)| k.clone()) {
                             exited.remove(&oldest);
@@ -285,7 +307,7 @@ pub fn open(
         };
         if removed {
             persist_orphans(&app);
-            let _ = app.emit("terminal:exit", &ExitEvent { id: &id });
+            let _ = app.emit_filter("terminal:exit", &ExitEvent { id: &id }, terminal_windows);
         }
     });
 
@@ -295,16 +317,22 @@ pub fn open(
 /// Write user input (keystrokes, or a command the UI injects such as the agent
 /// CLI) to a session.
 pub fn write(table: &TermTable, id: &str, data: &str) -> Result<(), String> {
-    let mut sessions = table.sessions.lock().unwrap();
-    let sess = sessions.get_mut(id).ok_or("no such terminal")?;
-    sess.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    sess.last_activity = Instant::now();
-    sess.writer.flush().map_err(|e| e.to_string())
+    // clone the writer handle out, then release the table lock BEFORE the
+    // (potentially blocking) write — see the field comment on `writer`.
+    let writer = {
+        let mut sessions = table.sessions.lock();
+        let sess = sessions.get_mut(id).ok_or("no such terminal")?;
+        sess.last_activity = Instant::now();
+        sess.writer.clone()
+    };
+    let mut w = writer.lock();
+    w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())
 }
 
 /// Resize a session's PTY (xterm's fit addon drives this).
 pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), String> {
-    let sessions = table.sessions.lock().unwrap();
+    let sessions = table.sessions.lock();
     let sess = sessions.get(id).ok_or("no such terminal")?;
     sess.master
         .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
@@ -316,14 +344,13 @@ pub fn resize(table: &TermTable, id: &str, cols: u16, rows: u16) -> Result<(), S
 /// while its worktree wasn't selected can still be read. `None` only when the id
 /// was never opened (or has since been closed).
 pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
-    if let Some(s) = table.sessions.lock().unwrap().get(id) {
+    if let Some(s) = table.sessions.lock().get(id) {
         let bytes: Vec<u8> = s.scrollback.iter().copied().collect();
         return Some(BufferSnapshot { buffer: b64(&bytes), seq: s.seq });
     }
     table
         .exited
         .lock()
-        .unwrap()
         .get(id)
         .map(|b| BufferSnapshot { buffer: b64(&b.scrollback), seq: b.seq })
 }
@@ -331,10 +358,10 @@ pub fn get_buffer(table: &TermTable, id: &str) -> Option<BufferSnapshot> {
 /// Kill and drop a session, including any retained output — closing a tab is the
 /// point at which the user is done with it.
 pub fn close(table: &TermTable, id: &str) {
-    if let Some(mut sess) = table.sessions.lock().unwrap().remove(id) {
+    if let Some(mut sess) = table.sessions.lock().remove(id) {
         let _ = sess.child.kill();
     }
-    table.exited.lock().unwrap().remove(id);
+    table.exited.lock().remove(id);
 }
 
 /// Close a session and refresh the persisted orphan list (command path).
@@ -347,11 +374,11 @@ pub fn close_and_persist(app: &AppHandle, table: &TermTable, id: &str) {
 /// no shell/agent lingers with no UI to stop it).
 pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
     let prefix = format!("{wt_key}::");
-    let ids: Vec<String> = table.sessions.lock().unwrap().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
+    let ids: Vec<String> = table.sessions.lock().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
     for id in &ids {
         close(table, id);
     }
-    table.exited.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
+    table.exited.lock().retain(|k, _| !k.starts_with(&prefix));
     if !ids.is_empty() {
         persist_orphans(app);
     }
@@ -359,11 +386,11 @@ pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
 
 /// Kill every session (app quit).
 pub fn close_all(table: &TermTable) {
-    let mut sessions = table.sessions.lock().unwrap();
+    let mut sessions = table.sessions.lock();
     for (_, mut sess) in sessions.drain() {
         let _ = sess.child.kill();
     }
-    table.exited.lock().unwrap().clear();
+    table.exited.lock().clear();
 }
 
 /// Snapshot live sessions' pgids into persisted runtime state, so a crash can be
@@ -375,13 +402,12 @@ fn persist_orphans(app: &AppHandle) {
     let orphans: Vec<TermOrphan> = table
         .sessions
         .lock()
-        .unwrap()
         .iter()
         .map(|(id, s)| TermOrphan { id: id.clone(), pgid: s.pgid, spawn_time_secs: s.started_unix })
         .collect();
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.terminal_orphans = orphans;
         rt.clone()
     };
@@ -402,7 +428,7 @@ pub fn sweep_orphans(_app: &AppHandle) {}
 pub fn sweep_orphans(app: &AppHandle) {
     let orphans = {
         let state = app.state::<AppState>();
-        let rt = state.runtime.read().unwrap();
+        let rt = state.runtime.read();
         rt.terminal_orphans.clone()
     };
     for o in &orphans {
@@ -411,7 +437,7 @@ pub fn sweep_orphans(app: &AppHandle) {
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
         if alive && crate::services::proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
-            eprintln!("[wtm] sweeping terminal orphan pgid {} ({})", o.pgid, o.id);
+            log::warn!("sweeping terminal orphan pgid {} ({})", o.pgid, o.id);
             unsafe {
                 libc::killpg(o.pgid, libc::SIGTERM);
             }
@@ -419,16 +445,50 @@ pub fn sweep_orphans(app: &AppHandle) {
     }
     let state = app.state::<AppState>();
     let runtime = {
-        let mut rt = state.runtime.write().unwrap();
+        let mut rt = state.runtime.write();
         rt.terminal_orphans.clear();
         rt.clone()
     };
     let _ = crate::settings::save_runtime(app, &runtime);
 }
 
+/// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
+/// child makes its reader hit EOF, which removes the session and emits
+/// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
+/// waiting for the user, and killing it would lose work.
+pub fn sweep_idle(table: &TermTable) {
+    let mut sessions = table.sessions.lock();
+    for (id, sess) in sessions.iter_mut() {
+        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
+            let _ = sess.child.kill();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::kind_of;
+    use super::{b64, kind_of};
+
+    /// TerminalPane detects missed chunks (emits skipped while hidden) by
+    /// computing each chunk's decoded length WITHOUT decoding it:
+    /// `len/4*3 - padding`. That formula is only correct while this encoder
+    /// emits standard, unwrapped base64 — pin the contract on the Rust side
+    /// so a future encoder change can't silently break the frontend gap math.
+    #[test]
+    fn b64_length_formula_matches_frontend_gap_math() {
+        for n in 0..=9usize {
+            let s = b64(&vec![0xAB; n]);
+            assert!(!s.contains('\n') && !s.contains('\r'), "must be unwrapped: {s:?}");
+            let pad = if s.ends_with("==") {
+                2
+            } else if s.ends_with('=') {
+                1
+            } else {
+                0
+            };
+            assert_eq!(s.len() / 4 * 3 - pad, n, "n={n} s={s}");
+        }
+    }
 
     #[test]
     fn kind_of_reads_multi_session_ids() {
@@ -441,18 +501,5 @@ mod tests {
         assert_eq!(kind_of("/Users/me/wt/feature::agent"), "agent");
         assert_eq!(kind_of("/Users/me/wt/feature::shell"), "shell");
         assert_eq!(kind_of("nonsense"), "nonsense");
-    }
-}
-
-/// Sweep idle SHELL sessions (bounds long-run resource growth). Killing the
-/// child makes its reader hit EOF, which removes the session and emits
-/// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
-/// waiting for the user, and killing it would lose work.
-pub fn sweep_idle(table: &TermTable) {
-    let mut sessions = table.sessions.lock().unwrap();
-    for (id, sess) in sessions.iter_mut() {
-        if kind_of(id) == "shell" && sess.last_activity.elapsed() > IDLE_LIMIT {
-            let _ = sess.child.kill();
-        }
     }
 }

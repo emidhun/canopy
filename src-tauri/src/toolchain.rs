@@ -180,6 +180,54 @@ fn find_git_bash() -> Option<String> {
     None
 }
 
+/// PATH as a login shell resolves it, captured ONCE per run and unioned with
+/// the process PATH. Internal tool invocations (db CLIs) use this instead of
+/// paying profile-sourcing (nvm/asdf init: dozens of file reads + often a
+/// node exec, 300ms–1s) on every spawn. Capture failure degrades to the
+/// process PATH — which fix_path_env already promoted at startup.
+#[cfg(unix)]
+pub fn effective_path() -> String {
+    use std::sync::OnceLock;
+    static PATH: OnceLock<String> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let cur = std::env::var("PATH").unwrap_or_default();
+        let captured = std::process::Command::new(user_shell())
+            .args(["-l", "-c", "printf %s \"$PATH\""])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        match captured {
+            Some(c) if c != cur && !cur.is_empty() => format!("{c}:{cur}"),
+            Some(c) => c,
+            None => cur,
+        }
+    })
+    .clone()
+}
+
+#[cfg(windows)]
+pub fn effective_path() -> String {
+    std::env::var("PATH").unwrap_or_default()
+}
+
+/// Fast non-login shell for INTERNAL tool invocations — command lines Canopy
+/// composes itself (psql/pg_dump/pg_restore/createdb/dropdb), which are pure
+/// POSIX and need only PATH (see `effective_path`). User-authored commands
+/// (services, setup, custom, reset) MUST keep `shell_argv`'s login shell:
+/// their PATH and functions may come from profile files.
+pub fn fast_shell_argv(cmdline: &str) -> (String, Vec<String>) {
+    // Windows: Git Bash without `-l` skips /etc/profile + ~/.bash_profile —
+    // same speedup, same POSIX syntax. Unix: /bin/sh is fine because the
+    // composed lines avoid bashisms (no pipefail — see db.rs).
+    #[cfg(target_os = "windows")]
+    let shell = user_shell();
+    #[cfg(not(target_os = "windows"))]
+    let shell = "/bin/sh".to_string();
+    (shell, vec!["-c".into(), cmdline.to_string()])
+}
+
 /// Build `(shell, argv)` to run `cmdline` through the user's shell. Flags are
 /// chosen per shell family: pass `-l` and `-c` as *separate* args so fish parses
 /// them (it rejects the combined `-lc`), and drop `-l` for plain `sh`/`dash`
@@ -208,7 +256,58 @@ pub fn sh_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sh_quote, shell_argv};
+    use super::{fast_shell_argv, sh_quote, shell_argv};
+
+    /// The fast path's whole contract: `-c` yes, `-l` NEVER (skipping profile
+    /// init is the point), command last.
+    #[test]
+    fn fast_shell_argv_skips_login_flag() {
+        let (shell, args) = fast_shell_argv("echo hi");
+        assert!(!args.iter().any(|a| a == "-l"), "must not source profiles: {args:?}");
+        assert!(args.contains(&"-c".to_string()));
+        assert_eq!(args.last().unwrap(), "echo hi");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(shell, "/bin/sh");
+        let _ = shell;
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fast_shell_executes_posix() {
+        let (shell, args) = fast_shell_argv("printf %s canopy-ok");
+        let out = std::process::Command::new(shell).args(args).output().expect("spawn");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "canopy-ok");
+    }
+
+    /// Composed db command lines must stay pure POSIX: dash (Debian/Ubuntu
+    /// /bin/sh) is the shell that killed the pipefail approach — `set` is a
+    /// special builtin and an unknown option exits the shell outright. This
+    /// pins the exact export-PATH-prefix shape db.rs generates against dash
+    /// itself (macOS ships /bin/dash too, so this runs on both CI unixes).
+    #[cfg(unix)]
+    #[test]
+    fn composed_db_line_shape_is_dash_safe() {
+        if !std::path::Path::new("/bin/dash").exists() {
+            return; // no dash on this box — the ubuntu CI job covers it
+        }
+        let line = format!("export PATH={}:\"$PATH\"; printf %s ok", sh_quote("/nonexistent dir/bin"));
+        let out = std::process::Command::new("/bin/dash").args(["-c", &line]).output().expect("spawn");
+        assert!(out.status.success(), "dash rejected the composed shape: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "ok");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn effective_path_is_nonempty_and_cached() {
+        let p1 = super::effective_path();
+        assert!(!p1.is_empty());
+        assert!(
+            p1.split(':').any(|d| d == "/usr/bin" || d == "/bin"),
+            "system dirs must survive the union: {p1}"
+        );
+        assert_eq!(p1, super::effective_path(), "second call must hit the cache");
+    }
 
     #[test]
     fn sh_quote_round_trips_through_the_shell() {

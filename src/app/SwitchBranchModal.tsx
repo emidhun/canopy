@@ -6,7 +6,7 @@
    rather than being stashed, which is occasionally what you want and
    occasionally a nasty surprise. */
 import { useEffect, useMemo, useState } from "react";
-import { hasBackend, ipc, type Branches } from "../ipc";
+import { errText, hasBackend, ipc, type Branches } from "../ipc";
 import { useStore } from "../store";
 import type { RepoNode, WorktreeNode } from "../types";
 import { Alert, Fork, Plus, Search, Spinner, Swap } from "../icons";
@@ -84,7 +84,7 @@ export default function SwitchBranchModal({
       showToast(`Switched to ${name} — dependencies reused`);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

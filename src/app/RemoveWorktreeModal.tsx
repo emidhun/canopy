@@ -5,7 +5,7 @@
    branch name is typed back, because the cost here is unrecoverable work in
    private submodule clones, not just a directory. */
 import { useEffect, useState } from "react";
-import { hasBackend, ipc } from "../ipc";
+import { errText, hasBackend, ipc } from "../ipc";
 import { useStore } from "../store";
 import type { WorktreeNode } from "../types";
 import { Alert, Info, Spinner, Trash } from "../icons";
@@ -17,7 +17,7 @@ const DIRTY_CAP = 10;
 
 export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
-  const [report, setReport] = useState<{ dirty: boolean; details: string[] } | null>(null);
+  const [report, setReport] = useState<{ dirty: boolean; details: string[]; total: number } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [dropDb, setDropDb] = useState(true);
@@ -27,7 +27,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
 
   useEffect(() => {
     if (!hasBackend()) {
-      setReport({ dirty: false, details: [] });
+      setReport({ dirty: false, details: [], total: 0 });
       return;
     }
     // Fail CLOSED. Treating a failed probe as "clean" would let the dialog
@@ -41,7 +41,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       })
       .catch((e) => {
         setReport(null);
-        setProbeError(String(e));
+        setProbeError(errText(e));
       });
   }, [wt.wtKey]);
 
@@ -60,7 +60,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       showToast(`Worktree removed — ${wt.branch}`);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errText(e));
     } finally {
       setBusy(false);
     }

@@ -30,9 +30,16 @@ pub fn spawn_stats_task(app: AppHandle) {
         loop {
             tokio::time::sleep(POLL).await;
 
+            // enumerating every process on the machine 30×/min is the app's
+            // steady-state CPU cost — skip it while nothing is on screen
+            // (the stats card can't be seen from the tray)
+            if !crate::windows_visible() {
+                continue;
+            }
+
             let tracked: Vec<(String, u32, u64)> = {
                 let table = app.state::<ProcTable>();
-                let procs = table.procs.lock().unwrap();
+                let procs = table.procs.lock();
                 procs
                     .iter()
                     .map(|(k, p)| (k.clone(), p.pid, p.started_at.elapsed().as_secs()))
@@ -78,7 +85,9 @@ pub fn spawn_stats_task(app: AppHandle) {
                     uptime_sec: uptime,
                 });
             }
-            let _ = app.emit("service:stats", &StatsEvent { entries });
+            let _ = app.emit_filter("service:stats", &StatsEvent { entries }, |t| {
+                matches!(t, tauri::EventTarget::WebviewWindow { label } if label == "main")
+            });
         }
     });
 }

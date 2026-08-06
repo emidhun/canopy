@@ -9,7 +9,7 @@
    per-group headers only render if a group ever appears in the data. */
 import { useEffect, useRef, useState } from "react";
 import { Chevron, Play, Spinner } from "../../icons";
-import { hasBackend, ipc, type CustomCmd } from "../../ipc";
+import { errText, hasBackend, ipc, type CustomCmd } from "../../ipc";
 import { mockCustomCommands } from "../../mock";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
@@ -110,7 +110,7 @@ export default function CommandButtons({ wt }: { wt: WorktreeNode }) {
     ipc
       .runCustomCommand(wt.wtKey, c.command)
       .then(() => showToast(`${c.label} finished — ${wt.branch}`))
-      .catch((e) => showToast(`${c.label} failed — ${String(e)}`))
+      .catch((e) => showToast(`${c.label} failed — ${errText(e)}`))
       .finally(() => setBusy(false));
   };
 

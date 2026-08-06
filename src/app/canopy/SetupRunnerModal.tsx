@@ -6,7 +6,7 @@
    the button says what it does rather than "Hide". */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Cube, Play, Spinner } from "../../icons";
-import { hasBackend, ipc } from "../../ipc";
+import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer } from "./Modal";
@@ -45,7 +45,7 @@ export default function SetupRunnerModal({
     }
     ipc.runWorktreeSetup(wt.wtKey).catch((e) => {
       setFailed(true);
-      showToast(`Setup failed — ${String(e)}`);
+      showToast(`Setup failed — ${errText(e)}`);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wt.wtKey]);

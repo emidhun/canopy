@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod error;
 mod git;
 mod proc;
 mod services;
@@ -7,6 +8,7 @@ mod settings;
 mod setup;
 mod state;
 mod stats;
+#[cfg(feature = "devtools")]
 mod suite;
 mod terminal;
 mod toolchain;
@@ -17,12 +19,65 @@ use state::AppState;
 use tauri::Manager;
 use terminal::TermTable;
 
+/// Is any Canopy window (main / popover / detached terminal) on screen?
+/// Queries the OS — used only by the 1s poll below; hot paths read the cache.
+pub(crate) fn any_window_visible(app: &tauri::AppHandle) -> bool {
+    app.webview_windows()
+        .values()
+        .any(|w| w.is_visible().unwrap_or(false))
+}
+
+/// Cached answer to "is anything on screen", refreshed every second and set
+/// eagerly by the show paths. Emitting into hidden webviews keeps their
+/// WebKit/WebView2 processes hot for work nobody can see — the log pump and
+/// PTY reader consult this per emit, so it must be an atomic read, not an
+/// OS query marshalled to the main thread per 32KB chunk.
+static WINDOWS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn windows_visible() -> bool {
+    WINDOWS_VISIBLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Called by every path that shows a window, so the ≤1s cache staleness can
+/// never swallow the first events after a show.
+pub(crate) fn note_window_shown() {
+    WINDOWS_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // GUI apps on macOS get a bare PATH; fix it so git/node/nvm resolve.
     let _ = fix_path_env::fix();
 
     let builder = tauri::Builder::default()
+        // MUST be first: a second instance exits immediately after notifying
+        // the first. Without this, instance B's startup sweep reads instance
+        // A's persisted *live* pgids and SIGTERMs A's running services, and
+        // both instances race on settings.json/state.json writes.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            #[cfg(target_os = "macos")]
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                let _ = win.unminimize();
+                let _ = win.set_focus();
+            }
+        }))
+        .plugin(
+            // rolling log file in the platform log dir (~/Library/Logs/… on
+            // macOS) + stderr echo for dev. INFO default; RUST_LOG overrides.
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("canopy".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
+                ])
+                .max_file_size(2_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_dialog::init());
@@ -46,6 +101,27 @@ pub fn run() {
 
             stats::spawn_stats_task(handle.clone());
 
+            // 1s visibility poll feeding the WINDOWS_VISIBLE cache
+            {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        WINDOWS_VISIBLE.store(
+                            any_window_visible(&handle),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
+                });
+            }
+
+            // warm the login-PATH capture off the critical path, so the first
+            // database action doesn't pay the profile-sourcing cost inline
+            #[cfg(unix)]
+            std::thread::spawn(|| {
+                let _ = toolchain::effective_path();
+            });
+
             // periodically sweep idle shell terminals (bounds long-run memory)
             {
                 let handle = handle.clone();
@@ -59,25 +135,30 @@ pub fn run() {
                 });
             }
 
-            // initial scan + 60s background git refresh
+            // initial scan + 60s background git refresh. The app lives in the
+            // tray — while no window is visible nobody can see git meta, so
+            // the periodic tick is skipped (show_main_window / the popover
+            // toggle kick an immediate refresh when a window comes back).
             tauri::async_runtime::spawn(async move {
-                let _ = state::refresh_tree(&handle).await;
-                state::refresh_all_git_meta(&handle).await;
+                state::refresh_all(&handle).await;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    let _ = state::refresh_tree(&handle).await;
-                    state::refresh_all_git_meta(&handle).await;
+                    if !windows_visible() {
+                        continue;
+                    }
+                    state::refresh_all(&handle).await;
                 }
             });
 
             // headless end-to-end suite: WTM_SUITE=<repoId>
+            #[cfg(feature = "devtools")]
             if let Ok(repo_id) = std::env::var("WTM_SUITE") {
                 suite::run(app.handle().clone(), repo_id);
             }
 
             // headless smoke test of the process layer: WTM_SELFTEST=<svcKey>
             // (Unix-only: it pokes pgids with killpg to verify the group died)
-            #[cfg(unix)]
+            #[cfg(all(unix, feature = "devtools"))]
             if let Ok(key) = std::env::var("WTM_SELFTEST") {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -89,19 +170,19 @@ pub fn run() {
                             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                             let (running, pgid) = {
                                 let table = handle.state::<ProcTable>();
-                                let procs = table.procs.lock().unwrap();
+                                let procs = table.procs.lock();
                                 (procs.contains_key(&key), procs.get(&key).map(|p| crate::proc::group_key(&p.group) as i32))
                             };
                             let log_len = {
                                 let table = handle.state::<ProcTable>();
-                                let logs = table.logs.lock().unwrap();
+                                let logs = table.logs.lock();
                                 logs.get(&key).map(|b| b.len()).unwrap_or(0)
                             };
                             eprintln!("[selftest] running={running} pgid={pgid:?} log_lines={log_len}");
                             let _ = services::stop_service(&handle, &key).await;
                             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
                             let table = handle.state::<ProcTable>();
-                            let gone = table.procs.lock().unwrap().is_empty();
+                            let gone = table.procs.lock().is_empty();
                             let pg_dead = pgid.map(|p| unsafe { libc::killpg(p, 0) != 0 }).unwrap_or(true);
                             eprintln!("[selftest] after stop: table_empty={gone} pgid_dead={pg_dead}");
                             eprintln!("[selftest] {}", if running && gone && pg_dead && log_len > 0 { "PASS" } else { "FAIL" });
@@ -110,11 +191,16 @@ pub fn run() {
                 });
             }
             // headless create+start test: WTM_SELFTEST_CREATE="repoId|branch|serviceId"
+            #[cfg(feature = "devtools")]
             if let Ok(spec) = std::env::var("WTM_SELFTEST_CREATE") {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let parts: Vec<&str> = spec.split('|').collect();
+                    if parts.len() != 3 {
+                        eprintln!("[ct] FAIL: WTM_SELFTEST_CREATE wants repoId|branch|serviceId, got {spec:?}");
+                        return;
+                    }
                     let (repo_id, branch, service_id) = (parts[0], parts[1], parts[2]);
                     eprintln!("[ct] create_worktree repo={repo_id} branch={branch}");
                     match commands::create_worktree(
@@ -133,7 +219,7 @@ pub fn run() {
                             // confirm the new service is in the tree
                             let in_tree = {
                                 let st = handle.state::<state::AppState>();
-                                let tree = st.tree.read().unwrap();
+                                let tree = st.tree.read();
                                 tree.iter().flat_map(|r| r.worktrees.iter()).flat_map(|w| w.services.iter()).any(|s| s.svc_key == svc_key)
                             };
                             eprintln!("[ct] service {svc_key} in tree: {in_tree}");
@@ -143,7 +229,7 @@ pub fn run() {
                                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                                     let running = {
                                         let t = handle.state::<services::ProcTable>();
-                                        let p = t.procs.lock().unwrap();
+                                        let p = t.procs.lock();
                                         p.contains_key(&svc_key)
                                     };
                                     eprintln!("[ct] running={running}");

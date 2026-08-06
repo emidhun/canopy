@@ -50,15 +50,28 @@ impl PgConn {
     }
 }
 
+/// Cap for one Postgres CLI invocation — dumps/restores of big databases take
+/// a while, but a hung server must not wedge the command forever.
+const PG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+
 /// Run a shell command line in the worktree dir with PGPASSWORD set.
+/// Uses the fast non-login shell: these lines are composed by Canopy (pure
+/// POSIX, need only PATH), and a login shell's profile init cost 300ms–1s
+/// PER invocation — a snapshot chains five of them before any data moves.
 async fn run(wt_path: &str, c: &PgConn, cmdline: &str) -> Result<String, String> {
-    let (shell, shargs) = crate::toolchain::shell_argv(cmdline);
+    let (shell, shargs) = crate::toolchain::fast_shell_argv(cmdline);
     let mut cmd = Command::new(shell);
-    cmd.args(&shargs).current_dir(wt_path);
+    cmd.args(&shargs)
+        .current_dir(wt_path)
+        .env("PATH", crate::toolchain::effective_path())
+        .kill_on_drop(true);
     if let Some(p) = &c.pass {
         cmd.env("PGPASSWORD", p);
     }
-    let out = cmd.output().await.map_err(|e| format!("failed to run: {e}"))?;
+    let out = match tokio::time::timeout(PG_TIMEOUT, cmd.output()).await {
+        Ok(res) => res.map_err(|e| format!("failed to run: {e}"))?,
+        Err(_) => return Err(format!("database command timed out after {}s", PG_TIMEOUT.as_secs())),
+    };
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -149,17 +162,94 @@ pub async fn clone_database(wt_path: &str, target: &str, mut progress: impl FnMu
     progress(format!("creating database {target}…"));
     run(wt_path, &c, &format!("createdb {conn_args} {}", q(target))).await?;
     progress(format!("copying {} → {target}…", c.db));
-    // custom-format dump piped straight into restore, using binaries matching the
-    // server version so directives/archive format stay compatible on restore
-    let line = format!(
-        "{pre}pg_dump {conn_args} -Fc {src} | pg_restore {conn_args} --no-owner --no-acl -d {dst}",
-        pre = pg_path_prefix_for(server_major(wt_path, &c).await),
-        src = q(&c.db),
-        dst = q(target),
-    );
-    run(wt_path, &c, &line).await?;
+    // Dump piped straight into restore — but the pipe lives in RUST, not the
+    // shell. A shell pipeline's exit status is the last command's (a failed
+    // pg_dump feeding a tolerant pg_restore reports success), and `set -o
+    // pipefail` is not a portable fix: `set` is a POSIX *special builtin*, so
+    // on dash (Debian/Ubuntu /bin/sh) an unknown option exits the shell
+    // outright — braces and `|| true` do not contain it. Connecting the two
+    // children ourselves checks BOTH statuses, names the failing stage, and
+    // stages nothing on disk (a temp file would double a big DB's footprint).
+    let pre = pg_path_prefix_for(server_major(wt_path, &c).await);
+    let result = run_piped(
+        wt_path,
+        &c,
+        &format!("{pre}pg_dump {conn_args} -Fc {src}", src = q(&c.db)),
+        &format!("{pre}pg_restore {conn_args} --no-owner --no-acl -d {dst}", dst = q(target)),
+        &c.db,
+        target,
+    )
+    .await;
+    if let Err(e) = result {
+        // don't strand the half-filled database we just created — a retry
+        // would otherwise die on "already exists"
+        progress(format!("copy failed — dropping partially created {target}…"));
+        let _ = run(wt_path, &c, &format!("dropdb {conn_args} --if-exists {}", q(target))).await;
+        return Err(e);
+    }
     progress("snapshot ready".into());
     Ok(())
+}
+
+/// Spawn `producer | consumer` with the pipe held by us: producer's stdout
+/// feeds consumer's stdin, both run through the login shell (PATH), both exit
+/// statuses are checked, and the whole pair shares one timeout.
+async fn run_piped(
+    wt_path: &str,
+    c: &PgConn,
+    producer: &str,
+    consumer: &str,
+    src_label: &str,
+    dst_label: &str,
+) -> Result<(), String> {
+    use std::process::Stdio;
+    let spawn = |line: &str, stdin: Stdio, stdout: Stdio| {
+        // fast non-login shell — see `run` for why this is safe here
+        let (shell, args) = crate::toolchain::fast_shell_argv(line);
+        let mut cmd = Command::new(shell);
+        cmd.args(&args)
+            .current_dir(wt_path)
+            .env("PATH", crate::toolchain::effective_path())
+            .kill_on_drop(true)
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(Stdio::piped());
+        if let Some(p) = &c.pass {
+            cmd.env("PGPASSWORD", p);
+        }
+        cmd.spawn()
+    };
+    let mut prod = spawn(producer, Stdio::null(), Stdio::piped()).map_err(|e| format!("pg_dump spawn failed: {e}"))?;
+    let prod_out = prod.stdout.take().ok_or("pg_dump stdout unavailable")?;
+    let pipe: Stdio = prod_out.try_into().map_err(|e| format!("pipe setup failed: {e}"))?;
+    let cons = spawn(consumer, pipe, Stdio::null()).map_err(|e| format!("pg_restore spawn failed: {e}"))?;
+
+    // wait on both concurrently: if the consumer dies early the producer gets
+    // EPIPE and exits, and vice versa the consumer sees EOF — no deadlock.
+    let waited = tokio::time::timeout(PG_TIMEOUT, async {
+        tokio::join!(prod.wait_with_output(), cons.wait_with_output())
+    })
+    .await;
+    let (p_out, c_out) = match waited {
+        Ok(pair) => pair,
+        Err(_) => return Err(format!("copy timed out after {}s", PG_TIMEOUT.as_secs())),
+    };
+    let p_out = p_out.map_err(|e| format!("pg_dump wait failed: {e}"))?;
+    let c_out = c_out.map_err(|e| format!("pg_restore wait failed: {e}"))?;
+    if !p_out.status.success() {
+        return Err(format!("dump of {src_label} failed: {}", tail(&p_out.stderr)));
+    }
+    if !c_out.status.success() {
+        return Err(format!("restore into {dst_label} failed: {}", tail(&c_out.stderr)));
+    }
+    Ok(())
+}
+
+/// Last few stderr lines, newest-last — the actionable part of a pg error.
+fn tail(stderr: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = s.lines().rev().take(4).collect();
+    lines.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 /// Dump the worktree's current DB to a custom-format file at `file_path`.
@@ -182,7 +272,9 @@ pub async fn restore_database(wt_path: &str, file_path: &str, mut progress: impl
     let pre = pg_path_prefix_for(server_major(wt_path, &c).await);
     progress(format!("restoring {} from file…", c.db));
     let line = if file_path.to_lowercase().ends_with(".sql") {
-        format!("{pre}psql {conn_args} -d {db} -v ON_ERROR_STOP=0 -f {f}", db = q(&c.db), f = q(file_path))
+        // ON_ERROR_STOP=1: without it psql runs the whole script regardless of
+        // failures and exits 0 — a half-restored database reported as success.
+        format!("{pre}psql {conn_args} -d {db} -v ON_ERROR_STOP=1 -f {f}", db = q(&c.db), f = q(file_path))
     } else {
         format!(
             "{pre}pg_restore {conn_args} --no-owner --no-acl --clean --if-exists -d {db} {f}",
@@ -197,10 +289,62 @@ pub async fn restore_database(wt_path: &str, file_path: &str, mut progress: impl
 
 #[cfg(test)]
 mod tests {
-    use super::q;
+    use super::*;
+
     #[test]
     fn quotes_args_safely() {
         assert_eq!(q("tooljet_main"), "'tooljet_main'");
         assert_eq!(q("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn tail_keeps_last_lines_in_order() {
+        assert_eq!(tail(b"a\nb\nc\nd\ne\nf"), "c\nd\ne\nf");
+        assert_eq!(tail(b"only"), "only");
+        assert_eq!(tail(b""), "");
+    }
+
+    /// only the Unix-gated pipe test uses this (the test spawns POSIX shell
+    /// commands, so it doesn't run on the Windows job)
+    #[cfg(unix)]
+    fn test_conn() -> PgConn {
+        PgConn {
+            host: "h".into(),
+            port: "1".into(),
+            user: "u".into(),
+            pass: None,
+            db: "d".into(),
+        }
+    }
+
+    /// THE invariant clone_database depends on: both children's exit statuses
+    /// are checked, and the error names the failing stage. A shell pipeline
+    /// reports only the last command's status — this is the regression that
+    /// motivated the Rust-held pipe, so it gets a live process test.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_piped_checks_both_exit_statuses() {
+        let c = test_conn();
+        let wt = std::env::temp_dir();
+        let wt = wt.to_str().unwrap();
+
+        // happy path: bytes flow producer → consumer, both exit 0
+        run_piped(wt, &c, "printf %s data", "cat >/dev/null", "src", "dst")
+            .await
+            .expect("clean pipe");
+
+        // producer fails while the consumer exits 0 — exactly the case a
+        // shell pipeline would report as success
+        let e = run_piped(wt, &c, "printf x; echo boom >&2; exit 7", "cat >/dev/null", "srcdb", "dst")
+            .await
+            .unwrap_err();
+        assert!(e.contains("dump of srcdb failed"), "names the dump stage: {e}");
+        assert!(e.contains("boom"), "carries producer stderr: {e}");
+
+        // consumer fails after a clean producer
+        let e = run_piped(wt, &c, "printf %s data", "cat >/dev/null; exit 3", "src", "dstdb")
+            .await
+            .unwrap_err();
+        assert!(e.contains("restore into dstdb failed"), "names the restore stage: {e}");
     }
 }

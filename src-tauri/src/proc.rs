@@ -126,6 +126,9 @@ mod imp {
 
     pub struct ProcGroup {
         job: OwnedJobHandle,
+        /// kept for parity with the Unix pgid and for diagnostics; only
+        /// `group_key` reads it, which nothing on Windows calls (see below)
+        #[allow(dead_code)]
         pid: u32,
     }
 
@@ -214,6 +217,11 @@ mod imp {
         }
     }
 
+    /// Part of the cross-platform API surface, but unused on Windows: its only
+    /// callers are the Unix crash-orphan persist and the Unix-gated selftest.
+    /// Windows needs neither — KILL_ON_JOB_CLOSE reaps the tree when Canopy
+    /// dies, so there are no orphans to record or sweep.
+    #[allow(dead_code)]
     pub fn group_key(g: &ProcGroup) -> i64 {
         g.pid as i64
     }

@@ -7,6 +7,7 @@ use tauri::{
 // ── macOS: the popover is a non-activating NSPanel (floats over full-screen
 //    apps, hides on blur). Elsewhere it's a regular borderless top window. ──
 #[cfg(target_os = "macos")]
+#[allow(clippy::unused_unit)] // tauri_panel!'s grammar requires `-> ()`
 mod macos_panel {
     use super::*;
     use tauri_nspanel::{
@@ -154,6 +155,11 @@ pub fn init(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = win.unminimize();
                     let _ = win.set_focus();
                 }
+                // On Linux the tray MENU is the only entry point (appindicator
+                // delivers no click events), so this — not the popover toggle —
+                // is the path back from a hidden window. Without the catch-up
+                // the user would stare at up to 60s-stale git data.
+                catch_up_refresh(app);
             }
             "quit" => app.exit(0),
             _ => {}
@@ -171,6 +177,29 @@ pub fn toggle_popover(app: &AppHandle, tray_pos: PhysicalPosition<f64>, tray_siz
     macos_panel::toggle(app, tray_pos, tray_size);
     #[cfg(not(target_os = "macos"))]
     window_popover::toggle(app, tray_pos, tray_size);
+    // if the toggle just made the popover visible, catch up on the git refresh
+    // that pauses while every window is hidden
+    let visible = app
+        .get_webview_window("popover")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        catch_up_refresh(app);
+    }
+}
+
+/// Re-run the git refresh that the background loop skips while every window is
+/// hidden. Every path that brings a window back on screen must call this —
+/// tray click (macOS), tray menu (Linux/Windows), and `show_main_window`.
+/// Collapses with any refresh already in flight (see `state::refresh_all`).
+pub(crate) fn catch_up_refresh(app: &AppHandle) {
+    // eager visibility hint: emit gating must not swallow the first events
+    // after a show while the 1s poll catches up
+    crate::note_window_shown();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        crate::state::refresh_all(&app).await;
+    });
 }
 
 /// Center the popover window under the tray icon, hanging below the menu/task

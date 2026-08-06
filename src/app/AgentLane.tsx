@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RepoNode, WorktreeNode } from "../types";
 import { laneLabel, nextTermId, useStore, type LaneSession } from "../store";
-import { hasBackend, ipc, type AgentCfg } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg } from "../ipc";
 import { ChevLeft, ChevRight, Doc, ExpandH, Play, Plus, PopIn, PopOut, Spinner, Sparkle, Terminal as TerminalIcon, X } from "../icons";
 import TerminalPane from "./TerminalPane";
 import { ContextEditor, bodyPreview, composeAgentPrompt, composeContextMd, isBlank, runtimeFor, useWtContext } from "./WorktreeContext";
@@ -359,7 +359,7 @@ export default function AgentLane({ repo, wt }: { repo: RepoNode; wt: WorktreeNo
       openSession({ id, wtKey: wt.wtKey, kind: "agent", title, agentId: profile.id, command });
       showToast(`${title} started — ${repo.name} · ${wt.branch}`);
     } catch (e) {
-      showToast(`Agent start failed — ${String(e)}`);
+      showToast(`Agent start failed — ${errText(e)}`);
     }
   };
 
