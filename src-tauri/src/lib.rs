@@ -299,6 +299,7 @@ pub fn run() {
             commands::open_port,
             commands::show_main_window,
             commands::quit_app,
+            commands::preview_worktree,
             commands::create_worktree,
             commands::run_worktree_setup,
             commands::worktree_dirty_report,

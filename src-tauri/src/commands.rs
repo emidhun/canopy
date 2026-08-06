@@ -694,11 +694,119 @@ fn emit_op(app: &AppHandle, wt_key: &str, op: &'static str, state: &'static str,
     );
 }
 
+/// Where a worktree for `branch` lands. The single definition — `create_worktree`
+/// and `preview_worktree` both call it, so the path the modal promises is the
+/// path creation uses.
+pub(crate) fn derive_worktree_path(repo: &RepoCfg, branch: &str) -> String {
+    let wt_dir = if repo.worktree_dir.trim().is_empty() {
+        format!("{}-worktrees", repo.path)
+    } else {
+        repo.worktree_dir.clone()
+    };
+    format!("{wt_dir}/{}", sanitize_branch(branch))
+}
+
 pub(crate) fn sanitize_branch(branch: &str) -> String {
     branch
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '.' { c } else { '_' })
         .collect()
+}
+
+/// One service's port in the preview, with whether anything already holds it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPort {
+    pub service_id: String,
+    pub name: String,
+    pub port: u32,
+    /// the branch of the worktree already using this port, if any
+    pub taken_by: Option<String>,
+}
+
+/// What creating a worktree for this branch would produce. Read-only: it
+/// allocates no port index, touches no disk, and registers nothing.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreePreview {
+    pub path: String,
+    pub slug: String,
+    /// `None` when the repo's provisioning never references `${WT_DB_NAME}` —
+    /// no isolated database would be created, and naming one would be a
+    /// promise the setup doesn't keep
+    pub db_name: Option<String>,
+    pub ports: Vec<PreviewPort>,
+    /// the derived path is already on disk, so creation would be refused
+    pub path_exists: bool,
+}
+
+/// Preview a worktree before creating it.
+///
+/// Shares every derivation with `create_worktree` — the path via
+/// `derive_worktree_path`, the port index via `peek_port_index` (the same
+/// first-free-slot rule, with `assign: false`), and the database name via
+/// `derived_db_name`, which is also what `worktree_vars` exposes as
+/// `${WT_DB_NAME}`. The panel's entire value is that it matches what you
+/// actually get; a parallel implementation that drifts would be worse than no
+/// panel at all.
+#[tauri::command]
+pub fn preview_worktree(app: AppHandle, repo_id: String, branch: String) -> Result<WorktreePreview, CanopyError> {
+    let repo = {
+        let state = app.state::<AppState>();
+        let s = state.settings.read();
+        s.repos.iter().find(|r| r.id == repo_id).cloned().ok_or_else(|| CanopyError::not_found("unknown repo"))?
+    };
+    let path = derive_worktree_path(&repo, &branch);
+
+    let state = app.state::<AppState>();
+    // peek, never assign: opening the modal must not consume a port slot that
+    // a worktree created moments later from a different branch would then skip
+    let idx = {
+        let mut rt = state.runtime.write();
+        crate::state::peek_port_index(&mut rt, &repo_id, &path)
+    };
+    let overrides = state.runtime.read().port_overrides.clone();
+
+    // every port already spoken for, and by which branch
+    let held: std::collections::HashMap<u32, String> = {
+        let tree = state.tree.read();
+        tree.iter()
+            .flat_map(|r| r.worktrees.iter())
+            .flat_map(|w| w.services.iter().filter_map(|s| s.port.map(|p| (p, w.branch.clone()))))
+            .collect()
+    };
+
+    let ports = repo
+        .services
+        .iter()
+        .filter_map(|s| {
+            let base = s.base_port? as u32;
+            let key = crate::state::svc_key(&path, &s.id);
+            let port = crate::state::effective_port(&overrides, &key, base, idx);
+            Some(PreviewPort {
+                service_id: s.id.clone(),
+                name: s.name.clone(),
+                port,
+                taken_by: held.get(&port).cloned(),
+            })
+        })
+        .collect();
+
+    // Only claim a database if provisioning would actually create one.
+    let cfg = crate::setup::read_repo_config(&repo.path);
+    let uses_db = cfg
+        .provision
+        .iter()
+        .any(|p| p.keys.iter().any(|(_, tpl)| tpl.contains("${WT_DB_NAME}")));
+    let db_name = uses_db.then(|| crate::state::derived_db_name(&repo_id, &path));
+
+    Ok(WorktreePreview {
+        slug: crate::setup::wt_slug(&path),
+        path_exists: std::path::Path::new(&path).exists(),
+        path,
+        db_name,
+        ports,
+    })
 }
 
 #[tauri::command]
@@ -718,12 +826,7 @@ pub async fn create_worktree(
             .cloned()
             .ok_or_else(|| CanopyError::not_found("unknown repo"))?
     };
-    let wt_dir = if repo.worktree_dir.trim().is_empty() {
-        format!("{}-worktrees", repo.path)
-    } else {
-        repo.worktree_dir.clone()
-    };
-    let wt_path = format!("{wt_dir}/{}", sanitize_branch(&branch));
+    let wt_path = derive_worktree_path(&repo, &branch);
     if std::path::Path::new(&wt_path).exists() {
         return Err(CanopyError::conflict(format!("Path already exists: {wt_path}")));
     }
