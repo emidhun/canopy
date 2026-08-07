@@ -14,7 +14,8 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings, type UpdateStatus } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -155,6 +156,7 @@ function hlLine(line: string): string {
 
 const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  updates: { autoCheck: true }, crashReports: { enabled: false },
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [
@@ -703,10 +705,87 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
             <button key={c} className="ico" disabled style={{ background: c, borderColor: i === 0 ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
         </div>
       </div>
-      <Adv n="not wired yet">
-        <Soon>Automatic updates and crash reporting aren't configurable from here yet.</Soon>
-      </Adv>
+      <UpdatesSection settings={settings} patch={patch} markDirty={markDirty} />
     </>
+  );
+}
+
+/* Updates + crash reports.
+
+   Canopy checks whether a newer release exists and links to it; it does not
+   download or install. That needs signed release bundles, which this project
+   does not produce yet — an updater that silently fails every launch would be
+   worse than an honest link. Crash reports are written to the log directory
+   and never transmitted, because there is nowhere to transmit them to. */
+function UpdatesSection({ settings, patch, markDirty }: Pick<PageProps, "settings" | "patch" | "markDirty">) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [crashes, setCrashes] = useState(0);
+
+  useEffect(() => {
+    if (!hasBackend()) return;
+    ipc.crashReportCount().then(setCrashes).catch(() => {});
+  }, [settings.crashReports?.enabled]);
+
+  const check = async () => {
+    if (!hasBackend()) return;
+    setChecking(true);
+    try {
+      setStatus(await ipc.checkForUpdate());
+    } catch {
+      /* the command reports its own failure in `error`; a rejection here means
+         the backend is gone, and there is nothing useful to say about that */
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="sec">
+      <div className="slab">Updates &amp; diagnostics</div>
+      <TRow
+        title="Check for updates automatically"
+        hint="Asks GitHub twice a day whether a newer release exists. Nothing is downloaded or installed."
+        on={settings.updates?.autoCheck !== false}
+        onToggle={() => { patch({ updates: { autoCheck: !(settings.updates?.autoCheck !== false) } }); markDirty("general"); }}
+      />
+      <div className="row" style={{ marginTop: 8, alignItems: "center", gap: 10 }}>
+        <button className="btn" onClick={check} disabled={checking || !hasBackend()}>
+          {checking ? "Checking…" : "Check now"}
+        </button>
+        <span className="hint" style={{ marginTop: 0 }}>
+          {!status
+            ? `You're on ${hasBackend() ? "this build" : "a dev build"}.`
+            : status.error
+              ? status.error
+              : status.available
+                ? `${status.latest} is available — you have ${status.current}.`
+                : `Up to date (${status.current}).`}
+        </span>
+        {status?.available && status.url && (
+          <button className="btn" onClick={() => openUrl(status.url as string).catch(() => {})}>
+            Open release
+          </button>
+        )}
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <TRow
+          title="Record crash reports"
+          hint="Writes a stack trace to the log folder if Canopy crashes. Stack traces only, and nothing is sent anywhere."
+          on={!!settings.crashReports?.enabled}
+          onToggle={() => { patch({ crashReports: { enabled: !settings.crashReports?.enabled } }); markDirty("general"); }}
+        />
+        {crashes > 0 && (
+          <div className="row" style={{ marginTop: 8, alignItems: "center", gap: 10 }}>
+            <button className="btn" onClick={() => ipc.openCrashReports().catch(() => {})}>
+              Show {crashes} report{crashes === 1 ? "" : "s"}
+            </button>
+            <span className="hint" style={{ marginTop: 0 }}>Attach one to a bug report.</span>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

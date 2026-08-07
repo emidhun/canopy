@@ -57,6 +57,20 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  updates: { autoCheck: boolean };
+  crashReports: { enabled: boolean };
+}
+
+/** Result of an update check. Canopy reports what exists; it never downloads
+    or installs (release signing isn't set up — see updates.rs). */
+export interface UpdateStatus {
+  current: string;
+  latest: string | null;
+  available: boolean;
+  url: string | null;
+  /** why the last check produced nothing — shown verbatim */
+  error: string | null;
+  checkedAt: number;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
@@ -165,6 +179,10 @@ export const ipc = {
   worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
+
+  checkForUpdate: () => invoke<UpdateStatus>("check_for_update"),
+  crashReportCount: () => invoke<number>("crash_report_count"),
+  openCrashReports: () => invoke<void>("open_crash_reports"),
 };
 
 export interface GitEvent extends GitMeta {

@@ -1159,6 +1159,28 @@ pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<Provisio
     crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
 }
 
+/// Check GitHub for a newer release now, regardless of the auto-check
+/// preference — pressing the button IS the consent.
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<crate::updates::UpdateStatus, CanopyError> {
+    Ok(crate::updates::check_now(&app).await)
+}
+
+/// How many crash reports are on disk, so the UI offers the folder only when
+/// there is something in it.
+#[tauri::command]
+pub fn crash_report_count(app: AppHandle) -> usize {
+    crate::updates::crash_report_count(&app)
+}
+
+/// Reveal the crash-report folder. Reports never leave the machine, so this is
+/// the only way to hand one to a bug report.
+#[tauri::command]
+pub fn open_crash_reports(app: AppHandle) -> Result<(), CanopyError> {
+    let dir = crate::updates::crash_dir(&app).ok_or_else(|| CanopyError::not_found("no log directory"))?;
+    reveal_in_finder(dir.to_string_lossy().into_owned())
+}
+
 /// `git fetch --all --prune` then return the refreshed branch lists.
 #[tauri::command]
 pub async fn fetch_branches(app: AppHandle, repo_id: String) -> Result<git::Branches, CanopyError> {

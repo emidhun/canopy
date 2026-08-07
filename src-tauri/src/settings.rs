@@ -13,6 +13,38 @@ pub struct Settings {
     pub repos: Vec<RepoCfg>,
     /// show the in-place "Switch branch" action in the worktree header
     pub show_switch_branch: bool,
+    #[serde(default)]
+    pub updates: UpdatesCfg,
+    #[serde(default)]
+    pub crash_reports: CrashCfg,
+}
+
+/// Update-check preferences. Canopy checks the project's GitHub releases for a
+/// newer tag; it never downloads or installs anything on its own (see
+/// `updates.rs` for why).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdatesCfg {
+    /// check for a newer release in the background
+    pub auto_check: bool,
+}
+
+impl Default for UpdatesCfg {
+    fn default() -> Self {
+        // Checking is a single small request a few times a day and is the only
+        // way someone learns a fix shipped, so it is on by default. Anything
+        // that *installs* would not be.
+        Self { auto_check: true }
+    }
+}
+
+/// Crash-report preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CrashCfg {
+    /// record a stack trace to the log directory when Canopy panics.
+    /// Opt-in: off until the user turns it on.
+    pub enabled: bool,
 }
 
 impl Default for Settings {
@@ -23,6 +55,8 @@ impl Default for Settings {
             terminal: String::new(),
             repos: Vec::new(),
             show_switch_branch: true,
+            updates: UpdatesCfg::default(),
+            crash_reports: CrashCfg::default(),
         }
     }
 }
