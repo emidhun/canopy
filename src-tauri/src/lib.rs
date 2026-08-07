@@ -88,10 +88,11 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tray::init(&handle)?;
-            app.manage(AppState::new(
-                settings::load_settings(&handle),
-                settings::load_runtime(&handle),
-            ));
+            let loaded = settings::load_settings(&handle);
+            // git credentials are process-wide (see git.rs) — publish them
+            // before anything can run a git command
+            git::apply_credentials(&loaded.security.ssh_key, &loaded.security.credential_helper);
+            app.manage(AppState::new(loaded, settings::load_runtime(&handle)));
             app.manage(ProcTable::default());
             app.manage(TermTable::default());
 
