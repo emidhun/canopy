@@ -521,6 +521,7 @@ pub async fn run_setup(
     wt_path: &str,
     repo_path: &str,
     vars: &HashMap<String, String>,
+    parallel: bool,
     mut progress: impl FnMut(String),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
@@ -532,7 +533,71 @@ pub async fn run_setup(
             provision_file(wt_path, repo_path, pf, vars)?;
         }
     }
+    if parallel && cfg.setup.len() > 1 {
+        return run_commands_parallel(wt_path, repo_path, &cfg.setup, vars, &mut progress).await;
+    }
     run_commands(wt_path, repo_path, &cfg.setup, vars, "setup", &mut progress).await
+}
+
+/// Run every setup command at once (the `parallel-setup` experiment).
+///
+/// Correct only when the tasks are independent; the experiment's own copy says
+/// so, and that is exactly why it is an experiment rather than the default.
+/// Ordinary setup lists routinely encode a dependency ("install, then
+/// migrate") that no static analysis here could detect.
+///
+/// Output is funnelled through one channel rather than shared `&mut` progress,
+/// so interleaved lines stay whole and each is prefixed with its task number —
+/// without that, parallel output is unreadable.
+async fn run_commands_parallel(
+    wt_path: &str,
+    repo_path: &str,
+    cmds: &[String],
+    vars: &HashMap<String, String>,
+    progress: &mut impl FnMut(String),
+) -> Result<(), String> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let n = cmds.len();
+    progress(format!("setup [parallel]: running {n} tasks at once"));
+
+    let mut handles = Vec::with_capacity(n);
+    for (i, cmd) in cmds.iter().enumerate() {
+        let (wt, repo, cmd, vars, tx) = (wt_path.to_string(), repo_path.to_string(), cmd.clone(), vars.clone(), tx.clone());
+        handles.push(tauri::async_runtime::spawn(async move {
+            let label = format!("setup [{}/{n}]", i + 1);
+            let one = [cmd];
+            let tx2 = tx.clone();
+            let mut fwd = move |line: String| {
+                let _ = tx2.send(format!("{label} {line}"));
+            };
+            run_commands(&wt, &repo, &one, &vars, "setup", &mut fwd).await
+        }));
+    }
+    drop(tx); // the loop below ends when every task's sender is gone
+
+    while let Some(line) = rx.recv().await {
+        progress(line);
+    }
+
+    // Every task is awaited even after one fails: leaving the others running
+    // detached would let a half-finished install keep writing into a worktree
+    // the caller has already been told is broken.
+    let mut first_error: Option<String> = None;
+    for h in handles {
+        match h.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+            Err(e) => {
+                first_error.get_or_insert(format!("setup task panicked: {e}"));
+            }
+        }
+    }
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Run a worktree's teardown commands (e.g. drop its database) before deletion.

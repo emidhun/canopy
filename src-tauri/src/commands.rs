@@ -764,7 +764,8 @@ pub async fn create_worktree(
     // The worktree exists either way; surface setup failure but keep the tree fresh.
     let app3 = app.clone();
     let wt_path3 = wt_path.clone();
-    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
+    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, parallel, move |line| {
         emit_op(&app3, &wt_path3, "create", "progress", line)
     })
     .await;
@@ -803,7 +804,8 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     let app3 = app.clone();
     let wt3 = wt_key.clone();
     emit_op(&app, &wt_key, "create", "progress", "running setup…");
-    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
+    match crate::setup::run_setup(&wt_key, &repo_path, &vars, parallel, move |line| {
         emit_op(&app3, &wt3, "create", "progress", line)
     })
     .await
@@ -1157,6 +1159,52 @@ pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<Provisio
     let path = repo_path(&app, &repo_id)?;
     let files: Vec<crate::setup::ProvisionFile> = provision.into_iter().map(Into::into).collect();
     crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
+}
+
+// ── diagnostics / caches / reset (Settings → Advanced) ──
+
+/// An environment summary for a bug report, plus the same thing as markdown so
+/// the UI can put one string on the clipboard.
+#[tauri::command]
+pub fn gather_diagnostics(app: AppHandle) -> (crate::diagnostics::Diagnostics, String) {
+    let d = crate::diagnostics::gather(&app);
+    let md = crate::diagnostics::as_markdown(&d);
+    (d, md)
+}
+
+/// The experiments this build ships, so Settings renders the ones that exist
+/// rather than a hardcoded list that drifts from what the app honours.
+#[tauri::command]
+pub fn list_experiments() -> Vec<crate::diagnostics::Experiment> {
+    crate::diagnostics::EXPERIMENTS.to_vec()
+}
+
+/// Reveal the log directory — the thing a bug report attaches.
+#[tauri::command]
+pub fn open_log_dir(app: AppHandle) -> Result<(), CanopyError> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| CanopyError::not_found(format!("no log directory: {e}")))?;
+    std::fs::create_dir_all(&dir).map_err(|e| CanopyError::internal(e.to_string()))?;
+    reveal_in_finder(dir.to_string_lossy().into_owned())
+}
+
+/// Delete Canopy's own regenerable files (rotated service logs). Never touches
+/// a worktree, a database, a repository or a settings file.
+#[tauri::command]
+pub fn clear_caches(app: AppHandle) -> crate::diagnostics::ClearedCaches {
+    crate::diagnostics::clear_caches(&app)
+}
+
+/// Restore default settings, keeping registered repositories. The confirmation
+/// lives in the UI; this command is the irreversible half and does exactly
+/// what its name says.
+#[tauri::command]
+pub async fn reset_settings(app: AppHandle) -> Result<Settings, CanopyError> {
+    crate::diagnostics::reset_settings(&app).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(app.state::<AppState>().settings.read().clone())
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.
