@@ -13,6 +13,62 @@ pub struct Settings {
     pub repos: Vec<RepoCfg>,
     /// show the in-place "Switch branch" action in the worktree header
     pub show_switch_branch: bool,
+    /// the embedded PTY + xterm renderer (Settings → Terminal → Embedded shell)
+    #[serde(default)]
+    pub embedded_terminal: TermCfg,
+}
+
+/// Embedded-shell configuration.
+///
+/// Every field has an "unset" value that means *keep the built-in behaviour*
+/// (empty string, or 0 for the numbers) rather than a baked-in default. That
+/// way a settings file written before this existed behaves exactly as it did,
+/// and the renderer's defaults stay in one place — the design's own tokens —
+/// instead of being duplicated here as magic numbers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TermCfg {
+    /// shell to run; empty = the user's login shell
+    pub program: String,
+    /// extra arguments, whitespace-separated. Applied only with an explicit
+    /// `program`: they would collide with the `-l`/`-i`/`-c` flags Canopy
+    /// passes to a login shell it chose itself.
+    pub args: String,
+    /// CSS font stack; empty = the app's mono stack
+    pub font_family: String,
+    /// 0 = the app's default size
+    pub font_size: f32,
+    /// lines of scrollback the renderer keeps; 0 = default
+    pub scrollback: u32,
+    /// block | underline | bar; empty = block
+    pub cursor: String,
+    /// blink the cursor
+    pub cursor_blink: bool,
+    /// flash the pane when a process emits BEL
+    pub bell: bool,
+    /// open new shells in the worktree root (off = the user's home directory)
+    pub cwd_worktree: bool,
+    /// expose the worktree's provisioned variables (WT_SLUG, WT_DB_NAME,
+    /// WT_<SERVICE>_PORT) to the shell, so a command typed by hand sees the
+    /// same environment setup and services do
+    pub inherit_env: bool,
+}
+
+impl Default for TermCfg {
+    fn default() -> Self {
+        Self {
+            program: String::new(),
+            args: String::new(),
+            font_family: String::new(),
+            font_size: 0.0,
+            scrollback: 0,
+            cursor: String::new(),
+            cursor_blink: true,
+            bell: false,
+            cwd_worktree: true,
+            inherit_env: true,
+        }
+    }
 }
 
 impl Default for Settings {
@@ -23,6 +79,7 @@ impl Default for Settings {
             terminal: String::new(),
             repos: Vec::new(),
             show_switch_branch: true,
+            embedded_terminal: TermCfg::default(),
         }
     }
 }
