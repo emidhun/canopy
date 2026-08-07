@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings, type WorktreeDefaults } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -153,10 +153,13 @@ function hlLine(line: string): string {
   return s;
 }
 
+const DEFAULT_WT_DEFAULTS: WorktreeDefaults = { runSetup: true, startServices: false, isolatedDatabase: true };
+
 const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    defaultBase: "main", worktreeDefaults: DEFAULT_WT_DEFAULTS,
     services: [
       { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" } },
       { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" } },
@@ -606,6 +609,8 @@ function SetupPage({ setup, setSetup, markDirty, flash }: PageProps) {
 function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onExportJson, onImportJson }: PageProps) {
   const [confirm, setConfirm] = useState(false);
   if (!repo) return null;
+  const wd = repo.worktreeDefaults ?? DEFAULT_WT_DEFAULTS;
+  const setWd = (p: Partial<WorktreeDefaults>) => { patchRepo({ worktreeDefaults: { ...wd, ...p } }); markDirty("repo-general"); };
   return (
     <>
       <div className="sec">
@@ -614,20 +619,20 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onEx
           <span className="lb">Name</span><input className="inp" value={repo.name} onChange={(e) => { patchRepo({ name: e.target.value }); markDirty("repo-general"); }} />
           <span className="lb">Path</span>
           <div className="row"><input className="inp mono gr" value={repo.path} readOnly />
-            <button className="ico" title="Reveal in Finder (coming soon)" onClick={() => flash("Revealing a repo in Finder isn't wired yet")}><Finder size={12} /></button></div>
+            <button className="ico" title="Reveal in Finder" onClick={() => { if (!hasBackend()) return flash("Needs the desktop app"); ipc.revealRepo(repo.id).catch((e) => flash(errText(e))); }}><Finder size={12} /></button></div>
           <span className="lb">Worktree root</span><input className="inp mono" value={repo.worktreeDir} placeholder=".worktrees" onChange={(e) => { patchRepo({ worktreeDir: e.target.value }); markDirty("repo-general"); }} />
           <span className="lb">Default base</span>
-          <select className="inp" disabled title="Not stored per repo yet"><option>main</option></select>
+          <input className="inp mono" value={repo.defaultBase} placeholder="main" onChange={(e) => { patchRepo({ defaultBase: e.target.value }); markDirty("repo-general"); }} />
         </div>
       </div>
       <div className="sec">
         <div className="slab">Defaults for new worktrees</div>
-        <Soon>These defaults aren't stored per repo yet — Canopy runs setup and provisions files on create today.</Soon>
-        <div className="soonwrap">
-          <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created." on disabled />
-          <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes." on={false} disabled />
-          <TRow title="Create an isolated database" hint="One database per worktree, named from the branch slug." on disabled />
-        </div>
+        <TRow title="Run setup automatically" hint="Provision files and run setup tasks as soon as the worktree is created. Off leaves it unprovisioned until you press Run setup."
+          on={wd.runSetup} onToggle={() => setWd({ runSetup: !wd.runSetup })} />
+        <TRow title="Start services after setup" hint="Boot the service list once provisioning finishes. Ignored when setup is skipped — a service started against an unprovisioned worktree just crashes."
+          on={wd.startServices} onToggle={() => setWd({ startServices: !wd.startServices })} />
+        <TRow title="Create an isolated database" hint="Gives the worktree its own database name from the branch slug. Off points ${WT_DB_NAME} at the main checkout's PG_DB, so worktrees share one database."
+          on={wd.isolatedDatabase} onToggle={() => setWd({ isolatedDatabase: !wd.isolatedDatabase })} />
       </div>
       <div className="sec">
         <div className="slab">Configuration file</div>

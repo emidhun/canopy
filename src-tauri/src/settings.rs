@@ -66,6 +66,34 @@ pub struct RepoCfg {
     /// `agent_command` so existing settings files upgrade without data loss.
     #[serde(default)]
     pub agents: Vec<AgentCfg>,
+    /// Branch new worktrees are created from when the user doesn't pick one.
+    /// Empty = whatever the New-worktree modal defaults to (`main` if present).
+    #[serde(default)]
+    pub default_base: String,
+    #[serde(default)]
+    pub worktree_defaults: WorktreeDefaults,
+}
+
+/// What `create_worktree` does after `git worktree add`, per repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorktreeDefaults {
+    /// provision files and run setup tasks as soon as the worktree exists
+    pub run_setup: bool,
+    /// start the service list once provisioning finishes
+    pub start_services: bool,
+    /// give the worktree its own database name (`WT_DB_NAME` = the branch
+    /// slug). Off makes `WT_DB_NAME` resolve to the MAIN checkout's PG_DB, so
+    /// the worktree shares that database instead of getting one of its own.
+    pub isolated_database: bool,
+}
+
+impl Default for WorktreeDefaults {
+    fn default() -> Self {
+        // Matches what create_worktree did before these were configurable, so
+        // an existing settings file behaves identically.
+        Self { run_setup: true, start_services: false, isolated_database: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
