@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type NotifyCfg, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -153,8 +153,12 @@ function hlLine(line: string): string {
   return s;
 }
 
+const DEFAULT_NOTIFY: NotifyCfg = {
+  serviceCrash: true, agentWaiting: true, setupDone: false, branchMoved: false, sound: false, badge: "count",
+};
+
 const MOCK: Settings = {
-  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, notifications: DEFAULT_NOTIFY,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [
@@ -734,17 +738,33 @@ function TerminalPage({ settings, patch, markDirty }: PageProps) {
   );
 }
 
-function NotificationsPage() {
+/* Notifications only fire while no Canopy window is on screen — the pip, the
+   attention queue and the toast have already said it otherwise. */
+function NotificationsPage({ settings, patch, markDirty }: PageProps) {
+  const n = settings.notifications ?? DEFAULT_NOTIFY;
+  const set = (p: Partial<NotifyCfg>) => { patch({ notifications: { ...n, ...p } }); markDirty("notifications"); };
   return (
-    <div className="sec">
-      <div className="slab">Notify me when</div>
-      <Soon>Notification preferences aren't stored yet. Canopy surfaces service crashes and blocked agents in the in-app attention queue regardless.</Soon>
-      <div className="soonwrap">
-        <TRow title="A service crashes" hint="The only notification on by default — it needs you." on disabled />
-        <TRow title="An agent needs a decision" hint="An agent is blocked waiting on input." on disabled />
-        <TRow title="Setup finishes" hint="Provisioning and setup tasks completed." on={false} disabled />
+    <>
+      <div className="sec">
+        <div className="slab">Notify me when<span className="n">only while Canopy isn't on screen</span></div>
+        <TRow title="A service crashes" hint="It exited on its own. Nothing else in that worktree works until it's back." on={n.serviceCrash} onToggle={() => set({ serviceCrash: !n.serviceCrash })} />
+        <TRow title="An agent needs a decision" hint="An agent is blocked waiting on input." on={n.agentWaiting} onToggle={() => set({ agentWaiting: !n.agentWaiting })} />
+        <TRow title="Setup finishes" hint="Provisioning and setup tasks completed, or failed." on={n.setupDone} onToggle={() => set({ setupDone: !n.setupDone })} />
+        <TRow title="A branch moves on origin" hint="Fires when you fall further behind, not for every refresh while you already are." on={n.branchMoved} onToggle={() => set({ branchMoved: !n.branchMoved })} />
       </div>
-    </div>
+      <div className="sec">
+        <div className="slab">How</div>
+        <TRow title="Play a sound" on={n.sound} onToggle={() => set({ sound: !n.sound })} />
+        <div className="fgrid" style={{ marginTop: 8 }}>
+          <span className="lb">Badge</span>
+          <select className="inp" value={n.badge} onChange={(e) => set({ badge: e.target.value })}>
+            <option value="count">Count of things needing you</option>
+            <option value="dot">A dot</option>
+            <option value="off">No badge</option>
+          </select>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1176,7 +1196,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       case "setup": return <SetupPage {...pageProps} />;
       case "repo-general": return <RepoGeneralPage {...pageProps} />;
       case "terminal": return <TerminalPage {...pageProps} />;
-      case "notifications": return <NotificationsPage />;
+      case "notifications": return <NotificationsPage {...pageProps} />;
       case "shortcuts": return <ShortcutsPage />;
       case "advanced": return <AdvancedPage {...pageProps} />;
       case "security": return <SecurityPage />;

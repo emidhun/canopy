@@ -688,9 +688,22 @@ struct WorktreeOpEvent {
 
 fn emit_op(app: &AppHandle, wt_key: &str, op: &'static str, state: &'static str, detail: impl Into<String>) {
     use tauri::Emitter;
+    let detail = detail.into();
+    // A provisioning run that finished is the one "op" worth telling someone
+    // about who isn't watching — it is the gate on the worktree being usable.
+    if matches!(op, "create") && matches!(state, "done" | "error") {
+        let branch = app.state::<AppState>().wt_context(wt_key).map(|c| c.branch).unwrap_or_else(|| wt_key.to_string());
+        crate::notify::notify(
+            app,
+            crate::notify::Kind::SetupDone,
+            wt_key,
+            if state == "error" { "Setup failed" } else { "Setup finished" },
+            &format!("{branch} — {detail}"),
+        );
+    }
     let _ = app.emit(
         "worktree:op",
-        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail: detail.into() },
+        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail },
     );
 }
 

@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod error;
 mod git;
+mod notify;
 mod proc;
 mod services;
 mod settings;
@@ -80,7 +81,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init());
     // NSPanel plugin is macOS-only; other platforms use a plain popover window.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
@@ -94,6 +96,7 @@ pub fn run() {
             ));
             app.manage(ProcTable::default());
             app.manage(TermTable::default());
+            app.manage(notify::NotifyState::default());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
