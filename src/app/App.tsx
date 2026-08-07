@@ -226,6 +226,23 @@ export default function App() {
     return () => document.removeEventListener("keydown", k);
   });
 
+  /* commands from the menu-bar tray (a separate webview): it shows this window,
+     then emits — we open the matching surface here. */
+  useEffect(() => {
+    if (!hasBackend()) return;
+    const unlisten: Array<() => void> = [];
+    let dead = false;
+    const track = (p: Promise<() => void>) => p.then((u) => (dead ? u() : unlisten.push(u)));
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      track(listen("tray:new-worktree", () => setShowNewWt(true)));
+      track(listen("tray:overview", () => setView("overview")));
+    });
+    return () => {
+      dead = true;
+      unlisten.forEach((u) => u());
+    };
+  }, []);
+
   const onboardingActive = showOnboarding || (tree.length === 0 && !obDismissed);
   const worktreeCount = tree.reduce((n, r) => n + r.worktrees.length, 0);
 

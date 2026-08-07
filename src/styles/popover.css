@@ -1,262 +1,490 @@
-/* Popover styles — ported 1:1 from "Worktree Manager Popover.html" (.wm-*) */
+/* Menu-bar tray — ported 1:1 from the design system's "Canopy Tray.html".
+   The design's presentation scaffolding (fake desktop + menu bar) is dropped:
+   the frameless window IS the popover card, so `.pop` fills the window and the
+   body is transparent. Every other rule is the design's verbatim, token-driven.
+   This sheet loads only in the popover window (with tokens.css). */
 
+html,
 body {
-  /* transparent window: the .wm-pop draws its own chrome inside a shadow gutter */
+  margin: 0;
+  height: 100%;
+}
+body {
+  /* transparent window: the card draws its own chrome (radius + shadow) */
   background: transparent;
-}
-
-/* hide scrollbars in the popover window — trackpad/wheel scroll still works.
-   (Scoped: popover.css only loads in the popover window.) */
-html {
-  scrollbar-width: none; /* Firefox/standards */
-}
-::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-  background: transparent;
-}
-
-.pop-gutter {
-  /* window hugs the card — no shadow gutter */
-  padding: 0;
-}
-
-.wm-pop {
-  width: 284px;
-  /* cap to the window height so the list scrolls inside rather than the window
-     clipping; JS caps the window at the available screen height */
-  max-height: 100vh;
-  background: var(--bg);
-  border: 1px solid var(--border-pop);
-  border-radius: 11px;
-  padding: 5px 0;
-  color: var(--text);
   font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  color: var(--text);
   user-select: none;
-  overflow: hidden;
+}
+.pop-gutter {
+  height: 100%;
+}
+.pop-gutter > div {
+  height: 100%;
+}
+
+/* ── the popover card — fills the frameless window ─────────────── */
+.pop {
+  width: 100%;
+  height: 100%;
+  background: var(--titlebar);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-pop);
   display: flex;
   flex-direction: column;
+  max-height: 100vh;
+  overflow: hidden;
+}
+.pop.is-in {
+  animation: pin var(--dur-panel) var(--ease-pop);
+}
+@keyframes pin {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
 }
 
-.wm-item {
+.ph {
+  padding: var(--sp-4) var(--sp-5) var(--sp-3);
   display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
+  flex-direction: column;
+  gap: var(--sp-3);
   flex: none;
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 14px;
-  color: var(--text);
-  text-align: left;
-  padding: 6px 14px;
-  border-radius: 7px;
-  margin: 0;
-  transition: background 0.09s ease;
 }
-.wm-item:hover {
-  background: var(--hover);
-}
-.wm-item:focus {
-  outline: none;
-}
-.wm-item:focus-visible {
-  background: var(--hover);
-}
-.wm-item-ic {
-  display: inline-flex;
-  color: var(--dim);
-}
-.wm-item--flash {
-  background: var(--accent) !important;
-  color: #07181a;
-}
-.wm-item--flash .wm-item-ic {
-  color: #07181a;
-}
-
-.wm-sep {
-  height: 1px;
-  flex: none;
-  background: var(--border-pop);
-  margin: 6px 12px;
-}
-
-/* the worktree list — scrolls inside the popover when it hits the height cap */
-.wm-groups {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.wm-grp {
-  padding: 0;
-}
-.wm-grp--div {
-  border-top: 1px solid var(--border-pop);
-  margin-top: 5px;
-  padding-top: 5px;
-}
-
-.wm-group {
+.repo {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--faint);
-  padding: 8px 14px 3px;
-  letter-spacing: 0.01em;
-  line-height: 1;
-}
-.wm-fork {
-  display: inline-flex;
-  color: var(--accent);
-}
-.wm-mid {
-  color: var(--border-pop);
-  padding: 0 1px;
-}
-
-/* worktree row — branch + actions, then service chips */
-.wm-wt {
-  padding: 5px 10px 7px 14px;
-  border-radius: 7px;
-  margin: 1px 0;
-  transition: background 0.09s ease;
-}
-.wm-wt:hover {
-  background: var(--hover);
-}
-.wm-wt-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.wm-wt-branch {
-  flex: 1 1 auto;
+  gap: var(--sp-3);
   min-width: 0;
-  font-size: 14px;
-  font-weight: 550;
+  position: relative;
+}
+.repo > button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--h-control-sm);
+  padding: 0 var(--sp-2) 0 var(--sp-1);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  min-width: 0;
+  transition: background var(--dur-fast);
+}
+.repo > button:hover {
+  background: var(--hover);
+}
+.repo .nm {
+  font-size: var(--fs-body);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--tracking-tight);
+}
+.gear {
+  all: unset;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-md);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.gear:hover {
+  background: var(--btn-hover);
   color: var(--text);
-  letter-spacing: -0.005em;
+}
+.repo .sum {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-micro);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.repo .sum b {
+  color: var(--green);
+  font-weight: var(--fw-medium);
+}
+
+/* repo switcher menu */
+.repomenu {
+  position: absolute;
+  z-index: 6;
+  top: calc(var(--h-control-sm) + var(--sp-1));
+  left: 0;
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--raised);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-menu);
+  padding: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-hair);
+}
+.repomenu button {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: var(--fs-body);
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.wm-acts {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.repomenu button:hover {
+  background: var(--raised-hi);
 }
-.wm-act {
-  flex: none;
-  width: 26px;
-  height: 24px;
-  border: 0;
-  cursor: pointer;
-  background: none;
-  color: var(--dim);
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.1s ease, color 0.1s ease;
-}
-.wm-act:hover {
-  background: var(--btn);
-  color: var(--text);
-}
-.wm-act--busy {
-  color: var(--accent);
-  cursor: default;
-}
-.wm-act:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.wm-act:disabled:hover {
-  background: none;
-  color: var(--dim);
-}
-.wm-toggle {
-  flex: none;
-  min-width: 52px;
-  margin-left: 3px;
-  border: 0;
-  cursor: pointer;
-  background: var(--btn);
-  color: var(--text);
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 500;
-  padding: 4px 12px;
-  border-radius: 6px;
-  line-height: 1.3;
-  transition: background 0.1s ease, opacity 0.1s ease;
-}
-.wm-toggle:hover {
-  background: var(--btn-hover);
-}
-.wm-toggle:active {
-  transform: translateY(0.5px);
-}
-.wm-toggle.is-busy {
-  opacity: 0.5;
-  cursor: default;
-  color: var(--dim);
+.repomenu button.on {
+  color: var(--teal-text);
 }
 
-.wm-svcs {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 14px;
-  margin-top: 3px;
-  padding-left: 1px;
-}
-.wm-svc {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--dim);
-}
-.wm-svc-dot {
+.dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex: none;
-  background: var(--faint);
 }
-.wm-svc-dot.s-running {
-  background: var(--run);
+.dot.run {
+  background: var(--green);
+  box-shadow: var(--halo) var(--green-dim);
 }
-.wm-svc-dot.s-stopped {
-  background: var(--faint);
+.dot.idle {
+  background: var(--off);
 }
-.wm-svc-dot.s-error {
-  background: var(--stop);
+.dot.err {
+  background: var(--red);
+  box-shadow: var(--halo) var(--red-dim);
 }
-.wm-svc-dot.s-starting,
-.wm-svc-dot.s-stopping {
-  background: var(--accent);
-  animation: wm-pulse 0.9s ease-in-out infinite;
+.dot.boot {
+  background: var(--amber);
+  box-shadow: var(--halo) var(--warn-dim);
+  animation: bp 1s ease-in-out infinite;
 }
-@keyframes wm-pulse {
+@keyframes bp {
   50% {
     opacity: 0.35;
   }
 }
 
-.wm-spin {
-  animation: wm-spin 0.8s linear infinite;
-  transform-origin: 50% 50%;
+.search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--h-control);
+  padding: 0 var(--sp-4);
+  background: var(--panel-2);
+  border: var(--border-w) solid var(--border-soft);
+  border-radius: var(--r-lg);
+  transition: border-color var(--dur);
 }
-@keyframes wm-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.search:focus-within {
+  border-color: var(--teal);
+}
+.search > svg {
+  color: var(--faint);
+  flex: none;
+}
+.search input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  font: var(--fw-regular) var(--fs-body) var(--mono);
+  color: var(--text);
+  letter-spacing: var(--tracking-tight);
+}
+.search input::placeholder {
+  color: var(--faint);
+  font-family: var(--sans);
+  letter-spacing: 0;
+}
+.search kbd {
+  font: var(--fw-medium) var(--fs-micro) var(--sans);
+  color: var(--faint);
+  background: var(--btn);
+  border-radius: var(--r-xs);
+  padding: 1px 4px;
+}
+
+.list {
+  position: relative;
+  overflow-y: auto;
+  padding-bottom: var(--sp-2);
+  scrollbar-width: none;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.glabel {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5) var(--sp-2);
+  background: var(--titlebar);
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.glabel .ct {
+  color: var(--meta-faint);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+}
+.glabel .rule {
+  flex: 1;
+  height: var(--border-w);
+  background: var(--border-soft);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 32px;
+  margin: 0 var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  cursor: default;
+  position: relative;
+  transition: background var(--dur-fast), padding-right 0.22s var(--ease-pop);
+}
+body.kb .row.sel {
+  background: var(--raised);
+}
+.row:hover {
+  background: var(--raised-hi);
+}
+/* On hover the actions slide in over the right edge; reserve room so a long
+   branch ellipsises instead of running under them. Idle rows carry one fewer
+   action (no browser button), so they need a little less. */
+.row:hover,
+body.kb .row.sel {
+  padding-right: 104px;
+}
+.row.off:hover,
+body.kb .row.off.sel {
+  padding-right: 82px;
+}
+.branch {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 0;
+  font: var(--fw-medium) var(--fs-body) var(--mono);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+.row.off .branch {
+  color: var(--muted);
+}
+.branch .seg {
+  color: var(--faint);
+}
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-micro);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex: none;
+  transition: opacity 0.16s var(--ease-pop), transform 0.22s var(--ease-pop);
+}
+.mk {
+  background: var(--teal-dim);
+  color: var(--teal-text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+/* long names truncate at the HEAD — the distinguishing part of a branch is its tail */
+.bn {
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.bn > span {
+  direction: ltr;
+  unicode-bidi: embed;
+}
+.port {
+  font-family: var(--mono);
+  color: var(--teal);
+}
+.warnct {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--amber);
+}
+.acts {
+  position: absolute;
+  right: var(--sp-3);
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transform: translateX(14px);
+  transition: opacity 0.22s var(--ease-pop), transform 0.22s var(--ease-pop);
+  pointer-events: none;
+  margin-top: -11px;
+}
+.row:hover .acts,
+body.kb .row.sel .acts {
+  opacity: 1;
+  transform: translateX(0);
+  pointer-events: auto;
+}
+.row:hover .meta,
+body.kb .row.sel .meta {
+  display: none;
+}
+.ib {
+  all: unset;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-md);
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.row:hover .ib,
+body.kb .row.sel .ib {
+  color: var(--muted);
+}
+.ib:hover {
+  background: var(--btn-hover);
+  color: var(--text);
+}
+.ib.danger:hover {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+/* Start mirrors Stop exactly: icon-only, muted by default (inherits .ib),
+   colour + a soft teal wash only when the button itself is hovered — the
+   teal-dim parallel of .ib.danger's red-dim. */
+.ib.play:hover {
+  background: var(--teal-dim);
+  color: var(--teal-text);
+}
+.empty {
+  padding: var(--sp-8) var(--sp-5);
+  text-align: center;
+  color: var(--faint);
+  font-size: var(--fs-small);
+}
+.empty code {
+  font-family: var(--mono);
+  color: var(--muted);
+}
+
+.pf {
+  border-top: var(--border-w) solid var(--border-soft);
+  background: var(--titlebar);
+  flex: none;
+}
+.pfrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+}
+.vr {
+  width: var(--border-w);
+  height: 16px;
+  background: var(--border-soft);
+  flex: none;
+}
+.mi {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 26px;
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+  transition: background var(--dur-fast);
+  white-space: nowrap;
+  padding: 0 var(--sp-3);
+  min-width: 0;
+  font-size: var(--fs-small);
+  flex: 1 1 0;
+}
+.mi:hover {
+  background: var(--raised-hi);
+}
+.mi svg {
+  color: var(--muted);
+  flex: none;
+}
+.mi kbd {
+  font: var(--fw-medium) var(--fs-micro) var(--sans);
+  color: var(--meta-faint);
+  background: var(--btn);
+  border-radius: var(--r-xs);
+  padding: 1px 3px;
+}
+.pstat {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: var(--border-w) solid var(--border-soft);
+  font-size: var(--fs-micro);
+  color: var(--faint);
+}
+.pstat .ver {
+  margin-left: auto;
+  font-family: var(--mono);
+}
+.toast {
+  position: fixed;
+  z-index: 9;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--toast-bg);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-toast);
+  font-size: var(--fs-small);
+  color: var(--text);
+  max-width: calc(100% - var(--sp-8));
+}
+.toast b {
+  font-family: var(--mono);
+  font-weight: var(--fw-medium);
+  color: var(--teal-text);
 }
