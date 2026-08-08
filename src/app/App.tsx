@@ -37,6 +37,8 @@ export default function App() {
   const showToast = useStore((s) => s.showToast);
   const primeLogs = useStore((s) => s.primeLogs);
   const addRepo = useStore((s) => s.addRepo);
+  const addRepoOpen = useStore((s) => s.addRepoOpen);
+  const closeAddRepo = useStore((s) => s.closeAddRepo);
   const startAll = useStore((s) => s.startAll);
   const startService = useStore((s) => s.startService);
   const restartService = useStore((s) => s.restartService);
@@ -257,7 +259,7 @@ export default function App() {
     };
   }, []);
 
-  const onboardingActive = showOnboarding || (tree.length === 0 && !obDismissed);
+  const onboardingActive = showOnboarding || addRepoOpen || (tree.length === 0 && !obDismissed);
   const worktreeCount = tree.reduce((n, r) => n + r.worktrees.length, 0);
 
   return (
@@ -416,8 +418,10 @@ export default function App() {
       )}
       {onboardingActive && (
         <Onboarding
+          initialView={addRepoOpen ? "add" : "empty"}
           onClose={() => {
             setShowOnboarding(false);
+            closeAddRepo();
             setObDismissed(true);
           }}
           onCreateWorktree={() => setShowNewWt(true)}

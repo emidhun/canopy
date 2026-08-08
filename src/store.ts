@@ -137,9 +137,15 @@ interface State {
   stopAll: (wtKey: string) => void;
   toggleWorktree: (wtKey: string) => void;
   resetDb: (wtKey: string) => void;
-  /** Pick a folder and register it as a repository. Shared by the sidebar's
-      repository menu, the palette and ⇧⌘N so the three can't drift apart. */
-  addRepo: () => Promise<void>;
+  /** Onboarding's add-repository screen is open on request (as opposed to
+      first run, which App decides from an empty tree). */
+  addRepoOpen: boolean;
+  /** Open that screen. Shared by the sidebar's repository menu, the palette
+      and ⇧⌘N so the three can't drift apart. Registering the repo is the
+      screen's job — it does detection, services and env, which a bare folder
+      picker skipped entirely. */
+  addRepo: () => void;
+  closeAddRepo: () => void;
   gitPull: (wtKey: string) => void;
   openWorktree: (wtKey: string, where: "editor" | "finder" | "terminal") => void;
   openPort: (port: number) => void;
@@ -452,25 +458,9 @@ export const useStore = create<State>((set, get) => {
       showToast(`Resetting database — ${label}…`);
       ipc.resetDb(wtKey).catch((e) => showToast(errText(e)));
     },
-    addRepo: async () => {
-      if (!hasBackend()) {
-        showToast("Adding a repository needs the desktop app");
-        return;
-      }
-      // dynamic: the picker is desktop-only, and the browser mock build must
-      // not pull the dialog plugin into its bundle
-      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
-      const dir = await openDialog({ directory: true, multiple: false, title: "Choose a git repository" });
-      if (typeof dir !== "string") return;
-      try {
-        const repo = await ipc.addRepo(dir);
-        // add_repo calls refresh_tree itself (commands.rs), so the sidebar
-        // picks the repo up from the tree:changed event — nothing to reload here
-        showToast(`Added ${repo.name}`);
-      } catch (e) {
-        showToast(errText(e));
-      }
-    },
+    addRepoOpen: false,
+    addRepo: () => set({ addRepoOpen: true }),
+    closeAddRepo: () => set({ addRepoOpen: false }),
     gitPull: (wtKey) => {
       const label = wtLabel(get().tree, wtKey);
       if (!hasBackend()) {

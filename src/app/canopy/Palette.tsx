@@ -117,7 +117,7 @@ export default function Palette({
       { g: "Actions", nm: "New worktree", icon: Plus, run: onNewWorktree },
       // "repository" is the word people search for when the sidebar's menu is
       // hidden — which it is until a second repo exists
-      { g: "Actions", nm: "Add repository", icon: Fork, why: "⇧⌘N", run: () => void addRepo() },
+      { g: "Actions", nm: "Add repository", icon: Fork, why: "⇧⌘N", run: addRepo },
       {
         g: "Actions",
         nm: "Pull all worktrees",
