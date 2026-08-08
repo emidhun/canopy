@@ -193,7 +193,6 @@
 }
 .ob-root .inp:focus {
   border-color: var(--action-primary);
-  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 .ob-root .inp::placeholder {
   color: var(--text-tertiary);

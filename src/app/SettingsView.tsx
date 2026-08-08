@@ -376,6 +376,16 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
   // match exactly, and free typing is how you end up with "Build" and "build".
   const groupNames = Array.from(new Set(cmds.map((c) => (c.group ?? "").trim()).filter(Boolean)));
   return (
+    <>
+    <div className="sec">
+      <div className="slab">Database operations<span className="n">used by “Reset database” and “Run migrations” on a worktree</span></div>
+      <div className="fgrid">
+        <span className="lb">Reset command</span>
+        <input className="inp mono" value={repo.resetDb || ""} placeholder="pnpm db:reset" spellCheck={false} onChange={(e) => { patchRepo({ resetDb: e.target.value }); markDirty("commands"); }} />
+        <span className="lb">Migrate command</span>
+        <input className="inp mono" value={repo.migrateDb || ""} placeholder="pnpm db:migrate" spellCheck={false} onChange={(e) => { patchRepo({ migrateDb: e.target.value }); markDirty("commands"); }} />
+      </div>
+    </div>
     <div className="sec">
       <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
       <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
@@ -429,6 +439,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
         <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "", group: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
       )}
     </div>
+    </>
   );
 }
 
