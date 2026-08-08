@@ -85,6 +85,10 @@ pub struct CustomCmd {
     pub label: String,
     /// Shell command run in the worktree root
     pub command: String,
+    /// Optional heading this command sits under in the rail's Commands menu.
+    /// Empty = ungrouped, which is where every existing command starts.
+    #[serde(default)]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
