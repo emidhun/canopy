@@ -44,13 +44,13 @@
 
 /* ── Input / Select / SearchField ── */
 .cx-input{width:100%;height:var(--h-input);padding:0 var(--sp-pop);border-radius:var(--r-md);border:var(--border-w) solid var(--divider);background:var(--surface-well);color:var(--text-primary);font:var(--fs-body) var(--sans);outline:none;transition:border-color var(--dur),box-shadow var(--dur)}
-.cx-input:focus{border-color:var(--action-primary);box-shadow:0 0 0 3px var(--focus-ring)}
+.cx-input:focus{border-color:var(--action-primary)}
 .cx-input::placeholder{color:var(--text-tertiary)}
 .cx-input--mono{font-family:var(--mono);font-size:var(--fs-body)}
 textarea.cx-input{height:auto;min-height:62px;padding:var(--sp-row) var(--sp-pop);resize:vertical;line-height:var(--lh-body)}
 select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--text-tertiary) 50%),linear-gradient(135deg,var(--text-tertiary) 50%,transparent 50%);background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px;background-size:5px 5px;background-repeat:no-repeat}
 .cx-search{display:flex;align-items:center;gap:var(--sp-3);height:30px;padding:0 var(--sp-row);background:var(--surface-well);border:var(--border-w) solid var(--divider);border-radius:var(--r-lg);color:var(--text-tertiary)}
-.cx-search:focus-within{border-color:var(--action-primary);box-shadow:0 0 0 3px var(--focus-ring)}
+.cx-search:focus-within{border-color:var(--action-primary)}
 .cx-search input{flex:1;background:none;border:0;outline:none;color:var(--text-primary);font:var(--fs-small) var(--sans);min-width:0}
 .cx-search input::placeholder{color:var(--text-tertiary)}
 
