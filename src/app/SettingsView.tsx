@@ -7,10 +7,12 @@
 //
 // Backend honesty (design-build): pages with real wiring persist through
 // getSettings/saveSettings (Repository, Services, Agents, Commands) and
-// getRepoConfig/saveRepoConfig (Files, Setup). Pages with no backend today
-// (Appearance, Terminal shell, Notifications, Advanced, Security) render a
-// "coming soon" banner with disabled controls rather than fake ones. Shortcuts
-// is a static reference of the real keybindings.
+// getRepoConfig/saveRepoConfig (Files, Setup), plus Appearance (theme, density
+// and accent) which applies live through the appearance module (localStorage,
+// not the Settings save step). Pages with no backend today (Terminal shell,
+// Notifications, Advanced updates/crash, Security) render a "coming soon" banner
+// with disabled controls rather than fake ones. Shortcuts is a static reference
+// of the real keybindings.
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
@@ -22,6 +24,7 @@ import {
   Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
   Spinner, Terminal, Trash, X,
 } from "../icons";
+import { getAppearance, setAppearance, type Accent, type Density, type Theme } from "../appearance";
 
 /* icons don't accept `style`; wrap when a glyph needs rotating */
 const Rot = ({ children, deg }: { children: React.ReactNode; deg: number }) => (
@@ -694,7 +697,23 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onEx
 }
 
 /* ══════════════════════════ platform pages ═════════════════════════════ */
+const ACCENT_SWATCHES: { id: Accent; name: string; color: string }[] = [
+  { id: "teal", name: "Teal", color: "#5cc7cd" },
+  { id: "green", name: "Green", color: "#4cc266" },
+  { id: "amber", name: "Amber", color: "#e6ad5f" },
+  { id: "violet", name: "Violet", color: "#c77ecd" },
+];
+
 function GeneralPage({ settings, patch, markDirty }: PageProps) {
+  // Appearance applies live and persists to localStorage (not the Settings save
+  // step); mirror it here and re-read when another window changes it.
+  const [appr, setAppr] = useState(getAppearance());
+  const change = (p: Partial<{ theme: Theme; density: Density; accent: Accent }>) => setAppr(setAppearance(p));
+  useEffect(() => {
+    const h = () => setAppr(getAppearance());
+    window.addEventListener("canopy:appearance", h);
+    return () => window.removeEventListener("canopy:appearance", h);
+  }, []);
   return (
     <>
       <div className="sec">
@@ -710,15 +729,23 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
         <TRow title="Show the Switch-branch action" hint="Offer “Switch branch…” in the worktree menu and ⌘\." on={settings.showSwitchBranch !== false} onToggle={() => { patch({ showSwitchBranch: !(settings.showSwitchBranch !== false) }); markDirty("general"); }} />
       </div>
       <div className="sec">
-        <div className="slab">Appearance</div>
-        <Soon>Theme, density and accent aren't configurable yet — Canopy renders in dark with the teal accent.</Soon>
-        <div className="soonwrap fgrid">
-          <span className="lb">Theme</span><select className="inp" disabled><option>Dark</option></select>
-          <span className="lb">Density</span><select className="inp" disabled><option>Comfortable</option></select>
+        <div className="slab">Appearance<span className="n">applied instantly, saved on this machine</span></div>
+        <div className="fgrid">
+          <span className="lb">Theme</span>
+          <select className="inp" value={appr.theme} onChange={(e) => change({ theme: e.target.value as Theme })}>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Match system</option>
+          </select>
+          <span className="lb">Density</span>
+          <select className="inp" value={appr.density} onChange={(e) => change({ density: e.target.value as Density })}>
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+          </select>
           <span className="lb">Accent</span>
-          {/* violet has no token yet; the other three come from tokens.css */}
-          <div className="row">{["var(--teal)", "var(--green)", "var(--amber)", "#c77ecd"].map((c, i) => (
-            <button key={c} className="ico" disabled style={{ background: c, borderColor: i === 0 ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
+          <div className="row">{ACCENT_SWATCHES.map((a) => (
+            <button key={a.id} className="ico" title={a.name} aria-pressed={appr.accent === a.id} onClick={() => change({ accent: a.id })}
+              style={{ background: a.color, borderColor: appr.accent === a.id ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
         </div>
       </div>
       <Adv n="not wired yet">
