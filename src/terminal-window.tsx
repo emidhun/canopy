@@ -4,11 +4,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import DetachedTerminal from "./app/DetachedTerminal";
 import { applyPlatformClass } from "./platform";
+import { initAppearance } from "./appearance";
+import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/terminal.css";
 
 applyPlatformClass();
+initAppearance();
 
 const params = new URLSearchParams(location.search);
 const termId = params.get("id") ?? "";

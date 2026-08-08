@@ -1,0 +1,19 @@
+/* Bundled UI + mono fonts so every platform renders the same look.
+   Inter stands in for San Francisco, JetBrains Mono for SF Mono. Latin-subset
+   variable woff2 (~88 KB total), vendored under src/assets/fonts — no runtime
+   dependency, no CDN, no network. font-display: swap so text paints in the
+   system fallback immediately and swaps in once the (local, instant) font loads. */
+@font-face {
+  font-family: "Inter Variable";
+  src: url("../assets/fonts/inter-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  src: url("../assets/fonts/jetbrains-mono-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
