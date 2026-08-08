@@ -24,6 +24,9 @@ export interface ServiceCfg {
 export interface CustomCmd {
   label: string;
   command: string;
+  /** heading this command sits under in the rail's Commands menu; empty =
+      ungrouped, which is where every existing command starts */
+  group: string;
 }
 
 /** A coding-agent launcher available for one repository. The command is run
