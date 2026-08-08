@@ -72,6 +72,12 @@ export default function Modal({
     };
     const k = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busyRef.current) {
+        // An open popup inside the card (a ref picker's menu, say) marks itself
+        // with data-esc-claim. Escape belongs to the innermost thing it can
+        // close, so stand down and let the event reach it — dismissing the
+        // whole dialog would skip a level. The claimant stops the event itself,
+        // keeping the app-level handler out of it just as we do below.
+        if (card.current?.querySelector("[data-esc-claim]")) return;
         // capture phase + stopPropagation: the app-level Escape handler would
         // otherwise also close the palette or attention queue behind us
         e.stopPropagation();
