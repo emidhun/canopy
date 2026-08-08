@@ -7,10 +7,12 @@
 //
 // Backend honesty (design-build): pages with real wiring persist through
 // getSettings/saveSettings (Repository, Services, Agents, Commands) and
-// getRepoConfig/saveRepoConfig (Files, Setup). Pages with no backend today
-// (Appearance, Terminal shell, Notifications, Advanced, Security) render a
-// "coming soon" banner with disabled controls rather than fake ones. Shortcuts
-// is a static reference of the real keybindings.
+// getRepoConfig/saveRepoConfig (Files, Setup), plus Appearance (theme, density
+// and accent) which applies live through the appearance module (localStorage,
+// not the Settings save step). Pages with no backend today (Terminal shell,
+// Notifications, Advanced updates/crash, Security) render a "coming soon" banner
+// with disabled controls rather than fake ones. Shortcuts is a static reference
+// of the real keybindings.
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
@@ -22,6 +24,7 @@ import {
   Logs, More, Play, Plus, Pull, Refresh, Search, Server, Settings as Cog, Shield, Sliders, Sparkle,
   Spinner, Terminal, Trash, X,
 } from "../icons";
+import { getAppearance, setAppearance, type Accent, type Density, type Theme } from "../appearance";
 
 /* icons don't accept `style`; wrap when a glyph needs rotating */
 const Rot = ({ children, deg }: { children: React.ReactNode; deg: number }) => (
@@ -377,68 +380,68 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
   const groupNames = Array.from(new Set(cmds.map((c) => (c.group ?? "").trim()).filter(Boolean)));
   return (
     <>
-    <div className="sec">
-      <div className="slab">Database operations<span className="n">used by “Reset database” and “Run migrations” on a worktree</span></div>
-      <div className="fgrid">
-        <span className="lb">Reset command</span>
-        <input className="inp mono" value={repo.resetDb || ""} placeholder="pnpm db:reset" spellCheck={false} onChange={(e) => { patchRepo({ resetDb: e.target.value }); markDirty("commands"); }} />
-        <span className="lb">Migrate command</span>
-        <input className="inp mono" value={repo.migrateDb || ""} placeholder="pnpm db:migrate" spellCheck={false} onChange={(e) => { patchRepo({ migrateDb: e.target.value }); markDirty("commands"); }} />
+      <div className="sec">
+        <div className="slab">Database operations<span className="n">used by “Reset database” and “Run migrations” on a worktree</span></div>
+        <div className="fgrid">
+          <span className="lb">Reset command</span>
+          <input className="inp mono" value={repo.resetDb || ""} placeholder="pnpm db:reset" spellCheck={false} onChange={(e) => { patchRepo({ resetDb: e.target.value }); markDirty("commands"); }} />
+          <span className="lb">Migrate command</span>
+          <input className="inp mono" value={repo.migrateDb || ""} placeholder="pnpm db:migrate" spellCheck={false} onChange={(e) => { patchRepo({ migrateDb: e.target.value }); markDirty("commands"); }} />
+        </div>
       </div>
-    </div>
-    <div className="sec">
-      <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
-      <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
-      {cmds.length === 0 ? (
-        <div className="empty">
-          <p>No commands yet. Add one like <code>Lint</code> = <code>pnpm lint</code> — it appears in every worktree's + menu.</p>
-          <button className="btn sm" onClick={() => { patchRepo({ customCommands: [{ label: "", command: "", group: "" }] }); markDirty("commands"); }}><Plus size={10} />Add command</button>
-        </div>
-      ) : (
-        <div className="objs">
-          {cmds.map((c, i) => (
-            <div className={"obj" + (open === i ? " open" : "")} key={i}>
-              <button className="ohead" onClick={() => setOpen(open === i ? null : i)}>
-                <span className="cv"><ChevRight size={11} /></span>
-                <span className="nm">{c.label || "Untitled"}</span>
-                <span className="gr" />
-                <span className="mono" style={{ maxWidth: 250 }}>{c.command}</span>
-                <span className="oacts">
-                  <span className="ico" title="Run once to test" onClick={(e) => { e.stopPropagation(); setOpen(i); test(i, c.command); }}>{ran && ran.i === i && ran.state === "running" ? <Spinner size={11} /> : <Play size={10} />}</span>
-                  <span className="ico" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }}><Rot deg={180}><Chevron size={11} /></Rot></span>
-                  <span className="ico" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }}><Chevron size={11} /></span>
-                  <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.concat([{ ...c, label: c.label + " copy" }]) }); markDirty("commands"); }}><Copy size={11} /></span>
-                  <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.filter((_, j) => j !== i) }); markDirty("commands"); }}><Trash size={11} /></span>
-                </span>
-              </button>
-              {open === i && (
-                <div className="obody">
-                  <div className="fgrid">
-                    <span className="lb">Label</span><input className="inp" value={c.label} placeholder="Lint" onChange={(e) => patch(i, { label: e.target.value })} />
-                    <span className="lb">Command</span><input className="inp mono" value={c.command} placeholder="pnpm lint" onChange={(e) => patch(i, { command: e.target.value })} />
-                    <span className="lb">Group</span>
-                    <input className="inp" value={c.group ?? ""} placeholder="ungrouped" list="cx-cmd-groups"
-                      title="Commands sharing a group get a header in the rail's Commands menu"
-                      onChange={(e) => patch(i, { group: e.target.value })} />
-                  </div>
-                  {ran && ran.i === i && (
-                    <div className="testout">
-                      <div className="th">{ran.state === "running" ? <><Spinner size={10} />running in the current worktree…</> : <><span className="ok">✓</span>finished</>}</div>
+      <div className="sec">
+        <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
+        <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
+        {cmds.length === 0 ? (
+          <div className="empty">
+            <p>No commands yet. Add one like <code>Lint</code> = <code>pnpm lint</code> — it appears in every worktree's + menu.</p>
+            <button className="btn sm" onClick={() => { patchRepo({ customCommands: [{ label: "", command: "", group: "" }] }); markDirty("commands"); }}><Plus size={10} />Add command</button>
+          </div>
+        ) : (
+          <div className="objs">
+            {cmds.map((c, i) => (
+              <div className={"obj" + (open === i ? " open" : "")} key={i}>
+                <button className="ohead" onClick={() => setOpen(open === i ? null : i)}>
+                  <span className="cv"><ChevRight size={11} /></span>
+                  <span className="nm">{c.label || "Untitled"}</span>
+                  <span className="gr" />
+                  <span className="mono" style={{ maxWidth: 250 }}>{c.command}</span>
+                  <span className="oacts">
+                    <span className="ico" title="Run once to test" onClick={(e) => { e.stopPropagation(); setOpen(i); test(i, c.command); }}>{ran && ran.i === i && ran.state === "running" ? <Spinner size={11} /> : <Play size={10} />}</span>
+                    <span className="ico" title="Move up" onClick={(e) => { e.stopPropagation(); move(i, -1); }}><Rot deg={180}><Chevron size={11} /></Rot></span>
+                    <span className="ico" title="Move down" onClick={(e) => { e.stopPropagation(); move(i, 1); }}><Chevron size={11} /></span>
+                    <span className="ico" title="Duplicate" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.concat([{ ...c, label: c.label + " copy" }]) }); markDirty("commands"); }}><Copy size={11} /></span>
+                    <span className="ico bad" title="Remove" onClick={(e) => { e.stopPropagation(); patchRepo({ customCommands: cmds.filter((_, j) => j !== i) }); markDirty("commands"); }}><Trash size={11} /></span>
+                  </span>
+                </button>
+                {open === i && (
+                  <div className="obody">
+                    <div className="fgrid">
+                      <span className="lb">Label</span><input className="inp" value={c.label} placeholder="Lint" onChange={(e) => patch(i, { label: e.target.value })} />
+                      <span className="lb">Command</span><input className="inp mono" value={c.command} placeholder="pnpm lint" onChange={(e) => patch(i, { command: e.target.value })} />
+                      <span className="lb">Group</span>
+                      <input className="inp" value={c.group ?? ""} placeholder="ungrouped" list="cx-cmd-groups"
+                        title="Commands sharing a group get a header in the rail's Commands menu"
+                        onChange={(e) => patch(i, { group: e.target.value })} />
                     </div>
-                  )}
-                  <div className="row" style={{ marginTop: 8 }}>
-                    <button className="btn sm" onClick={() => test(i, c.command)}><Play size={10} />Test in current worktree</button>
+                    {ran && ran.i === i && (
+                      <div className="testout">
+                        <div className="th">{ran.state === "running" ? <><Spinner size={10} />running in the current worktree…</> : <><span className="ok">✓</span>finished</>}</div>
+                      </div>
+                    )}
+                    <div className="row" style={{ marginTop: 8 }}>
+                      <button className="btn sm" onClick={() => test(i, c.command)}><Play size={10} />Test in current worktree</button>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-      {cmds.length > 0 && (
-        <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "", group: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
-      )}
-    </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {cmds.length > 0 && (
+          <button className="btn" style={{ marginTop: 8 }} onClick={() => { patchRepo({ customCommands: cmds.concat([{ label: "", command: "", group: "" }]) }); setOpen(cmds.length); markDirty("commands"); }}><Plus size={11} />Add command</button>
+        )}
+      </div>
     </>
   );
 }
@@ -694,7 +697,23 @@ function RepoGeneralPage({ repo, patchRepo, markDirty, flash, onRemoveRepo, onEx
 }
 
 /* ══════════════════════════ platform pages ═════════════════════════════ */
+const ACCENT_SWATCHES: { id: Accent; name: string; color: string }[] = [
+  { id: "teal", name: "Teal", color: "#5cc7cd" },
+  { id: "green", name: "Green", color: "#4cc266" },
+  { id: "amber", name: "Amber", color: "#e6ad5f" },
+  { id: "violet", name: "Violet", color: "#c77ecd" },
+];
+
 function GeneralPage({ settings, patch, markDirty }: PageProps) {
+  // Appearance applies live and persists to localStorage (not the Settings save
+  // step); mirror it here and re-read when another window changes it.
+  const [appr, setAppr] = useState(getAppearance());
+  const change = (p: Partial<{ theme: Theme; density: Density; accent: Accent }>) => setAppr(setAppearance(p));
+  useEffect(() => {
+    const h = () => setAppr(getAppearance());
+    window.addEventListener("canopy:appearance", h);
+    return () => window.removeEventListener("canopy:appearance", h);
+  }, []);
   return (
     <>
       <div className="sec">
@@ -710,15 +729,23 @@ function GeneralPage({ settings, patch, markDirty }: PageProps) {
         <TRow title="Show the Switch-branch action" hint="Offer “Switch branch…” in the worktree menu and ⌘\." on={settings.showSwitchBranch !== false} onToggle={() => { patch({ showSwitchBranch: !(settings.showSwitchBranch !== false) }); markDirty("general"); }} />
       </div>
       <div className="sec">
-        <div className="slab">Appearance</div>
-        <Soon>Theme, density and accent aren't configurable yet — Canopy renders in dark with the teal accent.</Soon>
-        <div className="soonwrap fgrid">
-          <span className="lb">Theme</span><select className="inp" disabled><option>Dark</option></select>
-          <span className="lb">Density</span><select className="inp" disabled><option>Comfortable</option></select>
+        <div className="slab">Appearance<span className="n">applied instantly, saved on this machine</span></div>
+        <div className="fgrid">
+          <span className="lb">Theme</span>
+          <select className="inp" value={appr.theme} onChange={(e) => change({ theme: e.target.value as Theme })}>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">Match system</option>
+          </select>
+          <span className="lb">Density</span>
+          <select className="inp" value={appr.density} onChange={(e) => change({ density: e.target.value as Density })}>
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+          </select>
           <span className="lb">Accent</span>
-          {/* violet has no token yet; the other three come from tokens.css */}
-          <div className="row">{["var(--teal)", "var(--green)", "var(--amber)", "#c77ecd"].map((c, i) => (
-            <button key={c} className="ico" disabled style={{ background: c, borderColor: i === 0 ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
+          <div className="row">{ACCENT_SWATCHES.map((a) => (
+            <button key={a.id} className="ico" title={a.name} aria-pressed={appr.accent === a.id} onClick={() => change({ accent: a.id })}
+              style={{ background: a.color, borderColor: appr.accent === a.id ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
         </div>
       </div>
       <Adv n="not wired yet">

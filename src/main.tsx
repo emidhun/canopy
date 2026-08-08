@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import { applyPlatformClass } from "./platform";
+import { initAppearance } from "./appearance";
+import "./styles/fonts.css";
 import "./styles/tokens.css";
 import "./styles/app.css";
 import "./styles/terminal.css";
@@ -14,6 +16,7 @@ import "./styles/canopy-modals.css";
 import "./styles/canopy-settings.css";
 
 applyPlatformClass();
+initAppearance();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

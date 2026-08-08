@@ -64,7 +64,25 @@ export default function RefPick({
   const canCreate = !!allowCreate && !!t && !known.has(t) && !t.startsWith("origin/");
 
   return (
-    <div className="cxm-pick" ref={box}>
+    // While the menu is open Escape belongs to it, not to the enclosing dialog:
+    // data-esc-claim tells Modal to stand down (see Modal.tsx). Handled here
+    // rather than on the input because Tab can move focus onto a menu item, and
+    // Escape has to close the menu from there too. Stopping the event also keeps
+    // the app-level Escape (palette / attention queue) out of it. Closed, the
+    // marker is gone and Escape is the dialog's again.
+    <div
+      className="cxm-pick"
+      ref={box}
+      data-esc-claim={open ? "" : undefined}
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || !open) return;
+        e.stopPropagation();
+        setOpen(false);
+        // focus followed a menu item that is about to unmount; put it back on
+        // the field instead of letting it fall to <body>
+        box.current?.querySelector("input")?.focus();
+      }}
+    >
       <div className="cxm-pick-f" onClick={() => setOpen(true)}>
         <Search size={12} />
         <input
@@ -81,7 +99,6 @@ export default function RefPick({
           }}
           onKeyDown={(e) => {
             if (e.key === "ArrowDown" || e.key === "Enter") setOpen(true);
-            else if (e.key === "Escape") setOpen(false);
           }}
         />
         <Chevron size={12} />

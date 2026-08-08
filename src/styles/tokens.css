@@ -99,11 +99,12 @@
   --toast-bg: #16171a;
 
   /* ── typography ──────────────────────────────────────────────────
-     System fonts only — no webfonts ship, which keeps a native desktop feel
-     and avoids a flash on launch. Mono is load-bearing, not decorative:
+     Inter + JetBrains Mono ship bundled (Latin subset, variable, ~88 KB — see
+     src/styles/fonts.css) so every platform renders the same, with the system
+     stack (SF / Segoe) as the fallback. Mono is load-bearing, not decorative:
      anything git or the filesystem owns is monospace so it can't be misread. */
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ui: var(--sans);
 
   /* size ramp — dense by design; 9.5px is legible only in caps + tracking */
@@ -290,6 +291,148 @@
   --state-attention: var(--amber);
   --state-error: var(--red);
   --state-idle: var(--off);
+}
+
+/* ── appearance: light theme ──────────────────────────────────────
+   A first light theme. Elevation flips from "lighter surface" to shadow +
+   border on white; recessed regions (nav, wells) tint grey; the status hues and
+   accent are darkened for contrast on light. Selected by [data-theme] on <html>
+   (appearance.ts resolves "system" to dark/light). The semantic layer on :root
+   maps these automatically, so component CSS needs no changes.
+   Placed BEFORE the accent blocks so a non-teal accent still wins for --teal. */
+[data-theme="light"] {
+  /* surfaces — a light-GREY working pane so white cards + floats stand out,
+     with distinctly darker recesses (nav, wells) and selection tones */
+  --sidebar: #e9ecf1;
+  --panel-2: #e5e8ee;
+  --bg: #f4f5f8;
+  --titlebar: #ffffff;
+  --surface: #dfe3ea;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --panel-hi: #eaedf1;
+  --raised-hi: #e4e7ee;
+
+  /* borders — dark enough to read on the light surfaces */
+  --border-soft: #d3d7de;
+  --border: #bfc4cc;
+  --border-pop: #a4abb5;
+
+  /* text tiers — deep near-black down to a still-readable metadata grey */
+  --text: #14161a;
+  --muted: #414650;
+  --faint: #626771;
+  --meta-faint: #838994;
+  --off: #adb2bb;
+
+  /* accent + status hues, darkened + a touch more saturated for contrast */
+  --teal: #0b8b92;
+  --teal-dim: rgba(11, 139, 146, 0.15);
+  --green: #268b41;
+  --green-dim: rgba(38, 139, 65, 0.16);
+  --amber: #a06713;
+  --warn-dim: rgba(160, 103, 19, 0.16);
+  --red: #c8351c;
+  --red-dim: rgba(200, 53, 28, 0.12);
+
+  /* the darker fills carry light ink */
+  --on-accent: #ffffff;
+  --on-teal: #ffffff;
+  --on-green: #ffffff;
+  --on-amber: #ffffff;
+  --on-red: #ffffff;
+
+  /* text tints readable on the *-dim washes */
+  --red-text: #a82c15;
+  --red-text-soft: #bf4a34;
+  --green-text: #196a31;
+  --amber-text: #714b10;
+  --teal-text: #076169;
+  --teal-text-hi: #05555c;
+  --log-text: #2a2d33;
+  --log-time: #8b8f97;
+
+  /* interaction washes — dark ink at low alpha, stronger so hover reads */
+  --btn: rgba(0, 0, 0, 0.06);
+  --btn-hover: rgba(0, 0, 0, 0.12);
+  --hover: rgba(0, 0, 0, 0.05);
+  --row-hover: rgba(0, 0, 0, 0.05);
+  --focus-ring: rgba(11, 139, 146, 0.4);
+  --teal-border: rgba(11, 139, 146, 0.4);
+  --teal-fill-hi: rgba(11, 139, 146, 0.22);
+  --red-border: rgba(200, 53, 28, 0.34);
+  --red-border-hi: rgba(200, 53, 28, 0.4);
+  --red-wash: rgba(200, 53, 28, 0.07);
+  --amber-border: rgba(160, 103, 19, 0.34);
+  --green-border: rgba(38, 139, 65, 0.34);
+  --amber-halo: rgba(160, 103, 19, 0.18);
+  --wash-pop: rgba(0, 0, 0, 0.05);
+  --wash-pop-soft: rgba(0, 0, 0, 0.03);
+  --wash-row-faint: rgba(0, 0, 0, 0.03);
+  --wash-sunken: rgba(0, 0, 0, 0.05);
+
+  /* elevation — real shadows on white */
+  --shadow-pop: 0 10px 30px -8px rgba(18, 22, 30, 0.3);
+  --shadow-modal: 0 24px 64px -14px rgba(18, 22, 30, 0.34);
+  --shadow-toast: 0 10px 26px rgba(18, 22, 30, 0.22);
+  --shadow-menu: 0 10px 26px -8px rgba(18, 22, 30, 0.26);
+  --shadow-drawer: -16px 0 44px -14px rgba(18, 22, 30, 0.26);
+  --scrim: rgba(18, 22, 30, 0.36);
+  --scrim-light: rgba(18, 22, 30, 0.32);
+  --toast-bg: #ffffff;
+}
+
+/* ── appearance: density ──────────────────────────────────────────
+   Compact tightens the vertical rhythm — row/control heights and the default
+   row spacing — without touching the type ramp. Applied by [data-density] on
+   <html> (see appearance.ts). */
+[data-density="compact"] {
+  --sp-row: 6px;
+  --h-row: 24px;
+  --h-control: 26px;
+  --h-control-xs: 22px;
+  --h-control-sm: 20px;
+  --lh-body: 1.45;
+}
+
+/* ── appearance: accent ───────────────────────────────────────────
+   One accent, swappable. Every accented surface reads --teal / --accent /
+   --action-primary (which alias --teal) and the derived teal-* tints, so
+   remapping this family re-tints the whole app. Teal is the default and the
+   scarcity rule still holds — this only changes WHICH single hue is the accent.
+   Applied by [data-accent] on <html>. */
+[data-accent="green"] {
+  --teal: #4cc266;
+  --teal-dim: rgba(76, 194, 102, 0.15);
+  --teal-text: #a9dfb6;
+  --teal-text-hi: #b7e6c2;
+  --teal-border: rgba(76, 194, 102, 0.34);
+  --teal-fill-hi: rgba(76, 194, 102, 0.26);
+  --on-teal: #06241f;
+  --on-accent: #06241f;
+  --focus-ring: rgba(76, 194, 102, 0.4);
+}
+[data-accent="amber"] {
+  --teal: #e6ad5f;
+  --teal-dim: rgba(230, 173, 95, 0.15);
+  --teal-text: #e8cda1;
+  --teal-text-hi: #f0d9b4;
+  --teal-border: rgba(230, 173, 95, 0.34);
+  --teal-fill-hi: rgba(230, 173, 95, 0.26);
+  --on-teal: #221806;
+  --on-accent: #221806;
+  --focus-ring: rgba(230, 173, 95, 0.4);
+}
+[data-accent="violet"] {
+  --teal: #c77ecd;
+  --teal-dim: rgba(199, 126, 205, 0.16);
+  --teal-text: #e7c6ea;
+  --teal-text-hi: #eed2f0;
+  --teal-border: rgba(199, 126, 205, 0.34);
+  --teal-fill-hi: rgba(199, 126, 205, 0.26);
+  --on-teal: #1b0a1f;
+  --on-accent: #1b0a1f;
+  --focus-ring: rgba(199, 126, 205, 0.4);
 }
 
 /* ── base ── */
