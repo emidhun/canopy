@@ -13,6 +13,16 @@ pub struct Settings {
     pub repos: Vec<RepoCfg>,
     /// show the in-place "Switch branch" action in the worktree header
     pub show_switch_branch: bool,
+    /// Keybinding overrides: action id → binding ("Mod+k"). Only ids the
+    /// running build knows are honoured, so an override for a shortcut that
+    /// was removed is ignored rather than being an error.
+    ///
+    /// A map for the same reason experiments are: shortcuts are added and
+    /// renamed, and a named field per action would be a schema change every
+    /// time. The registry lives in the frontend (`src/app/keys.ts`), which is
+    /// where the handlers are — the backend only needs to persist the map.
+    #[serde(default)]
+    pub keybindings: HashMap<String, String>,
 }
 
 impl Default for Settings {
@@ -23,6 +33,7 @@ impl Default for Settings {
             terminal: String::new(),
             repos: Vec::new(),
             show_switch_branch: true,
+            keybindings: HashMap::new(),
         }
     }
 }

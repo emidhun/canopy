@@ -10,6 +10,7 @@ import { initSync, useStore } from "../store";
 import type { RepoNode, WorktreeNode } from "../types";
 import { Plus } from "../icons";
 import { attentionItems, nextAction, type AttnItem, type NextAction } from "./nextAction";
+import { actionFor, resolveBindings } from "./keys";
 import { TopBar, AttentionPop } from "./canopy/TopBar";
 import SidebarNav from "./canopy/SidebarNav";
 import WorktreeView from "./canopy/WorktreeView";
@@ -182,44 +183,79 @@ export default function App() {
     if (hasBackend()) ipc.refresh().catch(() => {});
   };
 
-  /* ── keyboard: the whole app is reachable without the mouse ─────── */
+  // Effective bindings: registry defaults with the user's overrides applied.
+  // Re-read whenever settings are saved, so a remap takes effect immediately
+  // rather than on the next launch.
+  const [bindings, setBindings] = useState<Record<string, string>>(() => resolveBindings(null));
+  const settingsRev = useStore((s) => s.settingsRev);
+  useEffect(() => {
+    if (!hasBackend()) return;
+    let alive = true;
+    ipc
+      .getSettings()
+      .then((st) => alive && setBindings(resolveBindings(st)))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [settingsRev]);
+
+  /* ── keyboard: the whole app is reachable without the mouse ───────
+     Dispatch is table-driven off the registry, so every shortcut is
+     remappable and the Shortcuts page can never drift from what actually
+     fires — both read the same source. */
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
       const el = document.activeElement;
       const typing = /^(INPUT|TEXTAREA)$/.test(el?.tagName ?? "") || (el as HTMLElement | null)?.isContentEditable === true;
+      const action = actionFor(e, bindings);
 
-      if (meta && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPalette((p) => !p);
-        return;
-      }
+      // Escape is fixed and always wins: a remap that stole it would leave
+      // modals and the palette with no keyboard dismissal at all.
       if (e.key === "Escape") {
         setPalette(false);
         setAttnOpen(false);
         return;
       }
-      if (palette) return;
-      if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
-        e.preventDefault();
-        setLayout(LAYOUT_ORDER[Number(e.key) - 1]);
-      }
-      if (meta && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        setSideHidden((s) => !s);
-      }
-      if (meta && e.key === "\\") {
-        e.preventDefault();
-        if (sel) setShowSwitchBranch(true);
-      }
-      if (meta && e.key.toLowerCase() === "o") {
-        e.preventDefault();
-        setView((v) => (v === "overview" ? "wt" : "overview"));
-      }
-      // ⏎ runs the next action — but never while a terminal or field has focus
-      if (e.key === "Enter" && !meta && !typing && view === "wt" && na && na.kind !== "busy") {
-        e.preventDefault();
-        runNext(na);
+      if (!action) return;
+      // The palette owns the keyboard while open, except for its own toggle.
+      if (palette && action !== "palette") return;
+
+      switch (action) {
+        case "palette":
+          e.preventDefault();
+          setPalette((p) => !p);
+          break;
+        case "new-worktree":
+          e.preventDefault();
+          setShowNewWt(true);
+          break;
+        case "toggle-sidebar":
+          e.preventDefault();
+          setSideHidden((s) => !s);
+          break;
+        case "overview":
+          e.preventDefault();
+          setView((v) => (v === "overview" ? "wt" : "overview"));
+          break;
+        case "switch-branch":
+          e.preventDefault();
+          if (sel) setShowSwitchBranch(true);
+          break;
+        case "run-next":
+          // ⏎ must never fire while a terminal or a field has focus
+          if (typing || view !== "wt" || !na || na.kind === "busy") return;
+          e.preventDefault();
+          runNext(na);
+          break;
+        default:
+          if (action.startsWith("layout-")) {
+            const n = Number(action.slice("layout-".length));
+            if (n >= 1 && n <= LAYOUT_ORDER.length) {
+              e.preventDefault();
+              setLayout(LAYOUT_ORDER[n - 1]);
+            }
+          }
       }
     };
     document.addEventListener("keydown", k);
