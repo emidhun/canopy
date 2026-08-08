@@ -36,6 +36,7 @@ export default function App() {
   const toast = useStore((s) => s.toast);
   const showToast = useStore((s) => s.showToast);
   const primeLogs = useStore((s) => s.primeLogs);
+  const addRepo = useStore((s) => s.addRepo);
   const startAll = useStore((s) => s.startAll);
   const startService = useStore((s) => s.startService);
   const restartService = useStore((s) => s.restartService);
@@ -200,6 +201,19 @@ export default function App() {
         return;
       }
       if (palette) return;
+      // ⇧⌘N — add a repository. The design gives plain ⌘N to "Add a
+      // repository" (cxo-onboard.jsx), but only on the empty state; this app
+      // already advertises ⌘N as "New worktree" in the tray menu and the
+      // onboarding CTA, so taking it here would make those two labels lie.
+      // Shift keeps the family (⌘N makes a worktree, ⇧⌘N makes a repository)
+      // without redefining a key the UI already promises elsewhere.
+      // Also the only way in when the sidebar's repository menu is hidden,
+      // which it is until a second repo exists.
+      if (meta && e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        addRepo();
+        return;
+      }
       if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
         e.preventDefault();
         setLayout(LAYOUT_ORDER[Number(e.key) - 1]);

@@ -443,6 +443,17 @@
 .cxs-repoitem > svg {
   flex: none;
 }
+/* the rule that separates "which repo am I filtering to" from "add one" —
+   inset to the item padding so it reads as a break in the list, not a border
+   across the menu */
+.cxs-repomenu-sep {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-3);
+  background: var(--divider);
+}
+.cxs-repoitem--add .cx-kbd {
+  margin-left: var(--sp-2);
+}
 .cxs-repoitem .nm {
   flex: 1;
   min-width: 0;
