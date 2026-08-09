@@ -801,6 +801,10 @@ mod tests {
         run_git(d, &["config", "user.email", "canopy-test@localhost"]).await.unwrap();
         run_git(d, &["config", "user.name", "canopy-test"]).await.unwrap();
         run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+        // Windows git defaults to core.autocrlf=true, which rewrites LF→CRLF on
+        // checkout/restore and breaks exact-content assertions. Pin it so the
+        // round-trip test compares the same bytes on every platform.
+        run_git(d, &["config", "core.autocrlf", "false"]).await.unwrap();
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
         run_git(d, &["add", "."]).await.unwrap();
         run_git(d, &["commit", "-m", "init"]).await.unwrap();
