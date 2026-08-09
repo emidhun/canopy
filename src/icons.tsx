@@ -38,6 +38,21 @@ export const Search = ({ size = 14 }: P) => (
   </svg>
 );
 
+// git-commit — the node on the line; names the Commit action
+export const Git = ({ size = 14 }: P) => (
+  <svg {...isvg(size)}>
+    <circle cx="12" cy="12" r="3.2" />
+    <path d="M3 12h5.8" />
+    <path d="M15.2 12H21" />
+  </svg>
+);
+
+export const Folder = ({ size = 14 }: P) => (
+  <svg {...isvg(size)}>
+    <path d="M4 5h4l2 2.5h8a2 2 0 0 1 2 2V17a2 2 0 0 1 -2 2H4a2 2 0 0 1 -2 -2V7a2 2 0 0 1 2 -2z" />
+  </svg>
+);
+
 export const Plus = ({ size = 14 }: P) => (
   <svg {...isvg(size)}>
     <path d="M12 5v14" />

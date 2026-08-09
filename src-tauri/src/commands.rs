@@ -825,6 +825,38 @@ pub async fn worktree_dirty_report(app: AppHandle, wt_key: String) -> Result<git
     git::dirty_report(&wt_key).await.map_err(CanopyError::git)
 }
 
+/// Full working-tree status for the Uncommitted changes modal (every entry, not
+/// the capped dirty_report).
+#[tauri::command]
+pub async fn worktree_status(app: AppHandle, wt_key: String) -> Result<Vec<git::StatusEntry>, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::status(&wt_key).await.map_err(CanopyError::git)
+}
+
+#[tauri::command]
+pub async fn worktree_commit(app: AppHandle, wt_key: String, message: String, add_untracked: bool) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::commit(&wt_key, &message, add_untracked).await.map_err(CanopyError::git)?;
+    refresh_git_meta(&app, &wt_key).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn worktree_stash(app: AppHandle, wt_key: String, name: Option<String>, include_untracked: bool) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let summary = git::stash(&wt_key, name.as_deref(), include_untracked).await.map_err(CanopyError::git)?;
+    refresh_git_meta(&app, &wt_key).await;
+    Ok(summary)
+}
+
+#[tauri::command]
+pub async fn worktree_discard(app: AppHandle, wt_key: String, clean_untracked: bool) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    git::discard(&wt_key, clean_untracked).await.map_err(CanopyError::git)?;
+    refresh_git_meta(&app, &wt_key).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
     // never remove a main checkout; find owning repo + branch

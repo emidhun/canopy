@@ -89,6 +89,21 @@ export interface Branches {
   tags: string[];
 }
 
+/** One row of `git status --porcelain`, resolved by the backend so the modal
+    can group and annotate it without re-parsing. */
+export interface StatusEntry {
+  /** the two-character XY porcelain code (" M", "MM", "??", "UU", …) */
+  code: string;
+  /** path relative to the worktree root (the NEW name for a rename) */
+  path: string;
+  /** the pre-rename path for R/C entries */
+  from?: string | null;
+  /** this path is a submodule */
+  sub: boolean;
+  /** for a dirty submodule, how many paths changed inside it */
+  subFiles?: number | null;
+}
+
 export interface RepoDetection {
   top: string;
   name: string;
@@ -166,6 +181,13 @@ export const ipc = {
     invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
   runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),
   worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
+  worktreeStatus: (wtKey: string) => invoke<StatusEntry[]>("worktree_status", { wtKey }),
+  worktreeCommit: (wtKey: string, message: string, addUntracked: boolean) =>
+    invoke<void>("worktree_commit", { wtKey, message, addUntracked }),
+  worktreeStash: (wtKey: string, name: string | null, includeUntracked: boolean) =>
+    invoke<string>("worktree_stash", { wtKey, name, includeUntracked }),
+  worktreeDiscard: (wtKey: string, cleanUntracked: boolean) =>
+    invoke<void>("worktree_discard", { wtKey, cleanUntracked }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
 };

@@ -26,6 +26,7 @@ import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
 import SwitchBranchModal from "./SwitchBranchModal";
+import UncommittedChangesModal from "./UncommittedChangesModal";
 import Onboarding from "../onboarding/Onboarding";
 
 export default function App() {
@@ -58,6 +59,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNewWt, setShowNewWt] = useState(false);
   const [showSwitchBranch, setShowSwitchBranch] = useState(false);
+  const [showDirty, setShowDirty] = useState(false);
   const [showDb, setShowDb] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showCtx, setShowCtx] = useState(false);
@@ -349,6 +351,7 @@ export default function App() {
         }}
         onAttn={() => setAttnOpen((a) => !a)}
         onSwitchBranch={() => setShowSwitchBranch(true)}
+        onDirty={() => setShowDirty(true)}
         worktreeCount={worktreeCount}
         repoCount={tree.length}
       />
@@ -416,6 +419,7 @@ export default function App() {
       {showSwitchBranch && sel && (
         <SwitchBranchModal repo={sel.repo} wt={sel.wt} onClose={() => setShowSwitchBranch(false)} />
       )}
+      {showDirty && sel && <UncommittedChangesModal wt={sel.wt} onClose={() => setShowDirty(false)} />}
       {onboardingActive && (
         <Onboarding
           initialView={addRepoOpen ? "add" : "empty"}

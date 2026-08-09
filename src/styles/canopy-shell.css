@@ -1687,6 +1687,25 @@
 .cxs-sb--teal {
   color: var(--action-primary);
 }
+/* the dirty chip is the one status-bar item that OPENS something, so it carries
+   a quiet amber wash at rest — amber means "a decision is pending", and a
+   tinted pill among transparent items reads as pressable without adding another
+   button outline to the bar. */
+.cxs-sb--dirty {
+  background: var(--warn-dim);
+  color: var(--state-attention);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-xl);
+}
+.cxs-sb--dirty:hover {
+  background: var(--warn-dim);
+  color: var(--state-attention);
+  filter: brightness(1.22);
+}
+.cxs-sb--dirty .d {
+  background: var(--state-attention);
+  flex: none;
+}
 .cxs-statusbar .msg {
   overflow: hidden;
   text-overflow: ellipsis;
