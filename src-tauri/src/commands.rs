@@ -1201,12 +1201,72 @@ pub async fn fetch_branches(app: AppHandle, repo_id: String) -> Result<git::Bran
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_branch;
+    use super::{detect_repo, sanitize_branch};
+    use crate::git::run_git;
 
     #[test]
     fn sanitize_branch_maps_separators() {
         assert_eq!(sanitize_branch("feature/foo-bar"), "feature_foo-bar");
         assert_eq!(sanitize_branch("v1.2.3"), "v1.2.3");
         assert_eq!(sanitize_branch("fix db reset"), "fix_db_reset");
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("canopy-cmd-{tag}-{}", std::process::id()))
+    }
+
+    async fn init(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let d = dir.to_str().unwrap();
+        run_git(d, &["init"]).await.unwrap();
+        run_git(d, &["config", "user.email", "t@localhost"]).await.unwrap();
+        run_git(d, &["config", "user.name", "t"]).await.unwrap();
+        run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+    }
+
+    /// The add-repo-from-sidebar flow (#122) shows detect_repo's result — name,
+    /// stack, package.json scripts, and a normalized origin — before adding.
+    #[tokio::test]
+    async fn detect_repo_reads_name_stack_scripts_and_normalizes_origin() {
+        let dir = tmp("detect");
+        let _ = std::fs::remove_dir_all(&dir);
+        init(&dir).await;
+        let d = dir.to_str().unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"dev":"vite","build":"tsc"}}"#).unwrap();
+        run_git(d, &["add", "."]).await.unwrap();
+        run_git(d, &["commit", "-m", "init"]).await.unwrap();
+        // an ssh remote to exercise the origin normalization
+        run_git(d, &["remote", "add", "origin", "git@github.com:acme/widgets.git"]).await.unwrap();
+
+        let det = detect_repo(d.to_string()).await.unwrap();
+        assert_eq!(det.name, dir.file_name().unwrap().to_string_lossy());
+        assert_eq!(det.stack, "node");
+        assert_eq!(det.origin, "github.com/acme/widgets", "git@…:…git → github.com/…");
+        let names: Vec<&str> = det.scripts.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"dev") && names.contains(&"build"), "scripts parsed: {names:?}");
+        assert!(!det.branch.is_empty(), "branch resolved: {:?}", det.branch);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cargo.toml wins the stack sniff over package.json, and a non-repo path
+    /// is rejected (the same guard validate_repo enforces).
+    #[tokio::test]
+    async fn detect_repo_prefers_rust_and_rejects_non_repos() {
+        let dir = tmp("detect-rs");
+        let _ = std::fs::remove_dir_all(&dir);
+        init(&dir).await;
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        let det = detect_repo(dir.to_str().unwrap().to_string()).await.unwrap();
+        assert_eq!(det.stack, "rust", "Cargo.toml is checked before package.json");
+
+        let plain = tmp("detect-plain");
+        let _ = std::fs::remove_dir_all(&plain);
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(detect_repo(plain.to_str().unwrap().to_string()).await.is_err(), "a non-repo must error");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&plain);
     }
 }
