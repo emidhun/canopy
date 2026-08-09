@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType } from "react"
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { errText, hasBackend, ipc, type AgentCfg, type CustomCmd, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { groupNames } from "./canopy/commandGroups";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -377,7 +378,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
   };
   // Existing groups become suggestions: grouping is only useful when names
   // match exactly, and free typing is how you end up with "Build" and "build".
-  const groupNames = Array.from(new Set(cmds.map((c) => (c.group ?? "").trim()).filter(Boolean)));
+  const groupNameList = groupNames(cmds);
   return (
     <>
       <div className="sec">
@@ -390,7 +391,7 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
         </div>
       </div>
       <div className="sec">
-        <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
+        <datalist id="cx-cmd-groups">{groupNameList.map((g) => <option key={g} value={g} />)}</datalist>
         <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
         {cmds.length === 0 ? (
           <div className="empty">

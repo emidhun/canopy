@@ -934,6 +934,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// The add-repo flow (#122) leans on validate_repo to accept a real repo
+    /// and reject a plain folder before it registers anything.
+    #[tokio::test]
+    async fn validate_repo_returns_toplevel_and_rejects_non_repos() {
+        let repo = unique_dir("validate");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+
+        let top = validate_repo(rp).await.unwrap();
+        // git canonicalizes (/var → /private/var on macOS); compare by basename
+        assert_eq!(
+            std::path::Path::new(top.trim()).file_name(),
+            std::path::Path::new(rp).file_name(),
+            "toplevel is the repo dir"
+        );
+
+        // a plain directory that isn't a git repo must error, not return a path
+        let plain = unique_dir("validate-plain");
+        let _ = std::fs::remove_dir_all(&plain);
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(validate_repo(plain.to_str().unwrap()).await.is_err(), "a non-repo must be rejected");
+
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&plain);
+    }
+
     /// Data-loss guard: this report arms `worktree remove --force`, and a
     /// failed probe must be an ERROR the UI fails closed on — never `clean`.
     #[tokio::test]

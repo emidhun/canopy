@@ -30,6 +30,9 @@ jobs:
           workspaces: src-tauri
       # tauri::generate_context! embeds ../dist at compile time
       - run: npm ci
+      # frontend unit tests (Vitest) — pure logic + appearance.ts under jsdom.
+      # Platform-independent, so the Linux job alone runs them; no triple-run.
+      - run: npm test
       - run: npm run build
       - run: cargo check --locked
         working-directory: src-tauri
