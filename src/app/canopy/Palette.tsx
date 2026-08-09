@@ -6,7 +6,7 @@
    drift apart. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
-import { Alert, Bolt, Cube, Logs, Play, Plus, Pull, Search, Settings, Single, Sparkle, Split, Stop, Terminal, X } from "../../icons";
+import { Alert, Bolt, Cube, Fork, Logs, Play, Plus, Pull, Search, Settings, Single, Sparkle, Split, Stop, Terminal, X } from "../../icons";
 import { useStore } from "../../store";
 import { nextAction, wtDot, dotClass, type AttnItem, type NextAction } from "../nextAction";
 import type { LayoutId } from "./WorkSurface";
@@ -56,6 +56,7 @@ export default function Palette({
   const startAll = useStore((s) => s.startAll);
   const stopAll = useStore((s) => s.stopAll);
   const gitPull = useStore((s) => s.gitPull);
+  const addRepo = useStore((s) => s.addRepo);
   const showToast = useStore((s) => s.showToast);
   const [q, setQ] = useState("");
   const [i, setI] = useState(0);
@@ -114,6 +115,9 @@ export default function Palette({
         },
       },
       { g: "Actions", nm: "New worktree", icon: Plus, run: onNewWorktree },
+      // "repository" is the word people search for when the sidebar's menu is
+      // hidden — which it is until a second repo exists
+      { g: "Actions", nm: "Add repository", icon: Fork, why: "⇧⌘N", run: addRepo },
       {
         g: "Actions",
         nm: "Pull all worktrees",

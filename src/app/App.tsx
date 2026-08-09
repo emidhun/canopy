@@ -26,6 +26,7 @@ import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
 import SwitchBranchModal from "./SwitchBranchModal";
+import UncommittedChangesModal from "./UncommittedChangesModal";
 import Onboarding from "../onboarding/Onboarding";
 
 export default function App() {
@@ -36,6 +37,9 @@ export default function App() {
   const toast = useStore((s) => s.toast);
   const showToast = useStore((s) => s.showToast);
   const primeLogs = useStore((s) => s.primeLogs);
+  const addRepo = useStore((s) => s.addRepo);
+  const addRepoOpen = useStore((s) => s.addRepoOpen);
+  const closeAddRepo = useStore((s) => s.closeAddRepo);
   const startAll = useStore((s) => s.startAll);
   const startService = useStore((s) => s.startService);
   const restartService = useStore((s) => s.restartService);
@@ -55,6 +59,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showNewWt, setShowNewWt] = useState(false);
   const [showSwitchBranch, setShowSwitchBranch] = useState(false);
+  const [showDirty, setShowDirty] = useState(false);
   const [showDb, setShowDb] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showCtx, setShowCtx] = useState(false);
@@ -200,6 +205,19 @@ export default function App() {
         return;
       }
       if (palette) return;
+      // ⇧⌘N — add a repository. The design gives plain ⌘N to "Add a
+      // repository" (cxo-onboard.jsx), but only on the empty state; this app
+      // already advertises ⌘N as "New worktree" in the tray menu and the
+      // onboarding CTA, so taking it here would make those two labels lie.
+      // Shift keeps the family (⌘N makes a worktree, ⇧⌘N makes a repository)
+      // without redefining a key the UI already promises elsewhere.
+      // Also the only way in when the sidebar's repository menu is hidden,
+      // which it is until a second repo exists.
+      if (meta && e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        addRepo();
+        return;
+      }
       if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
         e.preventDefault();
         setLayout(LAYOUT_ORDER[Number(e.key) - 1]);
@@ -243,7 +261,7 @@ export default function App() {
     };
   }, []);
 
-  const onboardingActive = showOnboarding || (tree.length === 0 && !obDismissed);
+  const onboardingActive = showOnboarding || addRepoOpen || (tree.length === 0 && !obDismissed);
   const worktreeCount = tree.reduce((n, r) => n + r.worktrees.length, 0);
 
   return (
@@ -333,6 +351,7 @@ export default function App() {
         }}
         onAttn={() => setAttnOpen((a) => !a)}
         onSwitchBranch={() => setShowSwitchBranch(true)}
+        onDirty={() => setShowDirty(true)}
         worktreeCount={worktreeCount}
         repoCount={tree.length}
       />
@@ -400,10 +419,13 @@ export default function App() {
       {showSwitchBranch && sel && (
         <SwitchBranchModal repo={sel.repo} wt={sel.wt} onClose={() => setShowSwitchBranch(false)} />
       )}
+      {showDirty && sel && <UncommittedChangesModal wt={sel.wt} onClose={() => setShowDirty(false)} />}
       {onboardingActive && (
         <Onboarding
+          initialView={addRepoOpen ? "add" : "empty"}
           onClose={() => {
             setShowOnboarding(false);
+            closeAddRepo();
             setObDismissed(true);
           }}
           onCreateWorktree={() => setShowNewWt(true)}

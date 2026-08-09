@@ -613,6 +613,109 @@ pub async fn dirty_report(wt_path: &str) -> Result<DirtyReport, String> {
     })
 }
 
+/// One row of `git status --porcelain`, resolved enough for the Uncommitted
+/// changes modal to group and annotate it without re-parsing on the frontend.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusEntry {
+    /// the two-character XY porcelain code, verbatim (" M", "MM", "??", "UU", …)
+    pub code: String,
+    /// path relative to the worktree root (the NEW name for a rename)
+    pub path: String,
+    /// the pre-rename path for R/C entries; None otherwise
+    pub from: Option<String>,
+    /// this path is a submodule — a commit/stash/discard here does not reach in
+    pub sub: bool,
+    /// for a dirty submodule, how many paths are changed INSIDE it
+    pub sub_files: Option<usize>,
+}
+
+/// Full working-tree status for the modal. Unlike `dirty_report` (which caps at
+/// 10 to arm a destructive delete) this returns every entry — the modal lists
+/// them all and scrolls, never truncates. A failed `git status` is an ERROR,
+/// same fail-closed contract as `dirty_report`.
+pub async fn status(wt_path: &str) -> Result<Vec<StatusEntry>, String> {
+    // -z NUL-separates records AND path fields, so paths with spaces or the
+    // rename "->" survive intact; --ignore-submodules=none surfaces a submodule
+    // whose content changed as a ` M` on the submodule path.
+    let out = run_git(wt_path, &["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]).await?;
+    let subs: std::collections::HashSet<String> = submodule_paths(wt_path).await.into_iter().collect();
+    let mut entries = parse_status_z(&out, &subs);
+    // annotate dirty submodules with their inner change count (one extra spawn
+    // per submodule, and there are rarely more than a handful)
+    for e in entries.iter_mut() {
+        if e.sub {
+            let sm_path = format!("{}/{}", wt_path, e.path);
+            if let Ok(o) = run_git(&sm_path, &["status", "--porcelain"]).await {
+                e.sub_files = Some(o.lines().filter(|l| !l.trim().is_empty()).count());
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Pure parser for `git status --porcelain=v1 -z`. Each record is `XY<space>path`;
+/// a rename/copy (R/C) carries the origin path as the very next NUL field, so we
+/// pull it from the same iterator rather than mis-reading it as a fresh entry.
+fn parse_status_z(z: &str, subs: &std::collections::HashSet<String>) -> Vec<StatusEntry> {
+    let mut fields = z.split('\0');
+    let mut entries = Vec::new();
+    while let Some(rec) = fields.next() {
+        // the trailing NUL yields a final empty field; a real record is "XY p"
+        if rec.len() < 4 {
+            continue;
+        }
+        let code = rec[..2].to_string();
+        let path = rec[3..].to_string();
+        let from = if code.starts_with('R') || code.starts_with('C') {
+            fields.next().map(str::to_string)
+        } else {
+            None
+        };
+        let sub = subs.contains(&path);
+        entries.push(StatusEntry { code, path, from, sub, sub_files: None });
+    }
+    entries
+}
+
+/// Commit the worktree. `git commit -a` picks up tracked modifications and
+/// deletions; `add_untracked` first stages new files with `git add -A`. Errors
+/// (a failing pre-commit hook, nothing staged) propagate so the modal can show
+/// them and keep the message the user typed.
+pub async fn commit(wt_path: &str, message: &str, add_untracked: bool) -> Result<(), String> {
+    if add_untracked {
+        run_git(wt_path, &["add", "-A"]).await?;
+    }
+    run_git(wt_path, &["commit", "-a", "-m", message]).await?;
+    Ok(())
+}
+
+/// Stash the worktree. `-u` also stashes untracked files; a non-empty name maps
+/// to `-m`. Returns git's own summary line (the stash ref it created).
+pub async fn stash(wt_path: &str, name: Option<&str>, include_untracked: bool) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["stash", "push"];
+    if include_untracked {
+        args.push("-u");
+    }
+    if let Some(m) = name.map(str::trim).filter(|m| !m.is_empty()) {
+        args.push("-m");
+        args.push(m);
+    }
+    run_git(wt_path, &args).await
+}
+
+/// Discard tracked changes back to HEAD (`git restore --source=HEAD --staged
+/// --worktree -- .`). `clean_untracked` additionally deletes untracked files
+/// from disk with `git clean -fd` — irreversible, so the caller must have armed
+/// it behind a typed confirmation.
+pub async fn discard(wt_path: &str, clean_untracked: bool) -> Result<(), String> {
+    run_git(wt_path, &["restore", "--source=HEAD", "--staged", "--worktree", "--", "."]).await?;
+    if clean_untracked {
+        run_git(wt_path, &["clean", "-fd"]).await?;
+    }
+    Ok(())
+}
+
 /// Remove a worktree. `--force` is required for any worktree containing
 /// submodules, even a clean one — the caller must have confirmed with the user.
 pub async fn remove_worktree(
@@ -698,6 +801,10 @@ mod tests {
         run_git(d, &["config", "user.email", "canopy-test@localhost"]).await.unwrap();
         run_git(d, &["config", "user.name", "canopy-test"]).await.unwrap();
         run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+        // Windows git defaults to core.autocrlf=true, which rewrites LF→CRLF on
+        // checkout/restore and breaks exact-content assertions. Pin it so the
+        // round-trip test compares the same bytes on every platform.
+        run_git(d, &["config", "core.autocrlf", "false"]).await.unwrap();
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
         run_git(d, &["add", "."]).await.unwrap();
         run_git(d, &["commit", "-m", "init"]).await.unwrap();
@@ -767,6 +874,62 @@ mod tests {
         switch_branch(rp, &original, false, None).await.unwrap();
         let head = run_git(rp, &["rev-parse", "--abbrev-ref", "HEAD"]).await.unwrap();
         assert_eq!(head.trim(), original);
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn parses_porcelain_z_including_renames_and_submodules() {
+        // " M app.tsx\0MM reducer.ts\0?? notes.md\0R  new.ts\0old.ts\0 M ee\0"
+        let z = " M app.tsx\0MM reducer.ts\0?? notes.md\0R  new.ts\0old.ts\0 M ee\0";
+        let subs: std::collections::HashSet<String> = ["ee".to_string()].into_iter().collect();
+        let e = parse_status_z(z, &subs);
+        assert_eq!(e.len(), 5, "the rename's origin field must not become a 6th entry");
+        assert_eq!(e[0].code, " M");
+        assert_eq!(e[0].path, "app.tsx");
+        assert_eq!(e[2].code, "??");
+        // rename: path is the new name, `from` is the old
+        assert_eq!(e[3].code, "R ");
+        assert_eq!(e[3].path, "new.ts");
+        assert_eq!(e[3].from.as_deref(), Some("old.ts"));
+        // submodule flagged from the submodule set
+        assert!(e[4].sub && e[4].path == "ee");
+        assert!(!e[0].sub);
+    }
+
+    #[tokio::test]
+    async fn commit_stash_discard_round_trip() {
+        let repo = unique_dir("dirty-actions");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+
+        // status reflects a tracked edit + an untracked file
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+        std::fs::write(repo.join("new.txt"), "x\n").unwrap();
+        let s = status(rp).await.unwrap();
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().any(|e| e.path == "a.txt" && e.code == " M"));
+        assert!(s.iter().any(|e| e.path == "new.txt" && e.code == "??"));
+
+        // commit tracked-only leaves the untracked file behind
+        commit(rp, "edit a", false).await.unwrap();
+        let s = status(rp).await.unwrap();
+        assert_eq!(s.len(), 1, "only the untracked file remains: {s:?}");
+        assert_eq!(s[0].path, "new.txt");
+
+        // stash -u sweeps the untracked file; tree goes clean
+        stash(rp, Some("wip"), true).await.unwrap();
+        assert!(status(rp).await.unwrap().is_empty(), "stash -u clears untracked too");
+        run_git(rp, &["stash", "pop"]).await.unwrap();
+        assert_eq!(status(rp).await.unwrap().len(), 1);
+
+        // discard with clean removes the untracked file from disk
+        std::fs::write(repo.join("a.txt"), "three\n").unwrap();
+        discard(rp, true).await.unwrap();
+        assert!(status(rp).await.unwrap().is_empty(), "discard + clean = clean tree");
+        assert!(!repo.join("new.txt").exists(), "git clean -fd deleted the untracked file");
+        assert_eq!(std::fs::read_to_string(repo.join("a.txt")).unwrap(), "two\n", "restored to HEAD");
 
         let _ = std::fs::remove_dir_all(&repo);
     }

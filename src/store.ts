@@ -137,6 +137,15 @@ interface State {
   stopAll: (wtKey: string) => void;
   toggleWorktree: (wtKey: string) => void;
   resetDb: (wtKey: string) => void;
+  /** Onboarding's add-repository screen is open on request (as opposed to
+      first run, which App decides from an empty tree). */
+  addRepoOpen: boolean;
+  /** Open that screen. Shared by the sidebar's repository menu, the palette
+      and ⇧⌘N so the three can't drift apart. Registering the repo is the
+      screen's job — it does detection, services and env, which a bare folder
+      picker skipped entirely. */
+  addRepo: () => void;
+  closeAddRepo: () => void;
   gitPull: (wtKey: string) => void;
   openWorktree: (wtKey: string, where: "editor" | "finder" | "terminal") => void;
   openPort: (port: number) => void;
@@ -449,6 +458,9 @@ export const useStore = create<State>((set, get) => {
       showToast(`Resetting database — ${label}…`);
       ipc.resetDb(wtKey).catch((e) => showToast(errText(e)));
     },
+    addRepoOpen: false,
+    addRepo: () => set({ addRepoOpen: true }),
+    closeAddRepo: () => set({ addRepoOpen: false }),
     gitPull: (wtKey) => {
       const label = wtLabel(get().tree, wtKey);
       if (!hasBackend()) {

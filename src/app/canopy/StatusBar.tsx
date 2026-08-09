@@ -22,6 +22,7 @@ export default function StatusBar({
   onCycleLayout,
   onAttn,
   onSwitchBranch,
+  onDirty,
   worktreeCount,
   repoCount,
 }: {
@@ -32,6 +33,7 @@ export default function StatusBar({
   onCycleLayout: () => void;
   onAttn: () => void;
   onSwitchBranch: () => void;
+  onDirty: () => void;
   worktreeCount: number;
   repoCount: number;
 }) {
@@ -78,10 +80,10 @@ export default function StatusBar({
       )}
 
       {g?.dirty && (
-        <span className="cxs-sb cxs-sb--warn" title="uncommitted changes">
-          <span className="d" style={{ background: "var(--state-attention)" }} />
+        <button className="cxs-sb cxs-sb--dirty" title="Review uncommitted changes — commit, stash or discard" onClick={onDirty}>
+          <span className="d" />
           uncommitted
-        </span>
+        </button>
       )}
 
       <span className="cxs-sdiv" />

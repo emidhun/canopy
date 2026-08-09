@@ -39,6 +39,7 @@ export default function SidebarNav({
   const sessions = useStore((s) => s.sessions);
   const toggleWorktree = useStore((s) => s.toggleWorktree);
   const openWorktree = useStore((s) => s.openWorktree);
+  const addRepo = useStore((s) => s.addRepo);
   const pins = usePins();
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
@@ -82,7 +83,7 @@ export default function SidebarNav({
       </div>
 
       {tree.length > 1 && (
-        <RepoFilter repos={tree.map((r) => ({ id: r.repoId, name: r.name }))} value={activeRepo} onPick={setRepoFilter} />
+        <RepoFilter repos={tree.map((r) => ({ id: r.repoId, name: r.name }))} value={activeRepo} onPick={setRepoFilter} onAdd={addRepo} />
       )}
 
       <div className="cxs-slist">
@@ -138,8 +139,15 @@ const EMPTY: LaneSession[] = [];
 
 /* Filter the list to one repository. Hidden when there's only one repo — the
    text field already narrows by branch (and repo name), so the dropdown only
-   earns its space once worktrees span more than one repo. */
-function RepoFilter({ repos, value, onPick }: { repos: { id: string; name: string }[]; value: string | null; onPick: (id: string | null) => void }) {
+   earns its space once worktrees span more than one repo.
+
+   The menu also ends in "Add repository…", because the place you go to switch
+   repositories is the place you notice one is missing. It is an action, not an
+   option, so it sits below a rule and outside the listbox — a `role="option"`
+   that opens a folder picker would be a lie to a screen reader. ⇧⌘N reaches it
+   from anywhere, which is what covers the single-repo case where this whole
+   control is hidden. */
+function RepoFilter({ repos, value, onPick, onAdd }: { repos: { id: string; name: string }[]; value: string | null; onPick: (id: string | null) => void; onAdd: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -147,28 +155,46 @@ function RepoFilter({ repos, value, onPick }: { repos: { id: string; name: strin
     const d = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
     document.addEventListener("mousedown", d);
-    return () => document.removeEventListener("mousedown", d);
+    document.addEventListener("keydown", k, true);
+    return () => {
+      document.removeEventListener("mousedown", d);
+      document.removeEventListener("keydown", k, true);
+    };
   }, [open]);
   const sel = repos.find((r) => r.id === value);
   return (
     <div className="cxs-repobar" ref={ref}>
-      <button className="cxs-repobtn" onClick={() => setOpen((o) => !o)} title="Filter by repository" aria-haspopup="listbox" aria-expanded={open}>
+      <button className="cxs-repobtn" onClick={() => setOpen((o) => !o)} title="Filter by repository" aria-haspopup="menu" aria-expanded={open}>
         <Fork size={11} />
         <span className="nm">{sel ? sel.name : "All repositories"}</span>
         <Chevron size={10} />
       </button>
       {open && (
-        <div className="cxs-repomenu" role="listbox">
-          <button className={"cxs-repoitem" + (value === null ? " is-on" : "")} role="option" aria-selected={value === null} onClick={() => { onPick(null); setOpen(false); }}>
-            <span className="nm">All repositories</span>
-          </button>
-          {repos.map((r) => (
-            <button key={r.id} className={"cxs-repoitem" + (r.id === value ? " is-on" : "")} role="option" aria-selected={r.id === value} onClick={() => { onPick(r.id); setOpen(false); }}>
-              <Fork size={11} />
-              <span className="nm">{r.name}</span>
+        <div className="cxs-repomenu">
+          <div role="listbox" aria-label="Filter by repository">
+            <button className={"cxs-repoitem" + (value === null ? " is-on" : "")} role="option" aria-selected={value === null} onClick={() => { onPick(null); setOpen(false); }}>
+              <span className="nm">All repositories</span>
             </button>
-          ))}
+            {repos.map((r) => (
+              <button key={r.id} className={"cxs-repoitem" + (r.id === value ? " is-on" : "")} role="option" aria-selected={r.id === value} onClick={() => { onPick(r.id); setOpen(false); }}>
+                <Fork size={11} />
+                <span className="nm">{r.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="cxs-repomenu-sep" role="separator" />
+          <button className="cxs-repoitem cxs-repoitem--add" onClick={() => { setOpen(false); onAdd(); }}>
+            <Plus size={11} />
+            <span className="nm">Add repository…</span>
+            <span className="cx-kbd">⇧⌘N</span>
+          </button>
         </div>
       )}
     </div>

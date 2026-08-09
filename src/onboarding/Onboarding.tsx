@@ -704,11 +704,33 @@ function Ready({ det, services, cfg, onCreate, onGoToCanopy, onRestart }: { det:
 /* ── shell ────────────────────────────────────────────────────────── */
 type View = "empty" | "add" | "run" | "done";
 
-export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () => void; onCreateWorktree: () => void }) {
+export default function Onboarding({
+  onClose,
+  onCreateWorktree,
+  /** "add" opens straight on the add-repository screen — the sidebar's
+      repository menu, ⇧⌘N and the palette all arrive that way, from an app
+      that already has repositories. Defaults to the first-run empty state. */
+  initialView = "empty",
+}: {
+  onClose: () => void;
+  onCreateWorktree: () => void;
+  initialView?: "empty" | "add";
+}) {
   const showToast = useStore((s) => s.showToast);
   const select = useStore((s) => s.select);
 
-  const [view, setView] = useState<View>("empty");
+  const [view, setView] = useState<View>(initialView);
+  // Entering at "add" means there is nothing behind this screen: the empty
+  // state's "No repositories yet" would be a lie, so leaving cancels instead
+  // of stepping back to it.
+  const enteredAtAdd = initialView === "add";
+  // …and if the request arrives while the first-run empty state is already up
+  // (0 repos, then ⇧⌘N), jump to the add screen rather than ignoring it — the
+  // initial useState value is only read once. Only from "empty": a request
+  // landing mid-provision must not yank the run or done screen away.
+  useEffect(() => {
+    if (initialView === "add") setView((v) => (v === "empty" ? "add" : v));
+  }, [initialView]);
   const [path, setPath] = useState("");
   const [det, setDet] = useState<RepoDetection | null>(null);
   const [detErr, setDetErr] = useState<string | null>(null);
@@ -930,7 +952,10 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
   }
 
   function restart() {
-    setView("empty");
+    // "Add another" returns to where this run started: the hero claims "No
+    // repositories yet", which is false once you've just added one from an app
+    // that already had some
+    setView(enteredAtAdd ? "add" : "empty");
     setPath("");
     setDet(null);
     setDetErr(null);
@@ -950,7 +975,8 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
         startProvision();
       } else if (e.key === "Escape" && (view === "empty" || view === "add")) {
         e.preventDefault();
-        view === "empty" ? onClose() : setView("empty");
+        if (view === "empty" || enteredAtAdd) onClose();
+        else setView("empty");
       }
     };
     document.addEventListener("keydown", k);
@@ -968,7 +994,11 @@ export default function Onboarding({ onClose, onCreateWorktree }: { onClose: () 
         </div>
         <span className="sp" data-tauri-drag-region />
         {view === "empty" && <button className="ob-skip" onClick={onClose}>Skip setup</button>}
-        {view === "add" && <button className="ob-skip" onClick={() => setView("empty")}>Back</button>}
+        {view === "add" && (
+          <button className="ob-skip" onClick={() => (enteredAtAdd ? onClose() : setView("empty"))}>
+            {enteredAtAdd ? "Cancel" : "Back"}
+          </button>
+        )}
       </div>
 
       {view === "empty" && <EmptyState onAdd={() => setView("add")} />}

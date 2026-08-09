@@ -481,3 +481,150 @@
   background: var(--btn-hover);
   color: var(--text-primary);
 }
+
+/* ── Uncommitted changes: file inventory + command preview ─────────────
+   Flat hairline rows that scroll in place and are never truncated — the same
+   "no bordered box inside a box" rule the rest of the dialog interior follows.
+   The list bleeds to the card edges (14px = --sp-6, the modal body padding) so
+   its section headers share the header/footer's edge. */
+.cxm-flist {
+  margin: 0 calc(var(--sp-6) * -1);
+  max-height: 236px;
+  overflow-y: auto;
+  border-top: var(--border-w) solid var(--divider);
+  border-bottom: var(--border-w) solid var(--divider);
+}
+.cxm-gsec {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 22px;
+  padding: 0 var(--sp-6);
+  background: var(--surface-float);
+  color: var(--text-tertiary);
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  border-bottom: var(--border-w) solid var(--divider);
+}
+.cxm-gsec__n {
+  margin-left: auto;
+  letter-spacing: 0;
+  font-weight: var(--fw-semi);
+  font-size: var(--fs-micro);
+}
+.cxm-frow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  min-height: 23px;
+  padding: var(--sp-micro) var(--sp-6);
+  font: var(--fs-small) var(--mono);
+  color: var(--text-secondary);
+}
+.cxm-frow:hover {
+  background: var(--wash-pop-soft);
+}
+/* an openable row is a real button (keyboard-operable) that looks identical to
+   a static row — reset the chrome (incl. the UA `buttonface` background, which
+   otherwise paints these rows a different white), keep the row's flex layout */
+button.cxm-frow--open {
+  width: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.cxm-frow--open:focus-visible {
+  outline: none;
+  background: var(--wash-pop-soft);
+  box-shadow: inset 2px 0 0 var(--action-primary);
+}
+.cxm-cd {
+  flex: none;
+  width: 19px;
+  white-space: pre;
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  letter-spacing: 0.08em;
+}
+.cxm-pth {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cxm-pth > i {
+  font-style: normal;
+  color: var(--text-tertiary);
+}
+.cxm-arw {
+  color: var(--text-tertiary);
+}
+.cxm-nt {
+  font-family: var(--sans);
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+}
+.cxm-tg {
+  flex: none;
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: var(--btn);
+  padding: var(--sp-1) var(--sp-tight);
+  border-radius: var(--r-xs);
+}
+.cxm-tg--dim {
+  color: var(--text-tertiary);
+  background: none;
+  border: var(--border-w) solid var(--divider);
+}
+.cxm-tg--bad {
+  color: var(--red-text);
+  background: var(--red-dim);
+}
+.cxm-tg--warn {
+  color: var(--state-attention);
+  background: var(--warn-dim);
+}
+.cxm-frow--conf {
+  background: var(--red-wash);
+}
+.cxm-frow--gone .cxm-pth {
+  text-decoration: line-through;
+  color: var(--text-tertiary);
+}
+/* the exact git invocation the current mode will run */
+.cxm-cmd {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-row);
+  padding: var(--sp-pop) 0 var(--sp-5);
+  font: var(--fs-micro) var(--mono);
+  min-width: 0;
+}
+.cxm-cmd__rn {
+  flex: none;
+  font: var(--fw-bold) var(--fs-label) var(--sans);
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.cxm-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
