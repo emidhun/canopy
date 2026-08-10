@@ -218,6 +218,12 @@ export interface OpEvent {
   op: string;
   state: "progress" | "done" | "error";
   detail: string;
+  /** 1-based step this event belongs to; 0 = the provisioning phase, which
+      runs before the numbered commands. Only present on result events. */
+  step?: number;
+  /** short quantity the step produced ("1,842 packages"). Absent whenever the
+      command's output matched no known pattern. */
+  result?: string;
 }
 export interface TerminalDataEvent {
   id: string;

@@ -15,6 +15,8 @@ import Modal, { Hint, Spacer } from "./Modal";
     first, so the marker is matched anywhere in the line rather than anchored. */
 const STEP = /\[(\d+)\/(\d+)\]:\s*(.*)$/;
 
+const EMPTY_RESULTS: Record<number, string> = {};
+
 export default function SetupRunnerModal({
   wt,
   onClose,
@@ -25,6 +27,7 @@ export default function SetupRunnerModal({
   onStartServices: () => void;
 }) {
   const op = useStore((s) => s.ops[wt.wtKey]);
+  const results = op?.results ?? EMPTY_RESULTS;
   const showToast = useStore((s) => s.showToast);
   const startedAt = useRef(Date.now());
   const [failed, setFailed] = useState(false);
@@ -131,6 +134,14 @@ export default function SetupRunnerModal({
         </div>
       )}
 
+      {results[0] && (
+        <div className="cx-step cx-step--done">
+          <span className="cx-step__bullet">✓</span>
+          <span className="cx-step__text">provision files</span>
+          <span className="cx-step__meta">{results[0]}</span>
+        </div>
+      )}
+
       {steps.map((s) => {
         const state = s.n < current ? "done" : s.n === current && running ? "active" : errored && s.n === current ? "failed" : "done";
         return (
@@ -139,9 +150,9 @@ export default function SetupRunnerModal({
               {state === "done" ? "✓" : state === "failed" ? "✕" : <Spinner size={10} />}
             </span>
             <span className="cx-step__text">{s.cmd}</span>
-            {/* TODO(#60): the design shows a result per step ("1,842 packages",
-                "37 migrations"). worktree:op carries step identity but no
-                parsed result, so nothing is shown rather than invented. */}
+            {/* Only steps whose output matched a known pattern have metadata;
+                the rest render with the bullet alone. */}
+            {results[s.n] && <span className="cx-step__meta">{results[s.n]}</span>}
           </div>
         );
       })}

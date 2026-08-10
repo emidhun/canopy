@@ -458,13 +458,13 @@ pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), CanopyE
     let wt2 = wt_key.clone();
     emit_op(&app, &wt_key, "migrate", "progress", "running migration…");
     let result = if !settings_cmd.trim().is_empty() {
-        crate::setup::run_custom_command(&wt_key, &repo_path, &settings_cmd, &vars, move |line| {
-            emit_op(&app2, &wt2, "migrate", "progress", line)
+        crate::setup::run_custom_command(&wt_key, &repo_path, &settings_cmd, &vars, move |p| {
+            emit_progress(&app2, &wt2, "migrate", p)
         })
         .await
     } else {
-        crate::setup::run_migration(&wt_key, &repo_path, &vars, move |line| {
-            emit_op(&app2, &wt2, "migrate", "progress", line)
+        crate::setup::run_migration(&wt_key, &repo_path, &vars, move |p| {
+            emit_progress(&app2, &wt2, "migrate", p)
         })
         .await
     };
@@ -493,8 +493,8 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
     let app2 = app.clone();
     let wt2 = wt_key.clone();
     emit_op(&app, &wt_key, "custom", "progress", format!("running: {command}"));
-    match crate::setup::run_custom_command(&wt_key, &repo_path, &command, &vars, move |line| {
-        emit_op(&app2, &wt2, "custom", "progress", line)
+    match crate::setup::run_custom_command(&wt_key, &repo_path, &command, &vars, move |p| {
+        emit_progress(&app2, &wt2, "custom", p)
     })
     .await
     {
@@ -684,14 +684,45 @@ struct WorktreeOpEvent {
     op: &'static str,
     state: &'static str,
     detail: String,
+    /// 1-based step this event belongs to; 0 = the provisioning phase, which
+    /// runs before the numbered commands. Only set on result events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step: Option<usize>,
+    /// short quantity the step produced ("1,842 packages"). Absent whenever the
+    /// command's output matched no known pattern — a step never claims a count
+    /// it wasn't given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<String>,
 }
 
 fn emit_op(app: &AppHandle, wt_key: &str, op: &'static str, state: &'static str, detail: impl Into<String>) {
     use tauri::Emitter;
     let _ = app.emit(
         "worktree:op",
-        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail: detail.into() },
+        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail: detail.into(), step: None, result: None },
     );
+}
+
+/// Forward one `setup::Progress` as a `worktree:op` event: output lines keep
+/// the existing shape, step results carry `step` + `result` instead.
+fn emit_progress(app: &AppHandle, wt_key: &str, op: &'static str, p: crate::setup::Progress) {
+    use tauri::Emitter;
+    match p {
+        crate::setup::Progress::Line(line) => emit_op(app, wt_key, op, "progress", line),
+        crate::setup::Progress::StepResult { index, text } => {
+            let _ = app.emit(
+                "worktree:op",
+                &WorktreeOpEvent {
+                    wt_key: wt_key.to_string(),
+                    op,
+                    state: "progress",
+                    detail: String::new(),
+                    step: Some(index),
+                    result: Some(text),
+                },
+            );
+        }
+    }
 }
 
 pub(crate) fn sanitize_branch(branch: &str) -> String {
@@ -764,8 +795,8 @@ pub async fn create_worktree(
     // The worktree exists either way; surface setup failure but keep the tree fresh.
     let app3 = app.clone();
     let wt_path3 = wt_path.clone();
-    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
-        emit_op(&app3, &wt_path3, "create", "progress", line)
+    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |p| {
+        emit_progress(&app3, &wt_path3, "create", p)
     })
     .await;
 
@@ -803,8 +834,8 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     let app3 = app.clone();
     let wt3 = wt_key.clone();
     emit_op(&app, &wt_key, "create", "progress", "running setup…");
-    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
-        emit_op(&app3, &wt3, "create", "progress", line)
+    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |p| {
+        emit_progress(&app3, &wt3, "create", p)
     })
     .await
     {
@@ -884,8 +915,8 @@ pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool
         let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
         let app_t = app.clone();
         let wt_t = wt_key.clone();
-        if let Err(e) = crate::setup::run_teardown(&wt_key, &repo_path, &vars, move |line| {
-            emit_op(&app_t, &wt_t, "remove", "progress", line)
+        if let Err(e) = crate::setup::run_teardown(&wt_key, &repo_path, &vars, move |p| {
+            emit_progress(&app_t, &wt_t, "remove", p)
         })
         .await
         {

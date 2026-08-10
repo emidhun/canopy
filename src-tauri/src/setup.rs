@@ -521,16 +521,20 @@ pub async fn run_setup(
     wt_path: &str,
     repo_path: &str,
     vars: &HashMap<String, String>,
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(Progress),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
 
     if !cfg.provision.is_empty() {
-        progress(format!("provisioning {} file(s)", cfg.provision.len()));
+        let n = cfg.provision.len();
+        progress(Progress::Line(format!("provisioning {n} file(s)")));
         for pf in &cfg.provision {
-            progress(format!("  → {} ({})", pf.path, pf.format));
+            progress(Progress::Line(format!("  → {} ({})", pf.path, pf.format)));
             provision_file(wt_path, repo_path, pf, vars)?;
         }
+        // Provisioning is the one step whose count Canopy knows exactly rather
+        // than having to parse out of someone else's output.
+        progress(Progress::StepResult { index: 0, text: format!("{n} file{}", if n == 1 { "" } else { "s" }) });
     }
     run_commands(wt_path, repo_path, &cfg.setup, vars, "setup", &mut progress).await
 }
@@ -540,7 +544,7 @@ pub async fn run_teardown(
     wt_path: &str,
     repo_path: &str,
     vars: &HashMap<String, String>,
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(Progress),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
     run_commands(wt_path, repo_path, &cfg.teardown, vars, "teardown", &mut progress).await
@@ -555,7 +559,7 @@ pub async fn run_migration(
     wt_path: &str,
     repo_path: &str,
     vars: &HashMap<String, String>,
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(Progress),
 ) -> Result<(), String> {
     let cfg = read_config(wt_path, repo_path);
     if cfg.migrate.is_empty() {
@@ -571,10 +575,114 @@ pub async fn run_custom_command(
     repo_path: &str,
     command: &str,
     vars: &HashMap<String, String>,
-    mut progress: impl FnMut(String),
+    mut progress: impl FnMut(Progress),
 ) -> Result<(), String> {
     let cmds = [command.to_string()];
     run_commands(wt_path, repo_path, &cmds, vars, "command", &mut progress).await
+}
+
+// ── step results ──────────────────────────────────────────────────────
+//
+// The setup runner's right-hand column ("1,842 packages", "37 migrations") is
+// what makes the step list worth watching rather than a spinner — "37
+// migrations" tells you the migrate step actually did something, which is
+// exactly why people re-run setup.
+//
+// So this is NOT "the last line of output", which would usually be noise. Each
+// known command kind has a pattern that yields a short, specific quantity;
+// anything unrecognised produces no metadata at all, and the step renders with
+// its bullet alone. A step never claims a count it wasn't given.
+
+/// One progress update from a running command list.
+pub enum Progress {
+    /// a line of output (throttled)
+    Line(String),
+    /// step `index` (1-based) finished and produced a short quantity
+    StepResult { index: usize, text: String },
+}
+
+/// Group a number with thousands separators — the design writes "1,842", and
+/// a bare "1842" reads as an id rather than a count.
+fn commas(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// First run of digits in `line` after `marker`, if any.
+fn number_after(line: &str, marker: &str) -> Option<u64> {
+    let rest = line.to_lowercase();
+    let at = rest.find(marker)? + marker.len();
+    let digits: String = rest[at..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// The leading number on a line, e.g. "37 migrations were executed".
+fn leading_number(line: &str) -> Option<u64> {
+    let t = line.trim_start();
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// Extract a short result quantity from one line of a command's output, given
+/// the command that produced it. `None` for everything unrecognised.
+fn match_step_result(cmd: &str, line: &str) -> Option<String> {
+    let c = cmd.to_lowercase();
+    let l = line.trim();
+    let low = l.to_lowercase();
+
+    // ── dependency installers ──
+    if c.contains("install") || c.contains(" ci") || c.ends_with(" ci") {
+        // npm: "added 1842 packages in 41s"
+        if low.starts_with("added ") {
+            if let Some(n) = number_after(&low, "added ") {
+                return Some(format!("{} packages", commas(n)));
+            }
+        }
+        // pnpm: "Packages: +1842"
+        if low.starts_with("packages:") {
+            if let Some(n) = number_after(&low, "+") {
+                return Some(format!("{} packages", commas(n)));
+            }
+        }
+        // yarn/npm no-op — worth showing, because "nothing happened" is the
+        // answer people re-run setup to confirm
+        if low.contains("up to date") || low.contains("already up-to-date") {
+            return Some("up to date".into());
+        }
+    }
+
+    // ── migrations ──
+    if c.contains("migrat") {
+        // knex: "Batch 1 run: 37 migrations"
+        if low.contains("batch") && low.contains("run:") {
+            if let Some(n) = number_after(&low, "run:") {
+                return Some(format!("{} migrations", commas(n)));
+            }
+        }
+        // typeorm: "37 migrations were successfully executed"
+        if low.contains("migrations") && low.contains("execut") {
+            if let Some(n) = leading_number(l) {
+                return Some(format!("{} migrations", commas(n)));
+            }
+        }
+        if low.contains("no migrations are pending") || low.contains("already up to date") {
+            return Some("none pending".into());
+        }
+    }
+
+    // ── database creation ──
+    if (c.contains("createdb") || c.contains("db:create")) && (low.contains("created") || low.contains("database")) {
+        return Some("created".into());
+    }
+
+    None
 }
 
 /// Minimum gap between forwarded output lines — npm can emit thousands of
@@ -590,10 +698,10 @@ async fn run_commands(
     cmds: &[String],
     vars: &HashMap<String, String>,
     label: &str,
-    progress: &mut impl FnMut(String),
+    progress: &mut impl FnMut(Progress),
 ) -> Result<(), String> {
     for (i, cmd) in cmds.iter().enumerate() {
-        progress(format!("{label} [{}/{}]: {cmd}", i + 1, cmds.len()));
+        progress(Progress::Line(format!("{label} [{}/{}]: {cmd}", i + 1, cmds.len())));
         let wrapped = crate::toolchain::with_pinned_node(wt_path, cmd);
         let (shell, shargs) = crate::toolchain::shell_argv(&wrapped);
         let mut child = Command::new(shell)
@@ -615,13 +723,21 @@ async fn run_commands(
         // last stderr lines, kept for the failure message
         let mut stderr_tail: VecDeque<String> = VecDeque::new();
         let mut last_emit = std::time::Instant::now() - STREAM_THROTTLE;
-        let mut emit = |line: &str, progress: &mut dyn FnMut(String)| {
+        // The first recognised quantity this step produced. Scanned on the fly
+        // rather than from a retained buffer: the throttle drops most lines
+        // before they are ever forwarded, and the line carrying the count is
+        // routinely one of the dropped ones.
+        let mut found: Option<String> = None;
+        let mut emit = |line: &str, progress: &mut dyn FnMut(Progress)| {
             let t = line.trim_end();
             if t.is_empty() {
                 return;
             }
+            if found.is_none() {
+                found = match_step_result(cmd, t);
+            }
             if last_emit.elapsed() >= STREAM_THROTTLE {
-                progress(t.to_string());
+                progress(Progress::Line(t.to_string()));
                 last_emit = std::time::Instant::now();
             }
         };
@@ -674,6 +790,9 @@ async fn run_commands(
             let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
             return Err(format!("{label} step failed: {cmd}\n{headline}{tail}"));
         }
+        if let Some(text) = found {
+            progress(Progress::StepResult { index: i + 1, text });
+        }
     }
     Ok(())
 }
@@ -681,6 +800,50 @@ async fn run_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn step_results_are_specific_quantities_or_nothing() {
+        let install = "pnpm install";
+        // npm
+        assert_eq!(
+            match_step_result(install, "added 1842 packages in 41s"),
+            Some("1,842 packages".into()),
+            "grouped, because a bare 1842 reads as an id"
+        );
+        // pnpm
+        assert_eq!(match_step_result(install, "Packages: +1842"), Some("1,842 packages".into()));
+        // the no-op is worth reporting — it's what people re-run setup to confirm
+        assert_eq!(match_step_result(install, "up to date, audited 12 packages"), Some("up to date".into()));
+
+        // migrations, across the runners a repo might use
+        let migrate = "pnpm db:migrate";
+        assert_eq!(match_step_result(migrate, "Batch 1 run: 37 migrations"), Some("37 migrations".into()));
+        assert_eq!(
+            match_step_result(migrate, "37 migrations were successfully executed"),
+            Some("37 migrations".into())
+        );
+        assert_eq!(match_step_result(migrate, "No migrations are pending"), Some("none pending".into()));
+
+        // ── the negative cases matter more ──
+        // ordinary output from a recognised command is NOT a result
+        assert_eq!(match_step_result(install, "Progress: resolved 900, reused 880"), None);
+        assert_eq!(match_step_result(migrate, "using environment: development"), None);
+        // an unrecognised command produces nothing at all, however chatty
+        assert_eq!(match_step_result("pnpm build:plugins", "added 12 chunks"), None);
+        assert_eq!(match_step_result("pnpm build", "Done in 3.2s"), None);
+        // a count from the wrong command kind is not borrowed
+        assert_eq!(match_step_result("echo hello", "added 1842 packages"), None);
+    }
+
+    #[test]
+    fn commas_groups_thousands() {
+        assert_eq!(commas(0), "0");
+        assert_eq!(commas(37), "37");
+        assert_eq!(commas(999), "999");
+        assert_eq!(commas(1842), "1,842");
+        assert_eq!(commas(12345), "12,345");
+        assert_eq!(commas(1234567), "1,234,567");
+    }
 
     #[test]
     fn wt_slug_is_db_safe() {
