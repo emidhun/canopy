@@ -285,6 +285,22 @@ pub async fn fetch_submodules(app: AppHandle, wt_key: String) -> Result<usize, C
     Ok(git::fetch_submodules(&wt_key).await)
 }
 
+/// Re-pin every submodule to the commit the parent records (⇧⌘S in the UI).
+#[tauri::command]
+pub async fn sync_submodules(app: AppHandle, wt_key: String) -> Result<String, CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    // shares the worktree lease with pull/setup: a sync rewriting submodule
+    // checkouts under a running `pnpm install` is exactly the collision leases exist for
+    let _lease = crate::state::try_lease(&app, &wt_key, "sync submodules")?;
+    let n = git::sync_submodules(&wt_key).await.map_err(CanopyError::git)?;
+    refresh_git_meta(&app, &wt_key).await;
+    Ok(match n {
+        0 => "No submodules to sync".to_string(),
+        1 => "1 submodule back on its pinned commit".to_string(),
+        n => format!("{n} submodules back on their pinned commits"),
+    })
+}
+
 /// Check out a different branch in this worktree (in place — deps reused).
 #[tauri::command]
 pub async fn switch_worktree_branch(

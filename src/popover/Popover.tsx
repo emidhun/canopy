@@ -314,10 +314,7 @@ export default function Popover() {
   };
   const newWorktree = () => command("tray:new-worktree", "Create a worktree in the manager");
   const openManagerOverview = () => command("tray:overview", "Opening all worktrees");
-  const openSettings = () => {
-    openManager();
-    showToast("Settings — opening the manager");
-  };
+  const openSettings = () => command("tray:settings", "Settings — opening the manager");
 
   return (
     <div className="pop" ref={popRef}>

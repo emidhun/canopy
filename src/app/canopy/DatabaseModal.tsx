@@ -5,11 +5,16 @@
    actually does, so that is what the dialog offers. Confirmations are past
    tense and unremarkable: "Snapshot … created", "Now using tj_main". */
 import { useEffect, useState } from "react";
-import { Database, Download, Info, Refresh, Restart, Pull } from "../../icons";
+import { Database, Download, Info, Refresh, Restart, Pull, Spinner } from "../../icons";
 import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer } from "./Modal";
+
+/** Which long-running database job is in flight. Only one runs at a time —
+    they all take the worktree's op lease in the backend, so offering a second
+    would only produce a "busy" error. */
+type Job = "migrate" | "reset" | "snapshot" | "export" | "restore" | null;
 
 const snapDefault = (db: string) => {
   const d = new Date();
@@ -20,11 +25,16 @@ const snapDefault = (db: string) => {
 export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const resetDb = useStore((s) => s.resetDb);
+  // reset is fire-and-forget over reset:status events, so its progress lives in
+  // the store — the dialog reads it rather than keeping a second copy
+  const resetting = useStore((s) => !!s.resetting[wt.wtKey]);
   const [dbs, setDbs] = useState<string[]>([]);
   const [current, setCurrent] = useState<string | null>(wt.dbName);
   const [q, setQ] = useState("");
   const [snap, setSnap] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [job, setJob] = useState<Job>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hasBackend()) return;
@@ -32,11 +42,30 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
     ipc.currentDatabase(wt.wtKey).then(setCurrent).catch(() => {});
   }, [wt.wtKey]);
 
+  const busy = switching || job !== null || resetting;
   const list = dbs.filter((d) => d.toLowerCase().includes(q.toLowerCase()));
 
+  /** Run one database job with a spinner on its own row, and keep the dialog
+      open until it finishes — these take seconds to minutes, and closing on
+      "started" made every one of them look instantaneous. */
+  const run = async (which: Exclude<Job, null>, work: () => Promise<void>, ok: string) => {
+    if (busy) return;
+    setJob(which);
+    setError(null);
+    try {
+      await work();
+      showToast(ok);
+      onClose();
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setJob((j) => (j === which ? null : j));
+    }
+  };
+
   const switchTo = async (name: string) => {
-    if (name === current || !hasBackend()) return;
-    setBusy(true);
+    if (name === current || !hasBackend() || busy) return;
+    setSwitching(true);
     try {
       await ipc.switchDatabase(wt.wtKey, name);
       setCurrent(name);
@@ -44,7 +73,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
     } catch (e) {
       showToast(errText(e));
     } finally {
-      setBusy(false);
+      setSwitching(false);
     }
   };
 
@@ -69,20 +98,30 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
               className="cx-btn cx-btn--primary"
               disabled={!snap.trim() || busy}
               onClick={async () => {
-                setBusy(true);
+                const name = snap.trim();
+                setJob("snapshot");
                 try {
-                  if (hasBackend()) await ipc.snapshotDatabase(wt.wtKey, snap.trim());
-                  showToast(`Snapshot ${snap.trim()} created`);
+                  if (hasBackend()) await ipc.snapshotDatabase(wt.wtKey, name);
+                  showToast(`Snapshot ${name} created`);
                   setSnap(null);
                 } catch (e) {
                   showToast(errText(e));
                 } finally {
-                  setBusy(false);
+                  setJob(null);
                 }
               }}
             >
-              Create
-              <span className="cx-k">⏎</span>
+              {job === "snapshot" ? (
+                <>
+                  <Spinner size={12} />
+                  Creating…
+                </>
+              ) : (
+                <>
+                  Create
+                  <span className="cx-k">⏎</span>
+                </>
+              )}
             </button>
           </>
         }
@@ -111,26 +150,34 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
       onClose={onClose}
       foot={
         <>
-          <Hint icon={Info}>Each worktree gets its own database</Hint>
+          <Hint icon={Info}>
+            {busy ? "This runs in the worktree — it can take a while" : "Each worktree gets its own database"}
+          </Hint>
           <Spacer />
           <button className="cx-btn cx-btn--ghost" onClick={onClose}>
-            Close
+            {busy ? "Run in background" : "Close"}
           </button>
           <button
             className="cx-btn cx-btn--primary"
-            onClick={async () => {
-              try {
+            disabled={busy}
+            onClick={() =>
+              run("migrate", async () => {
                 if (hasBackend()) await ipc.runMigration(wt.wtKey);
-                showToast("Running migration…");
-                onClose();
-              } catch (e) {
-                showToast(errText(e));
-              }
-            }}
+              }, "Migration complete")
+            }
           >
-            <Restart size={12} />
-            Run migration
-            <span className="cx-k">⏎</span>
+            {job === "migrate" ? (
+              <>
+                <Spinner size={12} />
+                Migrating…
+              </>
+            ) : (
+              <>
+                <Restart size={12} />
+                Run migration
+                <span className="cx-k">⏎</span>
+              </>
+            )}
           </button>
         </>
       }
@@ -162,7 +209,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
 
       <div className="cxm-fld">
         <div className="cxm-flab">Actions</div>
-        <button className="cxm-act" onClick={() => setSnap(snapDefault(current ?? "db"))}>
+        <button className="cxm-act" disabled={busy} onClick={() => setSnap(snapDefault(current ?? "db"))}>
           <span className="ic">
             <Pull size={13} />
           </span>
@@ -171,62 +218,72 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
         </button>
         <button
           className="cxm-act"
+          disabled={busy}
           onClick={async () => {
             if (!hasBackend()) return showToast("Export needs the desktop app");
             const { save } = await import("@tauri-apps/plugin-dialog");
             const path = await save({ defaultPath: `${current}.dump`, title: "Export database" });
             if (!path) return;
-            try {
-              await ipc.exportDatabase(wt.wtKey, path);
-              showToast(`Exported ${current}`);
-              onClose();
-            } catch (e) {
-              showToast(errText(e));
-            }
+            run("export", () => ipc.exportDatabase(wt.wtKey, path), `Exported ${current}`);
           }}
         >
-          <span className="ic">
-            <Download size={12} />
-          </span>
-          Export to file…
+          <span className="ic">{job === "export" ? <Spinner size={12} /> : <Download size={12} />}</span>
+          {job === "export" ? "Exporting…" : "Export to file…"}
           <span className="sub">{current}.dump</span>
         </button>
         <button
           className="cxm-act"
+          disabled={busy}
           onClick={async () => {
             if (!hasBackend()) return showToast("Restore needs the desktop app");
             const { open } = await import("@tauri-apps/plugin-dialog");
             const path = await open({ title: "Restore database", multiple: false });
             if (!path || typeof path !== "string") return;
-            try {
-              await ipc.restoreDatabase(wt.wtKey, path);
-              showToast(`Restoring ${current} from file…`);
-              onClose();
-            } catch (e) {
-              showToast(errText(e));
-            }
+            run("restore", () => ipc.restoreDatabase(wt.wtKey, path), `Restored ${current}`);
           }}
         >
-          <span className="ic">
-            <Refresh size={12} />
-          </span>
-          Restore from file…
+          <span className="ic">{job === "restore" ? <Spinner size={12} /> : <Refresh size={12} />}</span>
+          {job === "restore" ? "Restoring…" : "Restore from file…"}
           <span className="sub">.dump · .backup · .sql</span>
         </button>
         <button
           className="cxm-act cxm-act--danger"
-          onClick={() => {
-            resetDb(wt.wtKey);
-            onClose();
-          }}
+          disabled={busy}
+          onClick={() =>
+            run(
+              "reset",
+              async () => {
+                // reset_db awaits the drop + re-seed, so the invoke IS the
+                // progress signal.
+                if (hasBackend()) return ipc.resetDb(wt.wtKey);
+                // Browser-only: the mock reports through the same `resetting`
+                // flag, so wait for it to clear rather than claiming success
+                // the instant the call returns.
+                resetDb(wt.wtKey);
+                await new Promise<void>((resolve) => {
+                  const un = useStore.subscribe((s) => {
+                    if (!s.resetting[wt.wtKey]) {
+                      un();
+                      resolve();
+                    }
+                  });
+                });
+              },
+              "Database reset",
+            )
+          }
         >
-          <span className="ic">
-            <Restart size={12} />
-          </span>
-          Reset database
+          <span className="ic">{resetting || job === "reset" ? <Spinner size={12} /> : <Restart size={12} />}</span>
+          {resetting || job === "reset" ? "Resetting…" : "Reset database"}
           <span className="sub">drops and re-seeds</span>
         </button>
       </div>
+
+      {error && (
+        <div className="cx-alert cx-alert--error" style={{ marginTop: "var(--sp-modal-head)" }}>
+          <div>{error}</div>
+        </div>
+      )}
     </Modal>
   );
 }

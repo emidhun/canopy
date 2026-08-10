@@ -9,6 +9,7 @@ import { errText, hasBackend, ipc, on } from "./ipc";
 const LOG_CAP = 160;
 const CPU_SAMPLES = 7; // the service-detail sparkline shows seven slots
 const OP_LOG_CAP = 300;
+const NOTICE_CAP = 24;
 
 /** Buffered progress of a worktree-level operation (setup / create / custom cmd). */
 export interface OpLog {
@@ -17,6 +18,60 @@ export interface OpLog {
   step: string | null;
   running: boolean;
 }
+
+/* ── background operations ────────────────────────────────────────────────
+   Creating and removing a worktree are minutes-long, backend-owned jobs. Both
+   dialogs can be dismissed while the job runs — but a dismissed dialog has
+   nowhere to report back to, and an error that only ever existed inside it is
+   an error the user never sees. So an op whose dialog was sent away records
+   its outcome as a Notice, and the attention queue ("Needs you") renders those
+   next to crashes and blocked agents: the one place the app already promises
+   is where things needing a human turn up. */
+export interface Notice {
+  id: string;
+  /** "error" is something that failed; "done" is a background job reporting in */
+  kind: "error" | "done";
+  /** present-tense statement of what happened */
+  title: string;
+  /** the branch it concerns — the row's context line */
+  wt: string;
+  wtKey: string;
+  /** full error text and log tail, never truncated — this is what gets copied */
+  detail: string;
+  ts: number;
+}
+
+/** A worktree whose `git worktree add` + setup is still running. It has no row
+    in the tree yet (the backend only publishes it once it exists), so the
+    sidebar renders these as its own in-progress rows. */
+export interface PendingCreate {
+  repoId: string;
+  repoName: string;
+  branch: string;
+  startedAt: number;
+}
+
+export interface CreateWorktreeArgs {
+  repoId: string;
+  repoName: string;
+  branch: string;
+  base?: string;
+  createBranch: boolean;
+  /** the path the backend will create. Progress events are keyed by it, so it
+      is also what the in-progress row and the failure notice are filed under. */
+  wtPath: string;
+  /** called with the REAL path once it exists (seeding .canopy/context.md) */
+  onCreated?: (wtPath: string) => void;
+}
+
+/** Keys whose dialog was dismissed while their op ran. Not reactive state —
+    nothing renders from it; it only decides whether the outcome is reported
+    as a Notice (dialog gone) or left to the dialog that is still watching. */
+const backgrounded = new Set<string>();
+export const backgroundOp = (key: string) => backgrounded.add(key);
+const takeBackground = (key: string) => backgrounded.delete(key);
+
+let noticeSeq = 0;
 
 /* ── agent-lane sessions ──────────────────────────────────────────────────────
    A worktree can hold any number of concurrent agent and shell tabs. Each one
@@ -89,8 +144,29 @@ interface State {
       it was previously dropped on the floor. */
   exitCodes: Record<string, number>;
   resetting: Record<string, boolean>;
+  /** worktrees whose submodules are being synced to their pinned commits */
+  subSyncing: Record<string, boolean>;
   toast: string | null;
   flash: "manager" | "quit" | null;
+
+  /** outcomes of backgrounded operations, newest first — the attention queue */
+  notices: Notice[];
+  notify: (n: Omit<Notice, "id" | "ts">) => void;
+  dismissNotice: (id: string) => void;
+
+  /** worktrees being created right now, keyed by their destination path */
+  creating: Record<string, PendingCreate>;
+  /** worktrees being removed right now */
+  removing: Record<string, boolean>;
+  createWorktree: (a: CreateWorktreeArgs) => Promise<string>;
+  removeWorktrees: (wtKeys: string[], deleteBranch: boolean, dropDb: boolean) => Promise<void>;
+
+  /** Settings' "Show the Switch-branch action". Mirrored here so every surface
+      offering it (⌘\, the status bar, the worktree menu) reads ONE answer. */
+  showSwitchBranch: boolean;
+  /** re-read the preferences this store mirrors from Settings */
+  loadPrefs: () => void;
+  syncSubmodules: (wtKey: string) => void;
 
   selKey: string | null;
   query: string;
@@ -175,6 +251,15 @@ function patchStatus(tree: RepoNode[], svcKey: string, status: SvcStatus): RepoN
 export function wtLabel(tree: RepoNode[], wtKey: string): string {
   const f = findWt(tree, wtKey);
   return f ? `${f.wt.branch} · ${f.repo.name}` : wtKey;
+}
+
+/** The tail of a worktree's op buffer — the log a failure notice carries, so
+    "it failed" comes with the lines that say how. */
+function opTail(wtKey: string, n = 24): string {
+  return (useStore.getState().ops[wtKey]?.lines ?? [])
+    .slice(-n)
+    .map((l) => l.text)
+    .join("\n");
 }
 
 const timers: Record<string, ReturnType<typeof setTimeout>> = {};
@@ -277,8 +362,13 @@ export const useStore = create<State>((set, get) => {
     cpuHistory: {},
     exitCodes: {},
     resetting: {},
+    subSyncing: {},
     toast: null,
     flash: null,
+    notices: [],
+    creating: {},
+    removing: {},
+    showSwitchBranch: true,
 
     selKey: mock[0]?.worktrees[0]?.wtKey ?? null,
     query: "",
@@ -360,7 +450,10 @@ export const useStore = create<State>((set, get) => {
         return { detachedTerms: next };
       }),
     settingsRev: 0,
-    bumpSettings: () => set((st) => ({ settingsRev: st.settingsRev + 1 })),
+    bumpSettings: () => {
+      set((st) => ({ settingsRev: st.settingsRev + 1 }));
+      get().loadPrefs();
+    },
     mainRailed: false,
     setMainRailed: (mainRailed) => set({ mainRailed }),
 
@@ -458,6 +551,134 @@ export const useStore = create<State>((set, get) => {
       showToast(`Resetting database — ${label}…`);
       ipc.resetDb(wtKey).catch((e) => showToast(errText(e)));
     },
+    notify: (n) =>
+      set((st) => ({ notices: [{ ...n, id: `n-${Date.now().toString(36)}-${noticeSeq++}`, ts: Date.now() }, ...st.notices].slice(0, NOTICE_CAP) })),
+    dismissNotice: (id) => set((st) => ({ notices: st.notices.filter((n) => n.id !== id) })),
+
+    /* Creating a worktree lives HERE, not in the dialog, because the dialog is
+       dismissable mid-run: the job has to outlive the component that started
+       it, and its outcome has to land somewhere the user will still see. */
+    createWorktree: async (a) => {
+      if (!hasBackend()) {
+        showToast("New worktree needs the desktop app");
+        throw new Error("New worktree needs the desktop app");
+      }
+      set((st) => ({
+        creating: {
+          ...st.creating,
+          [a.wtPath]: { repoId: a.repoId, repoName: a.repoName, branch: a.branch, startedAt: Date.now() },
+        },
+      }));
+      try {
+        const path = await ipc.createWorktree({
+          repoId: a.repoId,
+          branch: a.branch,
+          base: a.base,
+          createBranch: a.createBranch,
+        });
+        a.onCreated?.(path);
+        showToast(`Worktree ready — ${a.branch}`);
+        if (takeBackground(a.wtPath))
+          get().notify({ kind: "done", title: "Worktree ready", wt: a.branch, wtKey: path, detail: opTail(path) });
+        return path;
+      } catch (e) {
+        takeBackground(a.wtPath);
+        // Notify even when the dialog is still open: the dialog shows this
+        // inline, but it can be closed, and a create that failed is exactly the
+        // thing that must not disappear with it.
+        get().notify({
+          kind: "error",
+          title: "Worktree creation failed",
+          wt: a.branch,
+          wtKey: a.wtPath,
+          detail: [errText(e), opTail(a.wtPath)].filter(Boolean).join("\n\n"),
+        });
+        throw e;
+      } finally {
+        set((st) => {
+          const creating = { ...st.creating };
+          delete creating[a.wtPath];
+          return { creating };
+        });
+      }
+    },
+
+    removeWorktrees: async (wtKeys, deleteBranch, dropDb) => {
+      if (!hasBackend()) {
+        showToast("Removing worktrees needs the desktop app");
+        throw new Error("Removing worktrees needs the desktop app");
+      }
+      // resolve the labels BEFORE the removal — afterwards the tree no longer
+      // has these worktrees, so there is nothing left to name them by
+      const labels = wtKeys.map((k) => findWt(get().tree, k)?.wt.branch ?? k);
+      set((st) => ({ removing: { ...st.removing, ...Object.fromEntries(wtKeys.map((k) => [k, true])) } }));
+      const many = wtKeys.length !== 1;
+      const label = many ? `${wtKeys.length} worktrees` : labels[0];
+      try {
+        if (many) await ipc.removeWorktrees(wtKeys, deleteBranch, dropDb);
+        else await ipc.removeWorktree(wtKeys[0], deleteBranch, dropDb);
+        showToast(many ? `Removed ${wtKeys.length} worktrees` : `Worktree removed — ${labels[0]}`);
+        if (wtKeys.map((k) => takeBackground(k)).some(Boolean))
+          get().notify({
+            kind: "done",
+            title: many ? `${wtKeys.length} worktrees removed` : "Worktree removed",
+            wt: label,
+            wtKey: wtKeys[0],
+            detail: labels.join("\n"),
+          });
+      } catch (e) {
+        wtKeys.forEach((k) => takeBackground(k));
+        get().notify({
+          kind: "error",
+          title: many ? "Worktree removal failed" : "Could not remove worktree",
+          wt: label,
+          wtKey: wtKeys[0],
+          detail: [errText(e), opTail(wtKeys[0])].filter(Boolean).join("\n\n"),
+        });
+        throw e;
+      } finally {
+        set((st) => {
+          const removing = { ...st.removing };
+          wtKeys.forEach((k) => delete removing[k]);
+          return { removing };
+        });
+      }
+    },
+
+    loadPrefs: () => {
+      if (!hasBackend()) return;
+      ipc
+        .getSettings()
+        .then((s) => set({ showSwitchBranch: s.showSwitchBranch !== false }))
+        .catch(() => {});
+    },
+
+    /* `git submodule sync` + `update --init --recursive` — puts every submodule
+       back on the commit the parent pins. Distinct from Pull, which moves them
+       FORWARD onto their own branches; this is the "my submodules are on the
+       wrong commit after a branch change" repair. */
+    syncSubmodules: (wtKey) => {
+      const label = wtLabel(get().tree, wtKey);
+      if (!hasBackend()) {
+        showToast("Syncing submodules needs the desktop app");
+        return;
+      }
+      if (get().subSyncing[wtKey]) return;
+      set((st) => ({ subSyncing: { ...st.subSyncing, [wtKey]: true } }));
+      showToast(`Syncing submodules — ${label}…`);
+      ipc
+        .syncSubmodules(wtKey)
+        .then((summary) => showToast(`✓ ${summary} — ${label}`))
+        .catch((e) => showToast(`Submodule sync failed — ${errText(e)}`))
+        .finally(() =>
+          set((st) => {
+            const subSyncing = { ...st.subSyncing };
+            delete subSyncing[wtKey];
+            return { subSyncing };
+          }),
+        );
+    },
+
     addRepoOpen: false,
     addRepo: () => set({ addRepoOpen: true }),
     closeAddRepo: () => set({ addRepoOpen: false }),
@@ -556,6 +777,7 @@ export function initSync(): () => void {
     .getTree()
     .then((tree) => !disposed && reconcile(tree))
     .catch((e) => console.error("get_tree failed", e));
+  useStore.getState().loadPrefs();
 
   track(on.treeChanged((tree) => reconcile(tree)));
 

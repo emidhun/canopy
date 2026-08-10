@@ -4,7 +4,7 @@
    global entry point (⌘K), right is the cross-worktree signal — how much is
    running, how many agents, and what needs a human. */
 import { useEffect, useRef, type RefObject } from "react";
-import { Bell, Check, ChevRight, Chevron, Cube, Fork, Refresh, Settings, Sparkle, Alert } from "../../icons";
+import { Bell, Check, ChevRight, Chevron, Cube, Fork, Refresh, Settings, Sparkle, Alert, X } from "../../icons";
 import type { AttnItem } from "../nextAction";
 import type { RepoNode, WorktreeNode } from "../../types";
 
@@ -34,7 +34,9 @@ export function TopBar({
   /** shared with AttentionPop so the trigger can close its own popover */
   attnRef?: RefObject<HTMLButtonElement | null>;
 }) {
-  const crashes = attn.filter((a) => a.kind === "crash").length;
+  // a backgrounded op that failed is as red as a crashed service — both mean
+  // something you asked for is not running
+  const crashes = attn.filter((a) => a.kind === "crash" || a.kind === "error").length;
 
   return (
     <div className="cxs-topbar" data-tauri-drag-region>
@@ -106,11 +108,15 @@ export function TopBar({
 export function AttentionPop({
   items,
   onPick,
+  onDismiss,
   onClose,
   anchor,
 }: {
   items: AttnItem[];
   onPick: (a: AttnItem) => void;
+  /** clear a notice row without acting on it (crashes have no dismiss — they
+      leave the queue by being fixed) */
+  onDismiss: (a: AttnItem) => void;
   onClose: () => void;
   /** the trigger, so its own mousedown isn't treated as "outside" — otherwise
       the listener closes the popover and the click immediately reopens it,
@@ -144,19 +150,34 @@ export function AttentionPop({
         </div>
       ) : (
         items.map((a) => (
-          <button className="cxs-attn-i" key={a.id} onClick={() => onPick(a)}>
-            <span className={"ic " + a.kind}>
-              {a.kind === "crash" ? <Alert size={12} /> : a.kind === "wait" ? <Sparkle size={12} /> : <Cube size={12} />}
-            </span>
-            <span className="tx">
-              <span className="tt">{a.title}</span>
-              <span className="wt">{a.wt}</span>
-            </span>
-            <span className="go">
-              {a.act}
-              <ChevRight size={11} />
-            </span>
-          </button>
+          <div className="cxs-attn-r" key={a.id}>
+            <button className="cxs-attn-i" onClick={() => onPick(a)}>
+              <span className={"ic " + a.kind}>
+                {a.kind === "crash" || a.kind === "error" ? (
+                  <Alert size={12} />
+                ) : a.kind === "wait" ? (
+                  <Sparkle size={12} />
+                ) : a.kind === "info" ? (
+                  <Check size={12} />
+                ) : (
+                  <Cube size={12} />
+                )}
+              </span>
+              <span className="tx">
+                <span className="tt">{a.title}</span>
+                <span className="wt">{a.wt}</span>
+              </span>
+              <span className="go">
+                {a.act}
+                <ChevRight size={11} />
+              </span>
+            </button>
+            {a.noticeId && (
+              <button className="cxs-attn-x" title="Dismiss" aria-label={`Dismiss ${a.title}`} onClick={() => onDismiss(a)}>
+                <X size={10} />
+              </button>
+            )}
+          </div>
         ))
       )}
     </div>

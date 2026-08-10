@@ -6,11 +6,12 @@
    components either way. */
 import { useEffect, useRef, useState } from "react";
 import { Play, PopIn, PopOut, Sparkle, Spinner, Terminal as TerminalIcon, Logs as LogsIcon, Plus, X } from "../../icons";
-import { hasBackend } from "../../ipc";
+import { hasBackend, type AgentCfg } from "../../ipc";
 import { laneLabel, useStore, type LaneSession } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import TerminalPane from "../TerminalPane";
 import LogsPane from "./LogsPane";
+import AnchoredMenu from "./AnchoredMenu";
 import { agentState, nextClass, type NextAction } from "../nextAction";
 import { useWtContext } from "../WorktreeContext";
 import { Chevron } from "../../icons";
@@ -50,6 +51,55 @@ const TAB_META: Record<PaneKind, { label: string; Icon: typeof LogsIcon }> = {
 };
 
 const EMPTY: LaneSession[] = [];
+
+/* Settings lets a repo configure several agent CLIs, but every launch here
+   silently took the first one — so the second and third were configurable and
+   unreachable. With more than one configured, launching asks which; with one,
+   it stays a single click. `render` receives the click handler so the caller
+   keeps its own button styling (a tab chip, or the empty state's primary). */
+function StartAgent({
+  agents,
+  onPick,
+  render,
+}: {
+  agents: AgentCfg[];
+  onPick: (profile?: AgentCfg) => void;
+  render: (open: () => void, ref: React.RefObject<HTMLButtonElement | null>) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const many = agents.length > 1;
+  return (
+    <>
+      {render(() => (many ? setOpen((o) => !o) : onPick()), ref)}
+      {open && many && (
+        <AnchoredMenu anchor={ref} onClose={() => setOpen(false)} align="left" width={214}>
+          <div className="cx-pop__head">
+            <Sparkle size={11} />
+            Start an agent
+          </div>
+          {agents.map((a, i) => (
+            <button
+              key={a.id}
+              className="cx-pop__item"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onPick(a);
+              }}
+            >
+              <span className="cx-pop__ic">
+                <Sparkle size={13} />
+              </span>
+              {a.name || a.command}
+              {i === 0 && <span className="cx-k">default</span>}
+            </button>
+          ))}
+        </AnchoredMenu>
+      )}
+    </>
+  );
+}
 
 export default function WorkSurface({
   wt,
@@ -280,13 +330,26 @@ function Pane({
                   </span>
                 );
               })}
-              <button
-                className="cxs-sc"
-                title={kind === "agent" ? "New agent" : "New shell"}
-                onClick={() => (kind === "agent" ? launch.startAgent() : launch.startShell())}
-              >
-                <Plus size={10} />
-              </button>
+              {kind === "agent" ? (
+                <StartAgent
+                  agents={launch.agents}
+                  onPick={(profile) => launch.startAgent(profile ? { profile } : undefined)}
+                  render={(open, ref) => (
+                    <button
+                      ref={ref}
+                      className="cxs-sc"
+                      title={launch.agents.length > 1 ? "New agent — choose which" : "New agent"}
+                      onClick={open}
+                    >
+                      <Plus size={10} />
+                    </button>
+                  )}
+                />
+              ) : (
+                <button className="cxs-sc" title="New shell" onClick={() => launch.startShell()}>
+                  <Plus size={10} />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -313,13 +376,24 @@ function Pane({
               ? "It starts in a real terminal, seeded with this worktree's context — the task, its links, and the branch, database and ports."
               : "A login shell in this worktree's directory, on its pinned toolchain."}
           </span>
-          <button
-            className={nextClass("primary")}
-            onClick={() => (kind === "agent" ? launch.startAgent() : launch.startShell())}
-          >
-            {kind === "agent" ? <Sparkle size={12} /> : <TerminalIcon size={12} />}
-            {kind === "agent" ? "Start agent" : "Open terminal"}
-          </button>
+          {kind === "agent" ? (
+            <StartAgent
+              agents={launch.agents}
+              onPick={(profile) => launch.startAgent(profile ? { profile } : undefined)}
+              render={(open, ref) => (
+                <button ref={ref} className={nextClass("primary")} onClick={open}>
+                  <Sparkle size={12} />
+                  Start agent
+                  {launch.agents.length > 1 && <Chevron size={10} />}
+                </button>
+              )}
+            />
+          ) : (
+            <button className={nextClass("primary")} onClick={() => launch.startShell()}>
+              <TerminalIcon size={12} />
+              Open terminal
+            </button>
+          )}
         </div>
       ) : (
         <div className="cxs-pbody cxs-pbody--term">

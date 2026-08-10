@@ -75,19 +75,24 @@ export default function Palette({
         const na = nextAction(sel.wt, sessions[sel.wt.wtKey] ?? []);
         out.push({ g: "Suggested", icon: na.icon, nm: na.label, why: na.why, run: () => onAction(na) });
       }
-      attn.slice(0, 3).forEach((a) =>
-        out.push({
-          g: "Suggested",
-          icon: a.kind === "crash" ? Alert : a.kind === "wait" ? Sparkle : Cube,
-          tone: a.kind === "crash" ? "crash" : "urgent",
-          // The row is labelled with an imperative ("Restart — API crashed"),
-          // so it has to perform it. Selecting and leaving the crash in place
-          // would make ⌘K the one surface that disagrees with the others.
-          nm: `${a.act} — ${a.title}`,
-          why: a.wt,
-          run: () => onRunFor(a.wtKey),
-        }),
-      );
+      // Notices are read, not run — the palette's rows all perform something,
+      // and a row that did nothing when picked would be the odd one out.
+      attn
+        .filter((a) => !a.noticeId)
+        .slice(0, 3)
+        .forEach((a) =>
+          out.push({
+            g: "Suggested",
+            icon: a.kind === "crash" ? Alert : a.kind === "wait" ? Sparkle : Cube,
+            tone: a.kind === "crash" ? "crash" : "urgent",
+            // The row is labelled with an imperative ("Restart — API crashed"),
+            // so it has to perform it. Selecting and leaving the crash in place
+            // would make ⌘K the one surface that disagrees with the others.
+            nm: `${a.act} — ${a.title}`,
+            why: a.wt,
+            run: () => onRunFor(a.wtKey),
+          }),
+        );
     }
 
     flat.forEach(({ wt, repo }) => {

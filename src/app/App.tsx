@@ -19,6 +19,7 @@ import StatusBar from "./canopy/StatusBar";
 import { LAYOUT_ORDER, LAYOUTS, panesOf, type LayoutId, type PaneKind } from "./canopy/WorkSurface";
 import { useLaneLaunch } from "./canopy/laneLaunch";
 import DatabaseModal from "./canopy/DatabaseModal";
+import NoticeModal from "./canopy/NoticeModal";
 import SetupRunnerModal from "./canopy/SetupRunnerModal";
 import ServiceDetailModal from "./canopy/ServiceDetailModal";
 import ContextModal from "./canopy/ContextModal";
@@ -49,6 +50,10 @@ export default function App() {
   const openPort = useStore((s) => s.openPort);
   const openWorktree = useStore((s) => s.openWorktree);
   const setActiveTerm = useStore((s) => s.setActiveTerm);
+  const notices = useStore((s) => s.notices);
+  const dismissNotice = useStore((s) => s.dismissNotice);
+  const syncSubmodules = useStore((s) => s.syncSubmodules);
+  const switchBranchEnabled = useStore((s) => s.showSwitchBranch);
 
   const [view, setView] = useState<"wt" | "overview">("wt");
   // the pane set is the state; a preset is just a named one, so a hand-made
@@ -71,6 +76,7 @@ export default function App() {
   const [pruneFor, setPruneFor] = useState<(PrunableWorktree & { dbName: string | null })[] | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
+  const [noticeId, setNoticeId] = useState<string | null>(null);
   const [, setTick] = useState(0);
   const attnRef = useRef<HTMLButtonElement>(null);
 
@@ -92,7 +98,8 @@ export default function App() {
     if (sel) primeLogs(sel.wt.wtKey);
   }, [sel?.wt.wtKey, primeLogs]);
 
-  const attn = useMemo<AttnItem[]>(() => attentionItems(tree, sessions), [tree, sessions]);
+  const attn = useMemo<AttnItem[]>(() => attentionItems(tree, sessions, notices), [tree, sessions, notices]);
+  const notice = useMemo(() => notices.find((n) => n.id === noticeId) ?? null, [notices, noticeId]);
   const na = useMemo<NextAction | null>(
     () => (sel ? nextAction(sel.wt, sessions[sel.wt.wtKey] ?? []) : null),
     [sel, sessions],
@@ -238,6 +245,14 @@ export default function App() {
         addRepo();
         return;
       }
+      // ⇧⌘S — put every submodule back on the commit this worktree pins. Shift
+      // keeps it clear of ⌘S (Save, in Settings), and it pairs with the same
+      // action in the pull popover rather than being a second, separate route.
+      if (meta && e.shiftKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (sel) syncSubmodules(sel.wt.wtKey);
+        return;
+      }
       if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
         e.preventDefault();
         setLayout(LAYOUT_ORDER[Number(e.key) - 1]);
@@ -248,7 +263,9 @@ export default function App() {
       }
       if (meta && e.key === "\\") {
         e.preventDefault();
-        if (sel) setShowSwitchBranch(true);
+        // Settings can turn the action off; the shortcut has to obey, or the
+        // toggle only hides the button and the feature is still one key away.
+        if (sel && switchBranchEnabled) setShowSwitchBranch(true);
       }
       if (meta && e.key.toLowerCase() === "o") {
         e.preventDefault();
@@ -274,6 +291,7 @@ export default function App() {
     import("@tauri-apps/api/event").then(({ listen }) => {
       track(listen("tray:new-worktree", () => setShowNewWt(true)));
       track(listen("tray:overview", () => setView("overview")));
+      track(listen("tray:settings", () => setShowSettings(true)));
     });
     return () => {
       dead = true;
@@ -355,7 +373,7 @@ export default function App() {
               onSetup={() => setShowSetup(true)}
               onOpenService={(s) => setSvcDetail(s.svcKey)}
               onEditContext={() => setShowCtx(true)}
-              onSwitchBranch={() => setShowSwitchBranch(true)}
+              onSwitchBranch={switchBranchEnabled ? () => setShowSwitchBranch(true) : undefined}
             />
           )
         )}
@@ -371,7 +389,7 @@ export default function App() {
           setLayout(LAYOUT_ORDER[(at + 1) % LAYOUT_ORDER.length]);
         }}
         onAttn={() => setAttnOpen((a) => !a)}
-        onSwitchBranch={() => setShowSwitchBranch(true)}
+        onSwitchBranch={switchBranchEnabled ? () => setShowSwitchBranch(true) : undefined}
         onDirty={() => setShowDirty(true)}
         worktreeCount={worktreeCount}
         repoCount={tree.length}
@@ -382,8 +400,20 @@ export default function App() {
           anchor={attnRef}
           items={attn}
           onClose={() => setAttnOpen(false)}
+          onDismiss={(a) => a.noticeId && dismissNotice(a.noticeId)}
           onPick={(a) => {
             setAttnOpen(false);
+            // A failure notice is the detail, not a destination — the worktree
+            // it names may not even exist. Completions just clear.
+            if (a.noticeId && a.kind === "error") {
+              setNoticeId(a.noticeId);
+              return;
+            }
+            if (a.noticeId) {
+              dismissNotice(a.noticeId);
+              if (tree.some((r) => r.worktrees.some((w) => w.wtKey === a.wtKey))) goto(a.wtKey);
+              return;
+            }
             goto(a.wtKey);
             if (a.kind === "wait") setLayout("agent");
           }}
@@ -445,6 +475,7 @@ export default function App() {
         <SwitchBranchModal repo={sel.repo} wt={sel.wt} onClose={() => setShowSwitchBranch(false)} />
       )}
       {showDirty && sel && <UncommittedChangesModal wt={sel.wt} onClose={() => setShowDirty(false)} />}
+      {notice && <NoticeModal notice={notice} onClose={() => setNoticeId(null)} />}
       {onboardingActive && (
         <Onboarding
           initialView={addRepoOpen ? "add" : "empty"}

@@ -250,25 +250,49 @@
   color: var(--text-secondary);
   filter: none;
 }
+/* A queue row is the item plus — for a notice, which is the only thing here
+   that can be cleared without being fixed — a dismiss. The rule lives on the
+   row rather than the button so the last row still loses it. */
+.cxs-attn-r {
+  display: flex;
+  align-items: stretch;
+  border-bottom: var(--border-w) solid var(--divider);
+}
+.cxs-attn-r:last-child {
+  border-bottom: 0;
+}
+.cxs-attn-r:hover {
+  background: var(--raised);
+}
 .cxs-attn-i {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
   width: 100%;
+  min-width: 0;
   text-align: left;
   padding: var(--sp-3) var(--sp-pop-lg);
   border: 0;
-  border-bottom: var(--border-w) solid var(--divider);
   background: none;
   cursor: pointer;
   color: var(--text-primary);
   font-family: var(--sans);
 }
-.cxs-attn-i:last-child {
-  border-bottom: 0;
+.cxs-attn-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--text-tertiary);
 }
-.cxs-attn-i:hover {
-  background: var(--raised);
+.cxs-attn-x:hover {
+  color: var(--text-primary);
 }
 .cxs-attn-i .ic {
   flex: none;
@@ -290,6 +314,15 @@
 .cxs-attn-i .ic.todo {
   background: var(--teal-dim);
   color: var(--action-primary);
+}
+/* a backgrounded op that failed reads as a crash; one that finished is calm */
+.cxs-attn-i .ic.error {
+  background: var(--red-dim);
+  color: var(--red-text);
+}
+.cxs-attn-i .ic.info {
+  background: var(--btn);
+  color: var(--text-secondary);
 }
 .cxs-attn-i .tx {
   min-width: 0;
@@ -559,6 +592,32 @@
 }
 .cxs-wtr:hover {
   background: var(--row-hover);
+}
+/* a worktree being created or removed: present, but not yet (or no longer)
+   something to click into */
+.cxs-wtr--pending {
+  cursor: default;
+  opacity: 0.72;
+}
+.cxs-wtr--pending:hover {
+  background: none;
+}
+.cxs-wtspin {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dot-sm);
+  color: var(--action-primary);
+}
+.cxs-wtnote {
+  font-size: var(--fs-micro);
+  color: var(--text-tertiary);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 118px;
 }
 .cxs-wtr.is-on {
   background: var(--surface);
@@ -1144,8 +1203,19 @@
 .cxs-sc .d.wait {
   background: var(--state-attention);
 }
+/* The close affordance is a <button>, so it needs the reset spelled out —
+   without it the UA's default border/background painted a raised box around
+   the ✕ that read as a second control sitting inside the tab. */
 .cxs-sc .x {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
   color: var(--text-tertiary);
   border-radius: var(--r-tiny);
   margin-right: calc(var(--sp-micro) * -1);
