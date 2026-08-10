@@ -2,6 +2,7 @@
 // Rust via events; in a plain browser tab it falls back to the Phase-2 mock.
 import { create } from "zustand";
 import type { LogLine, RepoNode, ServiceNode, SvcStats, SvcStatus, WorktreeNode } from "./types";
+import type { DiskUsage } from "./ipc";
 import { isLive } from "./types";
 import { genLine, logTime, mockTree } from "./mock";
 import { errText, hasBackend, ipc, on } from "./ipc";
@@ -81,6 +82,11 @@ interface State {
   logs: Record<string, LogLine[]>;
   ops: Record<string, OpLog>;
   stats: Record<string, SvcStats>;
+  /** wtKey -> last completed on-disk measurement (see disk.rs). Absent until a
+      scan finishes; the overview renders "—" rather than blocking on one. */
+  disk: Record<string, DiskUsage>;
+  /** ask the backend to measure these worktrees; results arrive as events */
+  scanDisk: (wtKeys: string[], force?: boolean) => void;
   /** rolling CPU samples per service — the service-detail sparkline. Kept
       client-side because the backend streams point-in-time stats and has no
       reason to retain history for a modal that may never open. */
@@ -274,6 +280,7 @@ export const useStore = create<State>((set, get) => {
     logs: seedLogs(mock),
     ops: {},
     stats: seedStats(mock),
+    disk: {},
     cpuHistory: {},
     exitCodes: {},
     resetting: {},
@@ -286,6 +293,11 @@ export const useStore = create<State>((set, get) => {
     collapsed: false,
     sessions: {},
     activeTerm: {},
+    scanDisk: (wtKeys, force = false) => {
+      // No mock fallback: inventing a size would put a fabricated number in a
+      // column whose entire purpose is deciding what to delete.
+      if (hasBackend() && wtKeys.length) ipc.scanDiskUsage(wtKeys, force).catch(() => {});
+    },
     openSession: (s) => {
       sessionStartedAt[s.id] = Date.now();
       set((st) => ({
@@ -621,6 +633,18 @@ export function initSync(): () => void {
       }));
     }),
   );
+
+  // disk measurements: one event per completed walk, so a plain merge.
+  track(
+    on.worktreeDisk((e) => {
+      useStore.setState((st) => ({
+        disk: { ...st.disk, [e.wtKey]: { bytes: e.bytes, scannedAt: e.scannedAt, partial: e.partial } },
+      }));
+    }),
+  );
+  // pick up whatever earlier scans already found — a window opened later (or
+  // the popover) should not have to re-walk trees this process already measured
+  ipc.getDiskUsage().then((d) => useStore.setState({ disk: d })).catch(() => {});
 
   track(
     on.serviceStats((e) => {
