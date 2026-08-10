@@ -83,6 +83,26 @@ export interface RepoConfigFile {
   migrate: string[];
 }
 
+/** One service's derived port in the create preview. */
+export interface PreviewPort {
+  serviceId: string;
+  name: string;
+  port: number;
+  /** branch of the worktree already holding this port, if any */
+  takenBy: string | null;
+}
+
+export interface WorktreePreview {
+  path: string;
+  slug: string;
+  /** null when the repo's provisioning never references ${WT_DB_NAME}, i.e. no
+      isolated database would be created */
+  dbName: string | null;
+  ports: PreviewPort[];
+  /** the derived path already exists, so creation would be refused */
+  pathExists: boolean;
+}
+
 export interface Branches {
   local: string[];
   remote: string[];
@@ -177,6 +197,10 @@ export const ipc = {
   runMigration: (wtKey: string) => invoke<void>("run_migration", { wtKey }),
   runCustomCommand: (wtKey: string, command: string) => invoke<void>("run_custom_command", { wtKey, command }),
 
+  /** what creating this branch would produce — allocates nothing, shares its
+      derivation with `create_worktree` */
+  previewWorktree: (repoId: string, branch: string) =>
+    invoke<WorktreePreview>("preview_worktree", { repoId, branch }),
   createWorktree: (args: { repoId: string; branch: string; base?: string; createBranch: boolean }) =>
     invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
   runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),

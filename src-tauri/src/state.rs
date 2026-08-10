@@ -213,9 +213,20 @@ pub fn svc_key(wt_key: &str, service_id: &str) -> String {
     format!("{wt_key}::{service_id}")
 }
 
-/// Stable per-worktree port index: main checkout = 0, others get the first free
-/// slot, persisted so ports never shuffle. Effective port = basePort + index*10.
-fn port_index(runtime: &mut RuntimeState, repo_id: &str, wt_key: &str, is_main: bool) -> u32 {
+/// The port index a worktree has, or would be given: main checkout = 0, others
+/// take the first free slot. Effective port = basePort + index*10.
+///
+/// `assign` is the only difference between allocating and previewing. Keeping
+/// them one function is the point — the New-worktree modal's whole value is
+/// that the ports it shows are the ports you get, and a second implementation
+/// of "first free slot" would drift silently the first time this rule changes.
+fn resolve_port_index(
+    runtime: &mut RuntimeState,
+    repo_id: &str,
+    wt_key: &str,
+    is_main: bool,
+    assign: bool,
+) -> u32 {
     let map = runtime.port_indices.entry(repo_id.to_string()).or_default();
     if let Some(i) = map.get(wt_key) {
         return *i;
@@ -231,8 +242,31 @@ fn port_index(runtime: &mut RuntimeState, repo_id: &str, wt_key: &str, is_main: 
         }
         i
     };
-    map.insert(wt_key.to_string(), idx);
+    if assign {
+        map.insert(wt_key.to_string(), idx);
+    }
     idx
+}
+
+/// Stable per-worktree port index, persisted so ports never shuffle.
+fn port_index(runtime: &mut RuntimeState, repo_id: &str, wt_key: &str, is_main: bool) -> u32 {
+    resolve_port_index(runtime, repo_id, wt_key, is_main, true)
+}
+
+/// What a worktree that doesn't exist yet would be given. Allocates nothing.
+pub fn peek_port_index(runtime: &mut RuntimeState, repo_id: &str, wt_key: &str) -> u32 {
+    resolve_port_index(runtime, repo_id, wt_key, false, false)
+}
+
+/// The database name a worktree gets — the same `WT_DB_NAME` that
+/// `worktree_vars` exposes to provisioning templates.
+pub fn derived_db_name(repo_id: &str, wt_key: &str) -> String {
+    let slug = crate::setup::wt_slug(wt_key);
+    let repo_slug: String = repo_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect();
+    format!("{repo_slug}_{slug}")
 }
 
 /// A service's effective port: an explicit override if set, else the derived
@@ -256,15 +290,11 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
         let _ = crate::settings::save_runtime(app, &rt);
     }
     let slug = crate::setup::wt_slug(wt_key);
-    let repo_slug: String = repo_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
-        .collect();
 
     let mut m = HashMap::new();
     m.insert("WT_SLUG".into(), slug.clone());
     m.insert("WT_INDEX".into(), idx.to_string());
-    m.insert("WT_DB_NAME".into(), format!("{repo_slug}_{slug}"));
+    m.insert("WT_DB_NAME".into(), derived_db_name(repo_id, wt_key));
     m.insert("WM_WT_SLUG".into(), slug); // back-compat alias
 
     let overrides = state.runtime.read().port_overrides.clone();
@@ -484,6 +514,30 @@ mod tests {
         assert_eq!(port_index(&mut rt, "repo", "/wt-c", false), 1);
         // separate repos have independent index spaces
         assert_eq!(port_index(&mut rt, "other", "/wt-x", false), 1);
+    }
+
+    #[test]
+    fn peek_matches_assignment_without_consuming_a_slot() {
+        let mut rt = RuntimeState::default();
+        port_index(&mut rt, "repo", "/main", true);
+        port_index(&mut rt, "repo", "/wt-a", false);
+
+        // the preview reports exactly what an assignment would hand out …
+        let peeked = peek_port_index(&mut rt, "repo", "/wt-new");
+        assert_eq!(peeked, 2, "first free slot");
+        // … twice, because peeking never consumes it
+        assert_eq!(peek_port_index(&mut rt, "repo", "/wt-other"), 2, "a preview reserves nothing");
+        // and the real assignment then agrees with the preview
+        assert_eq!(port_index(&mut rt, "repo", "/wt-new", false), peeked, "preview == what you get");
+        // only now is the slot gone
+        assert_eq!(peek_port_index(&mut rt, "repo", "/wt-other"), 3);
+    }
+
+    #[test]
+    fn derived_db_name_is_shared_with_worktree_vars() {
+        // the same value the ${WT_DB_NAME} template resolves to
+        assert_eq!(derived_db_name("ToolJet", "/w/.worktrees/Feature-X.2"), "tooljet_feature_x_2");
+        assert_eq!(derived_db_name("my repo", "/w/plain"), "my_repo_plain");
     }
 
     #[test]

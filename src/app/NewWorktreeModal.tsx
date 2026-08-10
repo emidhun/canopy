@@ -7,18 +7,18 @@
    it seeds .canopy/context.md and later becomes the PR body. */
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { errText, hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
+import { errText, hasBackend, ipc, type Branches, type OpEvent, type WorktreePreview } from "../ipc";
 import { useStore } from "../store";
 import { Alert, ChevRight, Fork, Info, Plus, Refresh, Spinner } from "../icons";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import RefPick from "./canopy/RefPick";
 import { seedWtContext } from "./WorktreeContext";
 
-/** Mirrors `sanitize_branch` in commands.rs:605 exactly — alphanumerics, `-`
-    and `.` survive, everything else becomes `_`, and CASE IS PRESERVED. An
-    approximation here is worse than nothing: the panel exists to tell you
-    where the worktree lands, so `Feature/foo` must read `Feature_foo`, not
-    `feature-foo`. Rust's is_alphanumeric is Unicode-aware, hence \p{L}\p{N}. */
+/** Slug preview for the NO-BACKEND dev build only. With a backend, every value
+    in the "You'll get" panel comes from `preview_worktree`, which shares its
+    derivation with `create_worktree` — so this approximation can never be what
+    a real user reads. Mirrors `sanitize_branch`: alphanumerics, `-` and `.`
+    survive, everything else becomes `_`, case preserved. */
 const sanitizeBranch = (b: string) => b.replace(/[^\p{L}\p{N}.-]/gu, "_");
 
 export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; onClose: () => void }) {
@@ -44,6 +44,8 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const [issueDescription, setIssueDescription] = useState("");
   /** the repo's configured worktree dir; blank means `${repo.path}-worktrees` */
   const [worktreeDir, setWorktreeDir] = useState<string | null>(null);
+  /** what creating this branch would actually produce (backend-derived) */
+  const [preview, setPreview] = useState<WorktreePreview | null>(null);
 
   const activeRepo = tree.find((r) => r.repoId === repo);
   // git refuses to check the same branch out twice; show them, disabled
@@ -110,11 +112,36 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
 
   const branch = mode === "new" ? name.trim() : existing;
   const ok = !!branch;
-  // create_worktree: `${worktree_dir || repo.path + "-worktrees"}/${sanitize_branch(branch)}`
+
+  // Ask the backend what this branch would produce. Debounced because it runs
+  // on every keystroke of the name field; the command itself allocates nothing,
+  // so an in-flight request that is superseded costs only its own work.
+  useEffect(() => {
+    if (!hasBackend() || !repo || !branch) {
+      setPreview(null);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => {
+      ipc
+        .previewWorktree(repo, branch)
+        .then((p) => alive && setPreview(p))
+        .catch(() => alive && setPreview(null));
+    }, 150);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [repo, branch]);
+
+  // With a backend the path is the backend's; the local derivation is only the
+  // no-backend dev build's stand-in.
   const destination =
-    ok && worktreeDir !== null && activeRepo
+    preview?.path ??
+    (ok && !hasBackend() && worktreeDir !== null && activeRepo
       ? `${worktreeDir.trim() || `${activeRepo.path}-worktrees`}/${sanitizeBranch(branch)}`
-      : null;
+      : null);
+  const clashingPorts = (preview?.ports ?? []).filter((p) => p.takenBy);
 
   async function create() {
     if (!ok) return;
@@ -263,14 +290,38 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
         <dl className="cx-kv">
           <dt>Path</dt>
           <dd title={destination ?? undefined}>{destination ?? "—"}</dd>
-          {/* TODO(#58): ports and the database name are assigned inside
-              create_worktree. Deriving them here would duplicate backend logic
-              that can drift, and a wrong port is worse than a blank one. */}
           <dt>Ports</dt>
-          <dd title="Assigned at creation">—</dd>
+          <dd>
+            {preview?.ports.length ? (
+              preview.ports.map((p, i) => (
+                <span key={p.serviceId} className={p.takenBy ? "cx-kv__bad" : undefined} title={p.takenBy ? `Port ${p.port} is already used by ${p.takenBy}` : undefined}>
+                  {i > 0 && " · "}
+                  {p.name.toLowerCase()} <b>{p.port}</b>
+                </span>
+              ))
+            ) : preview ? (
+              /* the repo declares no service with a base port — there is
+                 nothing to assign, which is different from "not known yet" */
+              <span title="No service in this repo declares a base port">none</span>
+            ) : (
+              "—"
+            )}
+          </dd>
           <dt>Database</dt>
-          <dd title="Assigned at creation">—</dd>
+          <dd title={preview && !preview.dbName ? "This repo's provisioning never references ${WT_DB_NAME}" : undefined}>
+            {preview ? (preview.dbName ?? "none") : "—"}
+          </dd>
         </dl>
+        {preview?.pathExists && (
+          <Hint icon={Alert}>That path already exists — creation will be refused. Pick another branch name.</Hint>
+        )}
+        {clashingPorts.length > 0 && (
+          <Hint icon={Alert}>
+            {clashingPorts.length === 1
+              ? `Port ${clashingPorts[0].port} is already used by ${clashingPorts[0].takenBy} — change it after creating.`
+              : `${clashingPorts.length} derived ports are already in use — change them after creating.`}
+          </Hint>
+        )}
       </div>
 
       <details className="cxm-disc">

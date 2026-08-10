@@ -195,6 +195,10 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-kv dt{color:var(--text-tertiary)}
 .cx-kv dd{margin:0;font:var(--fs-small) var(--mono);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cx-kv dd em{font-style:normal;color:var(--action-primary)}
+/* a derived value that already collides — the number is still shown, because
+   knowing WHICH port clashes is the point; red marks the problem, not the fix */
+.cx-kv__bad{color:var(--state-error)}
+.cx-kv dd b{font-weight:var(--fw-medium);color:var(--text-primary)}
 
 /* ── Coming soon ───────────────────────────────────────────────────
    For designed surfaces whose backend does not exist yet. A whole screen
