@@ -36,8 +36,30 @@ jobs:
       # warnings are errors in CI — the branch is clippy-clean; keep it that way
       - run: cargo clippy --all-targets --features devtools --locked -- -D warnings
         working-directory: src-tauri
+      # includes the CSP regression guard (src-tauri/src/csp.rs): asserts the
+      # production policy exists and still carries the directives the app needs
       - run: cargo test --locked
         working-directory: src-tauri
+
+      # ── does the app actually RENDER under the shipped CSP? (#93) ──
+      #
+      # Nothing else in this workflow can answer that. `cargo test` never loads
+      # a webview; `tauri dev` runs under devCsp, not the shipped policy; and
+      # `tauri build` proves the bundle compiles and signs, not that it paints.
+      # The failure mode is a blank window on first launch of a release build.
+      #
+      # This serves the already-built `dist/` with the exact Content-Security-
+      # Policy read from tauri.conf.json (never a copy) and loads all three
+      # entry points in headless Chromium, failing on any CSP violation or on a
+      # page that loads but renders empty.
+      #
+      # NOT COVERED: without a Tauri runtime `hasBackend()` is false, so the app
+      # renders in mock mode and the IPC bridge is never exercised —
+      # `connect-src ipc:` is not verified here. Doing so needs tauri-driver +
+      # WebdriverIO (Linux/Windows only, unsupported on macOS); see #93 layer 3.
+      - name: Install Chromium for the CSP check
+        run: npx playwright install --with-deps chromium
+      - run: npm run csp:check
 
   windows:
     runs-on: windows-latest

@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(test)]
+mod csp;
 mod db;
 mod error;
 mod git;
