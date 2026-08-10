@@ -91,7 +91,7 @@ export function TopBar({
           </button>
         )}
         <span className="cxs-tdiv" />
-        <button className="cx-ib" title="Rescan worktrees" onClick={onRefresh}>
+        <button className="cx-ib" title="Sync — rescan worktrees and reconcile ones deleted on disk" onClick={onRefresh}>
           <Refresh size={14} />
         </button>
         <button className="cx-ib" title="Settings" onClick={onSettings}>

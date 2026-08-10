@@ -628,3 +628,22 @@ button.cxm-frow--open:focus-visible {
   white-space: nowrap;
   color: var(--text-secondary);
 }
+
+/* per-item toggle in the Sync-prune list (delete branch / drop db) */
+.cxm-popt {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font: var(--fw-medium) var(--fs-micro) var(--sans);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.cxm-popt input {
+  accent-color: var(--action-primary);
+  cursor: pointer;
+}
+.cxm-popt--none {
+  color: var(--text-tertiary);
+  cursor: default;
+}

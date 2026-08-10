@@ -857,57 +857,170 @@ pub async fn worktree_discard(app: AppHandle, wt_key: String, clean_untracked: b
     Ok(())
 }
 
-#[tauri::command]
-pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
-    // never remove a main checkout; find owning repo + branch
+/// Remove one worktree — everything except the final tree refresh, so a batch
+/// can remove many and refresh once. Guards the main checkout, stops services,
+/// closes terminals, drops the db (best-effort), then removes the git worktree.
+async fn remove_worktree_inner(app: &AppHandle, wt_key: &str, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
     let ctx = app
         .state::<AppState>()
-        .wt_context(&wt_key)
+        .wt_context(wt_key)
         .ok_or_else(|| CanopyError::not_found("unknown worktree"))?;
     let (repo_path, repo_id, branch, is_main) = (ctx.repo_path, ctx.repo_id, ctx.branch, ctx.is_main);
     if is_main {
         return Err(CanopyError::invalid_input("Refusing to remove the main checkout"));
     }
-    let _lease = crate::state::try_lease(&app, &wt_key, "remove")?;
+    let _lease = crate::state::try_lease(app, wt_key, "remove")?;
 
     // stop its services first
-    for key in services::worktree_svc_keys(&app, &wt_key) {
-        let _ = services::stop_service(&app, &key).await;
+    for key in services::worktree_svc_keys(app, wt_key) {
+        let _ = services::stop_service(app, &key).await;
     }
     // and close its embedded terminals, so no shell/agent lingers with no UI
-    terminal::close_worktree(&app, &app.state::<TermTable>(), &wt_key);
+    terminal::close_worktree(app, &app.state::<TermTable>(), wt_key);
 
     // run teardown (e.g. drop the worktree's database) while the worktree still
     // exists. Best-effort: a teardown failure shouldn't block removal.
-    if drop_db && crate::setup::has_teardown(&wt_key, &repo_path) {
-        emit_op(&app, &wt_key, "remove", "progress", "running teardown (dropping database)…");
-        let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, false);
+    if drop_db && crate::setup::has_teardown(wt_key, &repo_path) {
+        emit_op(app, wt_key, "remove", "progress", "running teardown (dropping database)…");
+        let vars = crate::state::worktree_vars(app, &repo_id, wt_key, false);
         let app_t = app.clone();
-        let wt_t = wt_key.clone();
-        if let Err(e) = crate::setup::run_teardown(&wt_key, &repo_path, &vars, move |line| {
+        let wt_t = wt_key.to_string();
+        if let Err(e) = crate::setup::run_teardown(wt_key, &repo_path, &vars, move |line| {
             emit_op(&app_t, &wt_t, "remove", "progress", line)
         })
         .await
         {
-            emit_op(&app, &wt_key, "remove", "progress", format!("teardown warning: {e}"));
+            emit_op(app, wt_key, "remove", "progress", format!("teardown warning: {e}"));
         }
     }
 
-    emit_op(&app, &wt_key, "remove", "progress", "removing worktree…");
-    match git::remove_worktree(&repo_path, &wt_key, Some(&branch), delete_branch).await {
+    emit_op(app, wt_key, "remove", "progress", "removing worktree…");
+    match git::remove_worktree(&repo_path, wt_key, Some(&branch), delete_branch).await {
         Ok(()) => {
             // reclaim the port index + overrides + statuses + log buffers —
             // without this, months of worktree churn leak indices and derived
             // ports creep permanently upward
-            crate::state::release_worktree_runtime(&app, &repo_id, &wt_key);
-            emit_op(&app, &wt_key, "remove", "done", "worktree removed");
-            refresh_tree(&app).await.map_err(CanopyError::internal)?;
+            crate::state::release_worktree_runtime(app, &repo_id, wt_key);
+            emit_op(app, wt_key, "remove", "done", "worktree removed");
             Ok(())
         }
         Err(e) => {
-            emit_op(&app, &wt_key, "remove", "error", e.clone());
+            emit_op(app, wt_key, "remove", "error", e.clone());
             Err(CanopyError::git(e))
         }
+    }
+}
+
+#[tauri::command]
+pub async fn remove_worktree(app: AppHandle, wt_key: String, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
+    remove_worktree_inner(&app, &wt_key, delete_branch, drop_db).await?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(())
+}
+
+/// Remove several worktrees in one action, refreshing the tree once at the end.
+/// Best-effort per item: a failure on one is collected and reported but does not
+/// stop the rest (each is independent).
+#[tauri::command]
+pub async fn remove_worktrees(app: AppHandle, wt_keys: Vec<String>, delete_branch: bool, drop_db: bool) -> Result<(), CanopyError> {
+    let mut failures: Vec<String> = Vec::new();
+    for wt_key in &wt_keys {
+        if let Err(e) = remove_worktree_inner(&app, wt_key, delete_branch, drop_db).await {
+            let name = std::path::Path::new(wt_key).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| wt_key.clone());
+            failures.push(format!("{name}: {}", e.message));
+        }
+    }
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::internal(format!("{} of {} could not be removed — {}", failures.len(), wt_keys.len(), failures.join("; "))))
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrunableWorktree {
+    pub repo_id: String,
+    pub repo_name: String,
+    pub path: String,
+    pub branch: String,
+}
+
+/// Worktrees whose folder was deleted outside Canopy (git marks them prunable),
+/// across every registered repo. Drives the Sync-prune prompt.
+#[tauri::command]
+pub async fn list_prunable_worktrees(app: AppHandle) -> Result<Vec<PrunableWorktree>, CanopyError> {
+    let repos: Vec<(String, String, String)> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        tree.iter().map(|r| (r.repo_id.clone(), r.name.clone(), r.path.clone())).collect()
+    };
+    let mut out = Vec::new();
+    for (repo_id, repo_name, repo_path) in repos {
+        if let Ok(list) = git::list_prunable(&repo_path).await {
+            for w in list {
+                out.push(PrunableWorktree { repo_id: repo_id.clone(), repo_name: repo_name.clone(), path: w.path, branch: w.branch });
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PruneItem {
+    pub repo_id: String,
+    pub branch: String,
+    pub delete_branch: bool,
+    pub drop_db: bool,
+    /// the vanished worktree's database name, recovered by the frontend from its
+    /// pre-Sync snapshot (the folder's .env is gone)
+    pub db_name: Option<String>,
+}
+
+/// Reconcile worktrees whose folders were deleted externally: optionally delete
+/// each one's branch and drop its database, then `git worktree prune` each
+/// affected repo (repo-wide by git's design) and refresh once.
+#[tauri::command]
+pub async fn prune_worktrees(app: AppHandle, items: Vec<PruneItem>) -> Result<(), CanopyError> {
+    let repo_paths: std::collections::HashMap<String, String> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        tree.iter().map(|r| (r.repo_id.clone(), r.path.clone())).collect()
+    };
+    let mut failures: Vec<String> = Vec::new();
+    // Prune the stale git registrations FIRST: git refuses `branch -D` for a
+    // branch it still believes is checked out in a (now-missing) worktree.
+    let affected: std::collections::HashSet<&String> =
+        items.iter().filter_map(|i| repo_paths.get(&i.repo_id)).collect();
+    for repo_path in &affected {
+        let _ = git::prune_worktrees(repo_path).await;
+    }
+    // Now the branches are free to delete and the databases free to drop.
+    for item in &items {
+        let Some(repo_path) = repo_paths.get(&item.repo_id) else {
+            failures.push(format!("{}: unknown repository", item.branch));
+            continue;
+        };
+        if item.delete_branch && !item.branch.is_empty() && item.branch != "(detached)" {
+            if let Err(e) = git::delete_local_branch(repo_path, &item.branch).await {
+                failures.push(format!("branch {}: {e}", item.branch));
+            }
+        }
+        if item.drop_db {
+            if let Some(db) = item.db_name.as_deref().filter(|s| !s.is_empty()) {
+                if let Err(e) = crate::db::drop_database_named(repo_path, db).await {
+                    failures.push(format!("database {db}: {e}"));
+                }
+            }
+        }
+    }
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(CanopyError::internal(format!("pruned with {} issue(s): {}", failures.len(), failures.join("; "))))
     }
 }
 

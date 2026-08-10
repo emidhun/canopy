@@ -42,11 +42,14 @@ async fn run_git_with_timeout(cwd: &str, args: &[&str], dur: Duration) -> Result
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorktreeInfo {
     pub path: String,
     pub branch: String,
     pub is_main: bool,
+    /// git flags this when the worktree's directory is gone (deleted outside
+    /// Canopy). Such an entry is dead weight until `git worktree prune`.
+    pub prunable: bool,
 }
 
 /// `git worktree list --porcelain` — first entry is the main working tree.
@@ -61,11 +64,12 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
         path: String,
         branch: Option<String>,
         bare: bool,
+        prunable: bool,
     }
     let mut entries: Vec<Entry> = Vec::new();
     for line in porcelain.lines() {
         if let Some(p) = line.strip_prefix("worktree ") {
-            entries.push(Entry { path: p.to_string(), branch: None, bare: false });
+            entries.push(Entry { path: p.to_string(), branch: None, bare: false, prunable: false });
         } else if let Some(e) = entries.last_mut() {
             if let Some(b) = line.strip_prefix("branch ") {
                 e.branch = Some(b.trim_start_matches("refs/heads/").to_string());
@@ -73,6 +77,9 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
                 e.bare = true;
             } else if line == "detached" {
                 e.branch = Some("(detached)".into());
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                // git emits `prunable <reason>` when the working dir is gone
+                e.prunable = true;
             }
         }
     }
@@ -85,8 +92,27 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeInfo> {
             path: e.path,
             branch: e.branch.unwrap_or_else(|| "(detached)".into()),
             is_main: i == 0,
+            prunable: e.prunable,
         })
         .collect()
+}
+
+/// Prunable worktrees for a repo — entries whose directory was deleted outside
+/// Canopy. Drives the Sync-prune prompt.
+pub async fn list_prunable(repo_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    Ok(list_worktrees(repo_path).await?.into_iter().filter(|w| w.prunable).collect())
+}
+
+/// Delete a local branch (best-effort at the call site is fine; here we surface
+/// the error so the prune flow can report it).
+pub async fn delete_local_branch(repo_path: &str, branch: &str) -> Result<(), String> {
+    run_git(repo_path, &["branch", "-D", branch]).await.map(|_| ())
+}
+
+/// `git worktree prune` — drops the admin entries of every worktree whose
+/// directory is missing. Repo-wide by git's design (there is no per-path prune).
+pub async fn prune_worktrees(repo_path: &str) -> Result<(), String> {
+    run_git(repo_path, &["worktree", "prune"]).await.map(|_| ())
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
@@ -749,6 +775,18 @@ mod tests {
         assert!(wts[0].is_main && wts[0].branch == "main" && wts[0].path == "/repo");
         assert!(!wts[1].is_main && wts[1].branch == "feat");
         assert_eq!(wts[2].branch, "(detached)");
+        assert!(wts.iter().all(|w| !w.prunable), "nothing prunable in a healthy list");
+    }
+
+    #[test]
+    fn parses_prunable_worktree() {
+        // git emits `prunable <reason>` for a worktree whose folder is gone
+        let out = "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                   worktree /repo-worktrees/gone\nHEAD def\nbranch refs/heads/gone\nprunable gitdir file points to non-existent location\n";
+        let wts = parse_worktree_list(out);
+        assert_eq!(wts.len(), 2);
+        assert!(!wts[0].prunable, "main is healthy");
+        assert!(wts[1].prunable && wts[1].branch == "gone");
     }
 
     #[test]
@@ -853,6 +891,39 @@ mod tests {
         assert!(!wt.exists(), "worktree directory removed");
         assert_eq!(list_worktrees(rp).await.unwrap().len(), 1);
         let branches = run_git(rp, &["branch", "--list", "feat-x"]).await.unwrap();
+        assert!(branches.trim().is_empty(), "branch deleted: {branches:?}");
+
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// Sync-prune path: a worktree whose folder is deleted outside Canopy shows
+    /// up as prunable, and `prune_worktrees` clears it (+ its branch on request).
+    #[tokio::test]
+    async fn detects_and_prunes_a_deleted_worktree() {
+        let repo = unique_dir("prune");
+        let _ = std::fs::remove_dir_all(&repo);
+        init_repo(&repo).await;
+        let rp = repo.to_str().unwrap();
+
+        let wt = unique_dir("prune-wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        let wtp = wt.to_str().unwrap().to_string();
+        create_worktree(rp, &wtp, "throwaway", Some("HEAD"), true, |_| {}).await.unwrap();
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 2);
+        assert!(list_prunable(rp).await.unwrap().is_empty(), "healthy worktree is not prunable");
+
+        // delete the folder out from under git (what a user does in Finder)
+        std::fs::remove_dir_all(&wt).unwrap();
+        let prunable = list_prunable(rp).await.unwrap();
+        assert_eq!(prunable.len(), 1, "the vanished worktree is prunable: {prunable:?}");
+        assert_eq!(prunable[0].branch, "throwaway");
+
+        // prune the stale entry FIRST — git won't delete a branch it thinks a
+        // (missing) worktree still holds — then delete the branch
+        prune_worktrees(rp).await.unwrap();
+        delete_local_branch(rp, "throwaway").await.unwrap();
+        assert_eq!(list_worktrees(rp).await.unwrap().len(), 1, "only main remains");
+        let branches = run_git(rp, &["branch", "--list", "throwaway"]).await.unwrap();
         assert!(branches.trim().is_empty(), "branch deleted: {branches:?}");
 
         let _ = std::fs::remove_dir_all(&repo);
