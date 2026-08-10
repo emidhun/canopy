@@ -150,6 +150,16 @@ pub async fn database_exists(wt_path: &str, name: &str) -> Result<bool, String> 
     Ok(list_databases(wt_path).await?.iter().any(|d| d == name))
 }
 
+/// Drop a database by name, taking connection settings from `conn_wt_path`
+/// (typically the repo's main checkout, which still exists). Used by Sync-prune
+/// to reclaim a vanished worktree's database — the worktree's own .env is gone,
+/// so we can't `conn()` from it. `--if-exists` makes an already-dropped db a no-op.
+pub async fn drop_database_named(conn_wt_path: &str, name: &str) -> Result<(), String> {
+    let c = conn(conn_wt_path)?;
+    let conn_args = c.args().iter().map(|a| q(a)).collect::<Vec<_>>().join(" ");
+    run(conn_wt_path, &c, &format!("dropdb {conn_args} --if-exists {}", q(name))).await.map(|_| ())
+}
+
 /// Clone the worktree's current DB into a new database `target`. Uses a
 /// pg_dump|pg_restore pipe so it works while the server is connected (no
 /// template lock). Refuses to overwrite an existing database.

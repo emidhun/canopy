@@ -89,6 +89,24 @@ export interface Branches {
   tags: string[];
 }
 
+/** A worktree whose folder was deleted outside Canopy (git-prunable). */
+export interface PrunableWorktree {
+  repoId: string;
+  repoName: string;
+  path: string;
+  branch: string;
+}
+
+/** One vanished worktree the user chose to reconcile in the Sync-prune prompt.
+    `dbName` is recovered by the frontend from its pre-Sync snapshot. */
+export interface PruneItem {
+  repoId: string;
+  branch: string;
+  deleteBranch: boolean;
+  dropDb: boolean;
+  dbName: string | null;
+}
+
 /** One row of `git status --porcelain`, resolved by the backend so the modal
     can group and annotate it without re-parsing. */
 export interface StatusEntry {
@@ -190,6 +208,10 @@ export const ipc = {
     invoke<void>("worktree_discard", { wtKey, cleanUntracked }),
   removeWorktree: (wtKey: string, deleteBranch: boolean, dropDb: boolean) =>
     invoke<void>("remove_worktree", { wtKey, deleteBranch, dropDb }),
+  removeWorktrees: (wtKeys: string[], deleteBranch: boolean, dropDb: boolean) =>
+    invoke<void>("remove_worktrees", { wtKeys, deleteBranch, dropDb }),
+  listPrunableWorktrees: () => invoke<PrunableWorktree[]>("list_prunable_worktrees"),
+  pruneWorktrees: (items: PruneItem[]) => invoke<void>("prune_worktrees", { items }),
 };
 
 export interface GitEvent extends GitMeta {

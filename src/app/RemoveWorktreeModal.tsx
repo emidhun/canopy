@@ -22,7 +22,6 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [dropDb, setDropDb] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -45,7 +44,6 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       });
   }, [wt.wtKey]);
 
-  const armed = confirm.trim() === wt.branch;
   const ahead = wt.git?.ahead ?? 0;
 
   async function remove() {
@@ -81,7 +79,7 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
           <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy || !armed || !report || !!probeError}>
+          <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy || !report || !!probeError}>
             {busy ? (
               <>
                 <Spinner size={12} />
@@ -179,24 +177,6 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
           </span>
         </span>
       </label>
-
-      <div className="cxm-fld" style={{ marginTop: "var(--sp-modal-head)" }}>
-        <div className="cxm-flab cxm-flab--f">
-          Type{" "}
-          <span style={{ fontFamily: "var(--mono)", textTransform: "none", letterSpacing: 0, color: "var(--red-text)" }}>
-            {wt.branch}
-          </span>{" "}
-          to confirm
-        </div>
-        <input
-          className="cx-input cx-input--mono"
-          value={confirm}
-          spellCheck={false}
-          placeholder={wt.branch}
-          onChange={(e) => setConfirm(e.target.value)}
-          disabled={busy}
-        />
-      </div>
 
       {error && (
         <div className="cx-alert cx-alert--error" style={{ marginTop: "var(--sp-modal-head)" }}>

@@ -5,7 +5,7 @@
    "the next thing" routes through `runNext`, so the worktree bar's button,
    ⌘K's Suggested row, ⏎, and the overview's row action stay in lockstep. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { hasBackend, ipc } from "../ipc";
+import { errText, hasBackend, ipc, type PrunableWorktree } from "../ipc";
 import { initSync, useStore } from "../store";
 import type { RepoNode, WorktreeNode } from "../types";
 import { Plus } from "../icons";
@@ -25,6 +25,8 @@ import ContextModal from "./canopy/ContextModal";
 import SettingsView from "./SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
+import RemoveWorktreesModal from "./RemoveWorktreesModal";
+import PruneWorktreesModal from "./PruneWorktreesModal";
 import SwitchBranchModal from "./SwitchBranchModal";
 import UncommittedChangesModal from "./UncommittedChangesModal";
 import Onboarding from "../onboarding/Onboarding";
@@ -65,6 +67,8 @@ export default function App() {
   const [showCtx, setShowCtx] = useState(false);
   const [svcDetail, setSvcDetail] = useState<string | null>(null);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
+  const [removeWtsFor, setRemoveWtsFor] = useState<WorktreeNode[] | null>(null);
+  const [pruneFor, setPruneFor] = useState<(PrunableWorktree & { dbName: string | null })[] | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [obDismissed, setObDismissed] = useState(false);
   const [, setTick] = useState(0);
@@ -182,9 +186,25 @@ export default function App() {
     if ((sessions[wtKey] ?? []).every((s) => s.kind !== "shell")) launch.startShell(targetFor(wtKey));
   };
 
-  const refresh = () => {
-    showToast("Rescanning worktrees…");
-    if (hasBackend()) ipc.refresh().catch(() => {});
+  // Sync = rescan + reconcile worktrees deleted on disk. We snapshot the tree
+  // BEFORE refreshing, because a vanished worktree's db name lives in its (now
+  // gone) .env — the snapshot is the only place we still know it.
+  const sync = async () => {
+    if (!hasBackend()) {
+      showToast("Sync needs the desktop app");
+      return;
+    }
+    showToast("Syncing worktrees…");
+    const known = new Map(tree.flatMap((r) => r.worktrees.map((w) => [w.wtKey, w.dbName] as const)));
+    try {
+      await ipc.refresh();
+      const prunable = await ipc.listPrunableWorktrees();
+      if (prunable.length > 0) {
+        setPruneFor(prunable.map((p) => ({ ...p, dbName: known.get(p.path) ?? null })));
+      }
+    } catch (e) {
+      showToast(`Sync failed — ${errText(e)}`);
+    }
   };
 
   /* ── keyboard: the whole app is reachable without the mouse ─────── */
@@ -275,7 +295,7 @@ export default function App() {
         onPalette={() => setPalette(true)}
         onAttn={() => setAttnOpen((a) => !a)}
         onOverview={() => setView("overview")}
-        onRefresh={refresh}
+        onRefresh={sync}
         onSettings={() => setShowSettings(true)}
         attnRef={attnRef}
       />
@@ -291,6 +311,7 @@ export default function App() {
           onToggle={() => setSideHidden((s) => !s)}
           onNew={() => setShowNewWt(true)}
           onOpenTerminal={openTerminalFor}
+          onRemoveMany={(keys) => setRemoveWtsFor(tree.flatMap((r) => r.worktrees).filter((w) => keys.includes(w.wtKey)))}
         />
 
         {showSettings ? (
@@ -416,6 +437,10 @@ export default function App() {
       )}
       {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
       {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
+      {removeWtsFor && removeWtsFor.length > 0 && (
+        <RemoveWorktreesModal wts={removeWtsFor} onClose={() => setRemoveWtsFor(null)} />
+      )}
+      {pruneFor && pruneFor.length > 0 && <PruneWorktreesModal items={pruneFor} onClose={() => setPruneFor(null)} />}
       {showSwitchBranch && sel && (
         <SwitchBranchModal repo={sel.repo} wt={sel.wt} onClose={() => setShowSwitchBranch(false)} />
       )}

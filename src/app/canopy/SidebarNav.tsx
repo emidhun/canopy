@@ -4,11 +4,12 @@
    what they want from you, not by which repo they happen to live in.
    "Needs you" outranks everything; pinned worktrees hold the top of the rest. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chevron, Editor, Fork, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Stop, Terminal } from "../../icons";
+import { Check, Chevron, Editor, Fork, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Stop, Terminal, Trash } from "../../icons";
 import { useStore, type LaneSession } from "../../store";
 import { isLive, type RepoNode, type WorktreeNode } from "../../types";
 import { agentState, dotClass, wtDot, type AttnItem } from "../nextAction";
 import { isPinned, togglePin, usePins } from "../pins";
+import { clear as clearSelection, retain, selectRange, setAnchor, toggle as toggleSelection, useMultiSelect } from "../multiselect";
 
 type Flat = { wt: WorktreeNode; repo: RepoNode };
 
@@ -22,6 +23,7 @@ export default function SidebarNav({
   onToggle,
   onNew,
   onOpenTerminal,
+  onRemoveMany,
 }: {
   hidden: boolean;
   view: "wt" | "overview";
@@ -32,6 +34,7 @@ export default function SidebarNav({
   onToggle: () => void;
   onNew: () => void;
   onOpenTerminal: (wtKey: string) => void;
+  onRemoveMany: (wtKeys: string[]) => void;
 }) {
   const tree = useStore((s) => s.tree);
   const query = useStore((s) => s.query);
@@ -69,6 +72,25 @@ export default function SidebarNav({
       },
     ].filter((g) => g.items.length);
   }, [flat, q, activeRepo, attn, pins]);
+
+  const multi = useMultiSelect();
+  // the visible order across all groups — the axis Shift-click ranges walk
+  const order = useMemo(() => groups.flatMap((g) => g.items.map((f) => f.wt.wtKey)), [groups]);
+  // drop any selection entries for worktrees that no longer exist
+  useEffect(() => retain(flat.map((f) => f.wt.wtKey)), [flat]);
+  const selectedWts = useMemo(() => flat.filter((f) => multi.includes(f.wt.wtKey)).map((f) => f.wt), [flat, multi]);
+
+  // ⌘/Ctrl-click toggles one; Shift-click extends a range; a plain click clears
+  // the multi-selection and selects the single row.
+  const activate = (wtKey: string, mods: { meta: boolean; shift: boolean }) => {
+    if (mods.meta) toggleSelection(wtKey);
+    else if (mods.shift) selectRange(order, wtKey);
+    else {
+      clearSelection();
+      setAnchor(wtKey);
+      onSelect(wtKey);
+    }
+  };
 
   return (
     <aside className={"cxs-side" + (hidden ? " is-hidden" : "")} inert={hidden || undefined} aria-hidden={hidden || undefined}>
@@ -112,8 +134,9 @@ export default function SidebarNav({
                   wt={wt}
                   repoName={repo.name}
                   selected={wt.wtKey === selKey && view === "wt"}
+                  isMulti={multi.includes(wt.wtKey)}
                   sessions={sessions[wt.wtKey] ?? EMPTY}
-                  onSelect={() => onSelect(wt.wtKey)}
+                  onActivate={(mods) => activate(wt.wtKey, mods)}
                   onToggleServices={() => toggleWorktree(wt.wtKey)}
                   onTerminal={() => onOpenTerminal(wt.wtKey)}
                   onEditor={() => openWorktree(wt.wtKey, "editor")}
@@ -126,10 +149,23 @@ export default function SidebarNav({
       </div>
 
       <div className="cxs-sfoot">
-        <button className="cxs-newbtn" onClick={onNew}>
-          <Plus size={13} />
-          New worktree
-        </button>
+        {selectedWts.length > 0 ? (
+          <div className="cxs-selbar">
+            <span className="n">{selectedWts.length} selected</span>
+            <button className="cx-btn cx-btn--ghost cx-btn--sm" onClick={clearSelection}>
+              Clear
+            </button>
+            <button className="cx-btn cx-btn--danger cx-btn--sm" onClick={() => onRemoveMany(selectedWts.map((w) => w.wtKey))}>
+              <Trash size={12} />
+              Delete {selectedWts.length}
+            </button>
+          </div>
+        ) : (
+          <button className="cxs-newbtn" onClick={onNew}>
+            <Plus size={13} />
+            New worktree
+          </button>
+        )}
       </div>
     </aside>
   );
@@ -205,8 +241,9 @@ function WorktreeRow({
   wt,
   repoName,
   selected,
+  isMulti,
   sessions,
-  onSelect,
+  onActivate,
   onToggleServices,
   onTerminal,
   onEditor,
@@ -214,8 +251,9 @@ function WorktreeRow({
   wt: WorktreeNode;
   repoName: string;
   selected: boolean;
+  isMulti: boolean;
   sessions: LaneSession[];
-  onSelect: () => void;
+  onActivate: (mods: { meta: boolean; shift: boolean }) => void;
   onToggleServices: () => void;
   onTerminal: () => void;
   onEditor: () => void;
@@ -229,15 +267,16 @@ function WorktreeRow({
   const pinned = isPinned(wt.wtKey);
 
   return (
-    <div className={"cxs-wtr" + (selected ? " is-on" : "")} title={`${repoName}: ${wt.branch}`} onClick={onSelect} role="button" tabIndex={0}
+    <div className={"cxs-wtr" + (selected ? " is-on" : "") + (isMulti ? " is-multi" : "")} title={`${repoName}: ${wt.branch}`}
+      onClick={(e) => onActivate({ meta: e.metaKey || e.ctrlKey, shift: e.shiftKey })} role="button" tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect();
+          onActivate({ meta: e.metaKey || e.ctrlKey, shift: e.shiftKey });
         }
       }}
     >
-      <span className={dotClass(wtDot(wt))} />
+      {isMulti ? <span className="cxs-wtck"><Check size={11} /></span> : <span className={dotClass(wtDot(wt))} />}
       <span className="b">{wt.branch}</span>
 
       <span className="meta">

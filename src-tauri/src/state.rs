@@ -325,6 +325,11 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
 
         let mut worktrees = Vec::new();
         for wt in wts {
+            // a worktree whose folder was deleted outside Canopy is `prunable` —
+            // don't render it as a live row; the Sync-prune flow reconciles it
+            if wt.prunable {
+                continue;
+            }
             let (idx, overrides) = {
                 let mut runtime = state.runtime.write();
                 let idx = port_index(&mut runtime, &repo.id, &wt.path, wt.is_main);
