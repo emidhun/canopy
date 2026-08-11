@@ -45,7 +45,6 @@ export default function SidebarNav({
   const addRepo = useStore((s) => s.addRepo);
   const creating = useStore((s) => s.creating);
   const removing = useStore((s) => s.removing);
-  const ops = useStore((s) => s.ops);
   const pins = usePins();
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
@@ -136,15 +135,7 @@ export default function SidebarNav({
             silent for the minutes `git worktree add` + setup take, which is
             exactly when "is it working?" gets asked. */}
         {pending.map(([wtPath, p]) => (
-          <div className="cxs-wtr cxs-wtr--pending" key={wtPath} title={`Creating ${p.branch} in ${p.repoName}`}>
-            <span className="cxs-wtspin">
-              <Spinner size={11} />
-            </span>
-            <span className="b">{p.branch}</span>
-            <span className="meta">
-              <span className="cxs-wtnote">{ops[wtPath]?.step ?? "creating…"}</span>
-            </span>
-          </div>
+          <PendingRow key={wtPath} wtPath={wtPath} branch={p.branch} repoName={p.repoName} />
         ))}
 
         {groups.map((g) => (
@@ -205,6 +196,28 @@ export default function SidebarNav({
 }
 
 const EMPTY: LaneSession[] = [];
+
+/* A worktree being created, before the tree knows about it.
+
+   It subscribes to its own step marker rather than the sidebar subscribing to
+   the whole `ops` map: that map is replaced on EVERY streamed output line, so
+   reading it one level up re-rendered the entire worktree list once per line
+   of `pnpm install`. Selecting a primitive means this row alone re-renders,
+   and only when the step actually advances. */
+function PendingRow({ wtPath, branch, repoName }: { wtPath: string; branch: string; repoName: string }) {
+  const step = useStore((s) => s.ops[wtPath]?.step ?? null);
+  return (
+    <div className="cxs-wtr cxs-wtr--pending" title={`Creating ${branch} in ${repoName}`}>
+      <span className="cxs-wtspin">
+        <Spinner size={11} />
+      </span>
+      <span className="b">{branch}</span>
+      <span className="meta">
+        <span className="cxs-wtnote">{step ?? "creating…"}</span>
+      </span>
+    </div>
+  );
+}
 
 /* Filter the list to one repository. Hidden when there's only one repo — the
    text field already narrows by branch (and repo name), so the dropdown only

@@ -74,7 +74,12 @@ const INDEX: { page: PageId; label: string; hint: string }[] = (
     ["notifications", "Service crash alerts", "interrupt when a service dies"],
     ["notifications", "Agent needs a decision", "blocked agent"],
     ["shortcuts", "Command palette", "⌘K"], ["shortcuts", "Save changes", "⌘S"],
-    ["shortcuts", "Toggle worktree list", "⌘B"], ["shortcuts", "Layout presets", "⌘1 ⌘2 ⌘3 ⌘4"],
+    ["shortcuts", "Toggle worktree list", "⌘B"], ["shortcuts", "Layout presets", "⌘1 ⌘2 ⌘3 ⌘4 ⌘5"],
+    ["shortcuts", "New worktree", "⌘N"], ["shortcuts", "Add repository", "⇧⌘N"],
+    ["shortcuts", "Sync submodules", "⇧⌘S"], ["shortcuts", "Switch branch", "⌘\\"],
+    ["shortcuts", "Pull everything", "⌘⏎"], ["shortcuts", "Run next action", "⏎"],
+    ["shortcuts", "Cross-worktree overview", "⌘O"], ["shortcuts", "Open settings", "⌘,"],
+    ["shortcuts", "Select several worktrees", "⌘click ⇧click"],
     ["advanced", "Diagnostics", "version, config path"], ["advanced", "Experiments", "parallel setup"],
     ["repo-general", "Repository path", "where the repo lives"], ["repo-general", "Worktree root", ".worktrees"],
     ["repo-general", "Remove repository", "stop tracking"],
@@ -837,13 +842,51 @@ function NotificationsPage() {
   );
 }
 
+/* Every binding the app actually listens for, grouped by where it applies.
+   This table is a reference, so it is only worth having if it is exhaustive
+   and true — an entry here without a listener behind it is worse than a gap.
+   Sources: App.tsx (global + worktree), SettingsView (settings), Modal's
+   usePrimaryAction (dialogs), Palette / SearchOverlay (lists), SidebarNav
+   (selection chords) and Popover.tsx (the menu-bar window). */
 const KEYS: [string, string, string][] = [
-  ["Command palette", "⌘ K", "Global"], ["New worktree", "⌘ N", "Global"], ["Toggle worktree list", "⌘ B", "Global"],
-  ["Cross-worktree overview", "⌘ O", "Global"], ["Switch branch", "⌘ \\", "Worktree"], ["Runtime layout", "⌘ 1", "Worktree"],
-  ["Split layout", "⌘ 2", "Worktree"], ["Agent layout", "⌘ 3", "Worktree"], ["Shell layout", "⌘ 4", "Worktree"],
-  ["Run next action", "⏎", "Worktree"], ["Pull everything", "⌘ ⏎", "Worktree"],
-  ["Sync submodules", "⇧ ⌘ S", "Worktree"], ["Add repository", "⇧ ⌘ N", "Global"],
-  ["Search settings", "⌘ F", "Settings"], ["Save changes", "⌘ S", "Settings"], ["Toggle preview", "⌘ P", "Settings"],
+  // global
+  ["Command palette", "⌘ K", "Global"],
+  ["New worktree", "⌘ N", "Global"],
+  ["Add repository", "⇧ ⌘ N", "Global"],
+  ["Toggle worktree list", "⌘ B", "Global"],
+  ["Cross-worktree overview", "⌘ O", "Global"],
+  ["Settings", "⌘ ,", "Global"],
+  // worktree
+  ["Run next action", "⏎", "Worktree"],
+  ["Switch branch", "⌘ \\", "Worktree"],
+  ["Sync submodules", "⇧ ⌘ S", "Worktree"],
+  ["Pull everything", "⌘ ⏎", "Pull menu"],
+  // layouts
+  ["Runtime layout", "⌘ 1", "Worktree"],
+  ["Split logs + agent", "⌘ 2", "Worktree"],
+  ["Agent layout", "⌘ 3", "Worktree"],
+  ["Terminal + logs layout", "⌘ 4", "Worktree"],
+  ["Terminal layout", "⌘ 5", "Worktree"],
+  // dialogs
+  ["Confirm the primary action", "⌘ ⏎", "Dialogs"],
+  ["Confirm a simple prompt", "⏎", "Dialogs"],
+  ["Close the dialog", "esc", "Dialogs"],
+  // lists and menus
+  ["Move through a list", "↑ ↓", "Lists"],
+  ["Choose the highlighted row", "⏎", "Lists"],
+  ["Close a menu or popover", "esc", "Lists"],
+  ["Add to the selection", "⌘ click", "Worktree list"],
+  ["Select a range", "⇧ click", "Worktree list"],
+  // settings
+  ["Search all settings", "⌘ F", "Settings"],
+  ["Save changes", "⌘ S", "Settings"],
+  ["Toggle the JSON preview", "⌘ P", "Settings"],
+  // menu-bar window
+  ["Focus the search field", "⌘ K", "Menu bar"],
+  ["New worktree", "⌘ N", "Menu bar"],
+  ["Settings", "⌘ ,", "Menu bar"],
+  ["Start or focus the highlighted worktree", "⏎", "Menu bar"],
+  ["Clear the search field", "esc", "Menu bar"],
 ];
 function ShortcutsPage() {
   const [q, setQ] = useState("");
@@ -857,8 +900,11 @@ function ShortcutsPage() {
       </div>
       <table className="keys">
         <thead><tr><th>Command</th><th>Keys</th><th>Scope</th></tr></thead>
+        {/* keyed by all three columns: the command name alone is not unique —
+            "New worktree" and "Settings" each exist in two scopes (the main
+            window and the menu bar) */}
         <tbody>{rows.map(([a, b, c]) => (
-          <tr key={a}><td>{a}</td>
+          <tr key={a + b + c}><td>{a}</td>
             <td><span className="kbdk">{b.split(" ").map((k, i) => <i key={i}>{k}</i>)}</span></td>
             <td style={{ color: "var(--text-tertiary)" }}>{c}</td></tr>))}</tbody>
       </table>

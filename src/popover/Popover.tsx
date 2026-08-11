@@ -279,6 +279,10 @@ export default function Popover() {
       } else if (e.metaKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newWorktree();
+      } else if (e.metaKey && e.key === ",") {
+        // the hint the gear has always carried, now with a listener behind it
+        e.preventDefault();
+        openSettings();
       } else if (e.key === "Escape") {
         if (q) setQ("");
       } else if (e.key !== "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {

@@ -9,7 +9,7 @@ import { Database, Download, Info, Refresh, Restart, Pull, Spinner } from "../..
 import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
-import Modal, { Hint, Spacer } from "./Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
 /** Which long-running database job is in flight. Only one runs at a time —
     they all take the worktree's op lease in the backend, so offering a second
@@ -77,6 +77,27 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
     }
   };
 
+  const createSnapshot = async () => {
+    const name = (snap ?? "").trim();
+    if (!name || busy) return;
+    setJob("snapshot");
+    try {
+      if (hasBackend()) await ipc.snapshotDatabase(wt.wtKey, name);
+      showToast(`Snapshot ${name} created`);
+      setSnap(null);
+    } catch (e) {
+      showToast(errText(e));
+    } finally {
+      setJob(null);
+    }
+  };
+
+  /* The snapshot step is a single named field, so ⏎ commits it — the ordinary
+     behaviour of a name prompt. The main view deliberately has no ⏎: its only
+     field is the database search, and running a migration from a search box
+     would be a nasty surprise. */
+  usePrimaryAction("enter", snap !== null && !!snap.trim() && !busy, createSnapshot);
+
   /* ── the snapshot name prompt is its own step, not a separate dialog ── */
   if (snap !== null) {
     return (
@@ -97,19 +118,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
             <button
               className="cx-btn cx-btn--primary"
               disabled={!snap.trim() || busy}
-              onClick={async () => {
-                const name = snap.trim();
-                setJob("snapshot");
-                try {
-                  if (hasBackend()) await ipc.snapshotDatabase(wt.wtKey, name);
-                  showToast(`Snapshot ${name} created`);
-                  setSnap(null);
-                } catch (e) {
-                  showToast(errText(e));
-                } finally {
-                  setJob(null);
-                }
-              }}
+              onClick={createSnapshot}
             >
               {job === "snapshot" ? (
                 <>
@@ -175,7 +184,6 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
               <>
                 <Restart size={12} />
                 Run migration
-                <span className="cx-k">⏎</span>
               </>
             )}
           </button>

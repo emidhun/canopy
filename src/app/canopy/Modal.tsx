@@ -141,7 +141,10 @@ export default function Modal({
             <b>{title}</b>
             {sub && <span>{sub}</span>}
           </span>
-          <button className="cx-ib" onClick={onClose} disabled={busy} title="Close">
+          {/* marked so usePrimaryAction can tell "the user tabbed to a button
+              and means to press it" from "focus fell back here" — this is the
+              first focusable in the card, so an orphaned focus lands on it */}
+          <button className="cx-ib" data-modal-close onClick={onClose} disabled={busy} title="Close">
             <X size={13} />
           </button>
         </div>
@@ -150,6 +153,49 @@ export default function Modal({
       </div>
     </div>
   );
+}
+
+/** Bind a dialog's primary action to the key its button already advertises.
+
+    Every dialog here prints a key on its primary button, and until now only
+    one of them listened for it — the rest were decoration. The guards are what
+    make a bare ⏎ safe to claim:
+
+      · a textarea keeps it (⏎ types a newline there)
+      · a focused button keeps it (⏎ is how you press the one you tabbed to) —
+        except the header's close, which is where focus FALLS BACK to rather
+        than somewhere the user chose, and which Escape already covers
+      · an inner popup that claimed Escape has also claimed ⏎ (a ref picker
+        committing a choice), so stand down for it
+      · a disabled action never fires
+
+    `⌘⏎` needs none of that — a modifier cannot collide with typing — which is
+    why the heavier actions advertise that one. Capture phase + stopPropagation
+    keeps the app-level ⏎ (run next action) out of it while a dialog is up. */
+export function usePrimaryAction(key: "enter" | "mod-enter", enabled: boolean, run: () => void) {
+  const runRef = useRef(run);
+  runRef.current = run;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || !enabledRef.current) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (key === "mod-enter" ? !mod : mod) return;
+      if (document.querySelector("[data-esc-claim]")) return;
+      if (key === "enter") {
+        const el = document.activeElement as HTMLElement | null;
+        if (el?.tagName === "TEXTAREA" || el?.isContentEditable) return;
+        if (el?.tagName === "BUTTON" && !el.hasAttribute("data-modal-close")) return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      runRef.current();
+    };
+    document.addEventListener("keydown", h, true);
+    return () => document.removeEventListener("keydown", h, true);
+  }, [key]);
 }
 
 /** The footer's supporting line — always the elastic item, so the actions

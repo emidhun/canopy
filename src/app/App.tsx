@@ -214,6 +214,9 @@ export default function App() {
     }
   };
 
+  // declared before the keyboard handler, which stands down for it on ⌘N
+  const onboardingActive = showOnboarding || addRepoOpen || (tree.length === 0 && !obDismissed);
+
   /* ── keyboard: the whole app is reachable without the mouse ─────── */
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -224,6 +227,13 @@ export default function App() {
       if (meta && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
+        return;
+      }
+      // ⌘, — Settings, the platform convention. The tray's gear has always
+      // shown this hint; nothing listened for it in either window.
+      if (meta && e.key === ",") {
+        e.preventDefault();
+        setShowSettings(true);
         return;
       }
       if (e.key === "Escape") {
@@ -251,6 +261,15 @@ export default function App() {
       if (meta && e.shiftKey && e.key.toLowerCase() === "s") {
         e.preventDefault();
         if (sel) syncSubmodules(sel.wt.wtKey);
+        return;
+      }
+      // ⌘N — new worktree. The tray menu and the onboarding CTA have always
+      // advertised it; the main window was the one place it did nothing.
+      // Onboarding binds ⌘N itself (to its add-repository screen), so stand
+      // down while it is up rather than opening a dialog behind it.
+      if (meta && !e.shiftKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        if (!onboardingActive) setShowNewWt(true);
         return;
       }
       if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {
@@ -299,7 +318,6 @@ export default function App() {
     };
   }, []);
 
-  const onboardingActive = showOnboarding || addRepoOpen || (tree.length === 0 && !obDismissed);
   const worktreeCount = tree.reduce((n, r) => n + r.worktrees.length, 0);
 
   return (

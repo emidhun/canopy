@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { errText, hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
 import { backgroundOp, useStore } from "../store";
 import { Alert, ChevRight, Fork, Info, Plus, Refresh, Spinner } from "../icons";
-import Modal, { Hint, Spacer } from "./canopy/Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./canopy/Modal";
 import RefPick from "./canopy/RefPick";
 import { seedWtContext } from "./WorktreeContext";
 
@@ -178,6 +178,9 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     backgroundOp(opKey);
     onClose();
   }
+
+  // the ⌘⏎ the Create button has always advertised
+  usePrimaryAction("mod-enter", ok && !busy, create);
 
   return (
     <Modal

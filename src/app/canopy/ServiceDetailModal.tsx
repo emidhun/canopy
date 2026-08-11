@@ -9,7 +9,7 @@ import { Alert, Info, Restart, Server, Stop } from "../../icons";
 import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import { fmtUptime, type ServiceNode, type WorktreeNode } from "../../types";
-import Modal, { Hint, Spacer } from "./Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
 export default function ServiceDetailModal({
   wt,
@@ -80,6 +80,10 @@ export default function ServiceDetailModal({
     }
     onClose();
   };
+
+  // the ⏎ the Restart / Save-&-restart button advertises. The only field here
+  // is the port, where committing on ⏎ is what you would expect anyway.
+  usePrimaryAction("enter", valid, save);
 
   return (
     <Modal
