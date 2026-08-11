@@ -73,8 +73,10 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       danger
       title="Remove worktree"
       sub={wt.branch}
-      busy={busy}
-      onClose={onClose}
+      /* see NewWorktreeModal: dismissing backgrounds the teardown rather than
+         being refused, so Escape / backdrop / ✕ all work while it runs */
+      busy={false}
+      onClose={busy ? runInBackground : onClose}
       foot={
         <>
           <Hint icon={Info}>

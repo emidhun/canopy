@@ -187,8 +187,12 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       icon={Fork}
       title="New worktree"
       sub={activeRepo?.name}
-      busy={busy}
-      onClose={onClose}
+      /* Not `busy`: while the create runs, EVERY dismissal — Escape, the
+         backdrop, the header ✕ — hands it to the background rather than being
+         refused. The old guard existed because dismissing lost the run; it
+         doesn't any more, and refusing the click was the whole complaint. */
+      busy={false}
+      onClose={busy ? runInBackground : onClose}
       foot={
         <>
           <Hint icon={Info}>

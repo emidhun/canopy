@@ -77,8 +77,10 @@ export default function RemoveWorktreesModal({ wts, onClose }: { wts: WorktreeNo
       danger
       title={`Remove ${wts.length} worktrees`}
       sub={dirtyCount > 0 ? `${dirtyCount} with uncommitted changes` : "all clean"}
-      busy={busy}
-      onClose={onClose}
+      /* see NewWorktreeModal: dismissing backgrounds the removal rather than
+         being refused, so Escape / backdrop / ✕ all work while it runs */
+      busy={false}
+      onClose={busy ? runInBackground : onClose}
       foot={
         <>
           <Hint icon={Info}>
