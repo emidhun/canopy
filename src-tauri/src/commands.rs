@@ -77,7 +77,10 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
     let repo = RepoCfg {
         id: name.to_lowercase().replace(' ', "-"),
         name: name.clone(),
-        worktree_dir: format!("{top}-worktrees"),
+        // Default new worktrees to a hidden dir INSIDE the repo. Keeping them
+        // under the repo root (rather than a `<repo>-worktrees` sibling) means
+        // one self-contained tree to back up, move, or delete.
+        worktree_dir: format!("{top}/.worktrees"),
         path: top,
         reset_db: String::new(),
         migrate_db: String::new(),
@@ -734,10 +737,19 @@ pub async fn create_worktree(
             .cloned()
             .ok_or_else(|| CanopyError::not_found("unknown repo"))?
     };
-    let wt_dir = if repo.worktree_dir.trim().is_empty() {
-        format!("{}-worktrees", repo.path)
-    } else {
-        repo.worktree_dir.clone()
+    // Resolve the worktree root: empty falls back to `<repo>/.worktrees`, a
+    // relative dir (e.g. ".worktrees") is taken relative to the repo — so it
+    // lands inside the repo instead of wherever the process CWD happens to be —
+    // and an absolute dir is used verbatim.
+    let wt_dir = {
+        let d = repo.worktree_dir.trim();
+        if d.is_empty() {
+            format!("{}/.worktrees", repo.path)
+        } else if std::path::Path::new(d).is_absolute() {
+            d.to_string()
+        } else {
+            format!("{}/{}", repo.path, d)
+        }
     };
     let wt_path = format!("{wt_dir}/{}", sanitize_branch(&branch));
     if std::path::Path::new(&wt_path).exists() {

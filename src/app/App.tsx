@@ -31,6 +31,7 @@ import PruneWorktreesModal from "./PruneWorktreesModal";
 import SwitchBranchModal from "./SwitchBranchModal";
 import UncommittedChangesModal from "./UncommittedChangesModal";
 import Onboarding from "../onboarding/Onboarding";
+import { nudgeFontScale, resetFontScale } from "../appearance";
 
 export default function App() {
   const tree = useStore((s) => s.tree);
@@ -53,6 +54,7 @@ export default function App() {
   const notices = useStore((s) => s.notices);
   const dismissNotice = useStore((s) => s.dismissNotice);
   const syncSubmodules = useStore((s) => s.syncSubmodules);
+  const bumpSettings = useStore((s) => s.bumpSettings);
   const switchBranchEnabled = useStore((s) => s.showSwitchBranch);
 
   const [view, setView] = useState<"wt" | "overview">("wt");
@@ -205,6 +207,10 @@ export default function App() {
     const known = new Map(tree.flatMap((r) => r.worktrees.map((w) => [w.wtKey, w.dbName] as const)));
     try {
       await ipc.refresh();
+      // Sync also reconciles Settings with what's on disk: a repo's
+      // `.worktreemanager.json` (setup tasks, provisioned files, migrate) may
+      // have changed outside the app, so signal open views to re-read it.
+      bumpSettings();
       const prunable = await ipc.listPrunableWorktrees();
       if (prunable.length > 0) {
         setPruneFor(prunable.map((p) => ({ ...p, dbName: known.get(p.path) ?? null })));
@@ -232,6 +238,24 @@ export default function App() {
       if (e.key === "Escape") {
         setPalette(false);
         setAttnOpen(false);
+        return;
+      }
+      // ⌘+ / ⌘- / ⌘0 — app-wide text zoom. Works from anywhere (even a field or
+      // with the palette open) since it never collides with text entry, and
+      // applies live across every Canopy window via appearance.ts.
+      if (meta && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        nudgeFontScale(1);
+        return;
+      }
+      if (meta && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        nudgeFontScale(-1);
+        return;
+      }
+      if (meta && e.key === "0") {
+        e.preventDefault();
+        resetFontScale();
         return;
       }
       if (palette) return;
