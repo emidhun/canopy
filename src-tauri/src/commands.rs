@@ -720,6 +720,22 @@ pub(crate) fn sanitize_branch(branch: &str) -> String {
         .collect()
 }
 
+/// Write a self-ignoring `.gitignore` (`*`) into `dir`, creating it if needed.
+/// A worktree root that lives INSIDE the repo (the `.worktrees` default) would
+/// otherwise show up as untracked in the parent checkout — polluting `git
+/// status`, risking a stray `git add .`, and tripping Canopy's own dirty
+/// detection. This is the same self-ignore `.canopy/` uses. Never truncates an
+/// existing `.gitignore`.
+fn ensure_dir_self_ignored(dir: &str) -> Result<(), String> {
+    let p = std::path::Path::new(dir);
+    std::fs::create_dir_all(p).map_err(|e| format!("mkdir {dir}: {e}"))?;
+    let ignore = p.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "*\n").map_err(|e| format!("write {}: {e}", ignore.display()))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn create_worktree(
     app: AppHandle,
@@ -754,6 +770,15 @@ pub async fn create_worktree(
     let wt_path = format!("{wt_dir}/{}", sanitize_branch(&branch));
     if std::path::Path::new(&wt_path).exists() {
         return Err(CanopyError::conflict(format!("Path already exists: {wt_path}")));
+    }
+
+    // Keep a worktree root that sits inside the repo from polluting the parent
+    // checkout. Best-effort: an unwritable root is the git command's problem to
+    // report, not a reason to abort before we've even tried to create.
+    if std::path::Path::new(&wt_dir).starts_with(&repo.path) {
+        if let Err(e) = ensure_dir_self_ignored(&wt_dir) {
+            emit_op(&app, &wt_path, "create", "progress", format!("gitignore skipped — {e}"));
+        }
     }
 
     let _lease = crate::state::try_lease(&app, &wt_path, "create")?;
