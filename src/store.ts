@@ -255,7 +255,7 @@ export function wtLabel(tree: RepoNode[], wtKey: string): string {
 
 /** The tail of a worktree's op buffer — the log a failure notice carries, so
     "it failed" comes with the lines that say how. */
-function opTail(wtKey: string, n = 24): string {
+export function opTail(wtKey: string, n = 24): string {
   return (useStore.getState().ops[wtKey]?.lines ?? [])
     .slice(-n)
     .map((l) => l.text)

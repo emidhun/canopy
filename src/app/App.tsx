@@ -229,19 +229,25 @@ export default function App() {
         setPalette((p) => !p);
         return;
       }
-      // ⌘, — Settings, the platform convention. The tray's gear has always
-      // shown this hint; nothing listened for it in either window.
-      if (meta && e.key === ",") {
-        e.preventDefault();
-        setShowSettings(true);
-        return;
-      }
       if (e.key === "Escape") {
         setPalette(false);
         setAttnOpen(false);
         return;
       }
       if (palette) return;
+      /* A dialog owns the keyboard while it is up. The two bindings below open
+         a NEW surface, and stacking one behind an open dialog leaves two
+         scrims and no way to tell which has focus — so they stand down for it.
+         The scrim is the reliable signal: every dialog renders exactly one,
+         wherever in the tree it was mounted from. */
+      const dialogOpen = !!document.querySelector(".cx-scrim");
+      // ⌘, — Settings, the platform convention. The tray's gear has always
+      // shown this hint; nothing listened for it in either window.
+      if (meta && e.key === ",") {
+        e.preventDefault();
+        if (!dialogOpen) setShowSettings(true);
+        return;
+      }
       // ⇧⌘N — add a repository. The design gives plain ⌘N to "Add a
       // repository" (cxo-onboard.jsx), but only on the empty state; this app
       // already advertises ⌘N as "New worktree" in the tray menu and the
@@ -269,7 +275,7 @@ export default function App() {
       // down while it is up rather than opening a dialog behind it.
       if (meta && !e.shiftKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
-        if (!onboardingActive) setShowNewWt(true);
+        if (!onboardingActive && !dialogOpen) setShowNewWt(true);
         return;
       }
       if (meta && e.key >= "1" && e.key <= String(LAYOUT_ORDER.length)) {

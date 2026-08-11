@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import { Database, Download, Info, Refresh, Restart, Pull, Spinner } from "../../icons";
 import { errText, hasBackend, ipc } from "../../ipc";
-import { useStore } from "../../store";
+import { opTail, useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
@@ -15,6 +15,16 @@ import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
     they all take the worktree's op lease in the backend, so offering a second
     would only produce a "busy" error. */
 type Job = "migrate" | "reset" | "snapshot" | "export" | "restore" | null;
+
+/** Names a job in a failure notice, where "reset failed" has to make sense
+    with the dialog long gone. */
+const JOB_LABEL: Record<Exclude<Job, null>, string> = {
+  migrate: "Migration failed",
+  reset: "Database reset failed",
+  snapshot: "Snapshot failed",
+  export: "Database export failed",
+  restore: "Database restore failed",
+};
 
 const snapDefault = (db: string) => {
   const d = new Date();
@@ -28,6 +38,7 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
   // reset is fire-and-forget over reset:status events, so its progress lives in
   // the store — the dialog reads it rather than keeping a second copy
   const resetting = useStore((s) => !!s.resetting[wt.wtKey]);
+  const notify = useStore((s) => s.notify);
   const [dbs, setDbs] = useState<string[]>([]);
   const [current, setCurrent] = useState<string | null>(wt.dbName);
   const [q, setQ] = useState("");
@@ -58,6 +69,17 @@ export default function DatabaseModal({ wt, onClose }: { wt: WorktreeNode; onClo
       onClose();
     } catch (e) {
       setError(errText(e));
+      // The footer offers "Run in background" while this runs, so the dialog
+      // may well be gone by now — and then setError writes to nothing and the
+      // failure is silent. Same contract as a backgrounded create or remove:
+      // the outcome goes to the attention queue, with the log that explains it.
+      notify({
+        kind: "error",
+        title: JOB_LABEL[which],
+        wt: wt.branch,
+        wtKey: wt.wtKey,
+        detail: [errText(e), opTail(wt.wtKey)].filter(Boolean).join("\n\n"),
+      });
     } finally {
       setJob((j) => (j === which ? null : j));
     }
