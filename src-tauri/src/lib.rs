@@ -274,6 +274,7 @@ pub fn run() {
             commands::switch_submodule_branch,
             commands::list_submodule_branches,
             commands::fetch_submodules,
+            commands::sync_submodules,
             commands::switch_worktree_branch,
             commands::list_branches,
             commands::fetch_branches,

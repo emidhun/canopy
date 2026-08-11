@@ -4,7 +4,7 @@
    never shrink — a shrinking action group just clips its own button. The
    reason rides in front of the next action and is the first thing to yield. */
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { Copy, Cube, Database, Doc, Editor, Finder, Fork, More, Pull, SidebarIcon, Swap, Trash } from "../../icons";
+import { Copy, Cube, Database, Doc, Editor, Finder, Fork, More, Pull, Refresh, SidebarIcon, Swap, Trash } from "../../icons";
 import { useStore } from "../../store";
 import type { ServiceNode, WorktreeNode } from "../../types";
 import { nextClass, type NextAction } from "../nextAction";
@@ -66,10 +66,12 @@ export default function WorktreeView({
   onSetup: () => void;
   onOpenService: (s: ServiceNode) => void;
   onEditContext: () => void;
-  onSwitchBranch: () => void;
+  /** absent when Settings has turned the Switch-branch action off */
+  onSwitchBranch?: () => void;
 }) {
   const openWorktree = useStore((s) => s.openWorktree);
   const gitPull = useStore((s) => s.gitPull);
+  const syncSubmodules = useStore((s) => s.syncSubmodules);
   const showToast = useStore((s) => s.showToast);
   const restartService = useStore((s) => s.restartService);
   const [filter, setFilter] = useState("all");
@@ -121,8 +123,11 @@ export default function WorktreeView({
           </button>
           {menu && (
             <AnchoredMenu anchor={moreRef} onClose={() => setMenu(false)} width={246}>
-              <MenuItem icon={Swap} label="Switch branch…" k="⌘\" onPick={() => { setMenu(false); onSwitchBranch(); }} />
+              {onSwitchBranch && (
+                <MenuItem icon={Swap} label="Switch branch…" k="⌘\" onPick={() => { setMenu(false); onSwitchBranch(); }} />
+              )}
               <MenuItem icon={Pull} label="Pull" onPick={() => { setMenu(false); gitPull(wt.wtKey); }} />
+              <MenuItem icon={Refresh} label="Sync submodules" k="⇧⌘S" onPick={() => { setMenu(false); syncSubmodules(wt.wtKey); }} />
               <MenuItem icon={Cube} label="Run setup…" onPick={runSetup} />
               <div className="cx-pop__sep" />
               <MenuItem icon={Database} label="Database…" onPick={() => { setMenu(false); onDatabase(); }} />

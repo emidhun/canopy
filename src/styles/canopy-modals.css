@@ -647,3 +647,22 @@ button.cxm-frow--open:focus-visible {
   color: var(--text-tertiary);
   cursor: default;
 }
+
+/* ── raw operation output (a background job's error + log tail) ──────
+   Selectable and scrollable rather than summarised: the reason this dialog
+   exists is the text itself. Capped so a long tail can't push the footer off
+   the screen. */
+.cx-logdump {
+  margin: 0;
+  padding: var(--sp-pop);
+  max-height: 260px;
+  overflow: auto;
+  border-radius: var(--r-sm);
+  background: var(--btn);
+  border: var(--border-w) solid var(--divider);
+  font: var(--fs-micro) / 1.6 var(--mono);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}

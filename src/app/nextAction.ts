@@ -20,7 +20,7 @@
 */
 import type { ComponentType } from "react";
 import { Browser, Bolt, Cube, Doc, Play, Pull, Restart, Spinner, Sparkle } from "../icons";
-import type { LaneSession } from "../store";
+import type { LaneSession, Notice } from "../store";
 import type { RepoNode, ServiceNode, WorktreeNode } from "../types";
 import { isLive } from "../types";
 
@@ -192,7 +192,7 @@ export function nextAction(wt: WorktreeNode, sessions: LaneSession[]): NextActio
    makes "the next action" true globally and not just inside whichever
    worktree happens to be selected. */
 
-export type AttnKind = "crash" | "wait" | "todo";
+export type AttnKind = "crash" | "wait" | "todo" | "error" | "info";
 
 export interface AttnItem {
   id: string;
@@ -207,10 +207,34 @@ export interface AttnItem {
   /** the imperative the row offers */
   act: string;
   svcKey?: string;
+  /** set on rows that came from a Notice — the id to dismiss it by */
+  noticeId?: string;
+  /** the copyable error text / log tail a failed background op carries */
+  detail?: string;
 }
 
-export function attentionItems(tree: RepoNode[], sessions: Record<string, LaneSession[]>): AttnItem[] {
+export function attentionItems(
+  tree: RepoNode[],
+  sessions: Record<string, LaneSession[]>,
+  notices: Notice[] = [],
+): AttnItem[] {
   const out: AttnItem[] = [];
+  /* A backgrounded op that FAILED ranks with a crash — it is the same kind of
+     news (something you asked for is not running) and it has nowhere else to
+     be seen. A completion is the opposite: it ranks last, below every real
+     demand, because it asks nothing of you. */
+  for (const n of notices)
+    out.push({
+      id: n.id,
+      sev: n.kind === "error" ? 0 : 9,
+      kind: n.kind === "error" ? "error" : "info",
+      wtKey: n.wtKey,
+      title: n.title,
+      wt: n.wt,
+      act: n.kind === "error" ? "View" : "Dismiss",
+      noticeId: n.id,
+      detail: n.detail,
+    });
   for (const repo of tree) {
     for (const wt of repo.worktrees) {
       for (const s of wt.services) {

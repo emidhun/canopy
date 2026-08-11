@@ -4,7 +4,7 @@
    what they want from you, not by which repo they happen to live in.
    "Needs you" outranks everything; pinned worktrees hold the top of the rest. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Chevron, Editor, Fork, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Stop, Terminal, Trash } from "../../icons";
+import { Check, Chevron, Editor, Fork, Logs, Pin, Play, Plus, Search, SidebarIcon, Sparkle, Spinner, Stop, Terminal, Trash } from "../../icons";
 import { useStore, type LaneSession } from "../../store";
 import { isLive, type RepoNode, type WorktreeNode } from "../../types";
 import { agentState, dotClass, wtDot, type AttnItem } from "../nextAction";
@@ -43,6 +43,8 @@ export default function SidebarNav({
   const toggleWorktree = useStore((s) => s.toggleWorktree);
   const openWorktree = useStore((s) => s.openWorktree);
   const addRepo = useStore((s) => s.addRepo);
+  const creating = useStore((s) => s.creating);
+  const removing = useStore((s) => s.removing);
   const pins = usePins();
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const [repoFilter, setRepoFilter] = useState<string | null>(null);
@@ -54,7 +56,9 @@ export default function SidebarNav({
 
   const groups = useMemo(() => {
     const vis = flat.filter(({ wt, repo }) => (!activeRepo || repo.repoId === activeRepo) && (!q || `${wt.branch} ${repo.name}`.toLowerCase().includes(q)));
-    const needs = new Set(attn.map((a) => a.wtKey));
+    // "a background job finished" is news, not a demand — it belongs in the
+    // queue but must not drag its worktree into the Needs-you group
+    const needs = new Set(attn.filter((a) => a.kind !== "info").map((a) => a.wtKey));
     const pinned = new Set(pins);
     const rest = vis.filter((f) => !needs.has(f.wt.wtKey));
     return [
@@ -72,6 +76,17 @@ export default function SidebarNav({
       },
     ].filter((g) => g.items.length);
   }, [flat, q, activeRepo, attn, pins]);
+
+  // in-flight creations, oldest first, filtered by the same repo filter the
+  // real rows obey so the list doesn't contradict itself
+  const pending = useMemo(
+    () =>
+      Object.entries(creating)
+        .filter(([, p]) => !activeRepo || p.repoId === activeRepo)
+        .filter(([, p]) => !q || `${p.branch} ${p.repoName}`.toLowerCase().includes(q))
+        .sort((a, b) => a[1].startedAt - b[1].startedAt),
+    [creating, activeRepo, q],
+  );
 
   const multi = useMultiSelect();
   // the visible order across all groups — the axis Shift-click ranges walk
@@ -115,6 +130,14 @@ export default function SidebarNav({
           <span className="n">{flat.length}</span>
         </button>
 
+        {/* A worktree being created has no row in the tree yet — the backend
+            only publishes it once it exists. Without this the sidebar is
+            silent for the minutes `git worktree add` + setup take, which is
+            exactly when "is it working?" gets asked. */}
+        {pending.map(([wtPath, p]) => (
+          <PendingRow key={wtPath} wtPath={wtPath} branch={p.branch} repoName={p.repoName} />
+        ))}
+
         {groups.map((g) => (
           <div key={g.k}>
             <button
@@ -134,6 +157,7 @@ export default function SidebarNav({
                   wt={wt}
                   repoName={repo.name}
                   selected={wt.wtKey === selKey && view === "wt"}
+                  removing={!!removing[wt.wtKey]}
                   isMulti={multi.includes(wt.wtKey)}
                   sessions={sessions[wt.wtKey] ?? EMPTY}
                   onActivate={(mods) => activate(wt.wtKey, mods)}
@@ -172,6 +196,28 @@ export default function SidebarNav({
 }
 
 const EMPTY: LaneSession[] = [];
+
+/* A worktree being created, before the tree knows about it.
+
+   It subscribes to its own step marker rather than the sidebar subscribing to
+   the whole `ops` map: that map is replaced on EVERY streamed output line, so
+   reading it one level up re-rendered the entire worktree list once per line
+   of `pnpm install`. Selecting a primitive means this row alone re-renders,
+   and only when the step actually advances. */
+function PendingRow({ wtPath, branch, repoName }: { wtPath: string; branch: string; repoName: string }) {
+  const step = useStore((s) => s.ops[wtPath]?.step ?? null);
+  return (
+    <div className="cxs-wtr cxs-wtr--pending" title={`Creating ${branch} in ${repoName}`}>
+      <span className="cxs-wtspin">
+        <Spinner size={11} />
+      </span>
+      <span className="b">{branch}</span>
+      <span className="meta">
+        <span className="cxs-wtnote">{step ?? "creating…"}</span>
+      </span>
+    </div>
+  );
+}
 
 /* Filter the list to one repository. Hidden when there's only one repo — the
    text field already narrows by branch (and repo name), so the dropdown only
@@ -241,6 +287,7 @@ function WorktreeRow({
   wt,
   repoName,
   selected,
+  removing,
   isMulti,
   sessions,
   onActivate,
@@ -251,6 +298,8 @@ function WorktreeRow({
   wt: WorktreeNode;
   repoName: string;
   selected: boolean;
+  /** its removal is in flight — the row is read-only until the tree catches up */
+  removing: boolean;
   isMulti: boolean;
   sessions: LaneSession[];
   onActivate: (mods: { meta: boolean; shift: boolean }) => void;
@@ -265,6 +314,22 @@ function WorktreeRow({
   // the toggle would offer "Start services" — which then races the shutdown.
   const settling = wt.services.some((s) => s.status === "starting" || s.status === "stopping");
   const pinned = isPinned(wt.wtKey);
+
+  // A removal in flight leaves the row in place but inert: the worktree is
+  // still in the tree until the backend republishes it, and clicking into a
+  // directory that is being deleted is not a thing to offer.
+  if (removing)
+    return (
+      <div className="cxs-wtr cxs-wtr--pending" title={`Removing ${wt.branch}`}>
+        <span className="cxs-wtspin">
+          <Spinner size={11} />
+        </span>
+        <span className="b">{wt.branch}</span>
+        <span className="meta">
+          <span className="cxs-wtnote">removing…</span>
+        </span>
+      </div>
+    );
 
   return (
     <div className={"cxs-wtr" + (selected ? " is-on" : "") + (isMulti ? " is-multi" : "")} title={`${repoName}: ${wt.branch}`}

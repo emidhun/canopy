@@ -146,6 +146,7 @@ export const ipc = {
     invoke<void>("switch_submodule_branch", { wtKey, path, branch }),
   listSubmoduleBranches: (wtKey: string, path: string) => invoke<Branches>("list_submodule_branches", { wtKey, path }),
   fetchSubmodules: (wtKey: string) => invoke<number>("fetch_submodules", { wtKey }),
+  syncSubmodules: (wtKey: string) => invoke<string>("sync_submodules", { wtKey }),
   switchWorktreeBranch: (wtKey: string, branch: string, create: boolean, base?: string) =>
     invoke<void>("switch_worktree_branch", { wtKey, branch, create, base: base ?? null }),
   listBranches: (repoId: string) => invoke<Branches>("list_branches", { repoId }),

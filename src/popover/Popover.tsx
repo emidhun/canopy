@@ -279,6 +279,10 @@ export default function Popover() {
       } else if (e.metaKey && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newWorktree();
+      } else if (e.metaKey && e.key === ",") {
+        // the hint the gear has always carried, now with a listener behind it
+        e.preventDefault();
+        openSettings();
       } else if (e.key === "Escape") {
         if (q) setQ("");
       } else if (e.key !== "Tab" && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -314,10 +318,7 @@ export default function Popover() {
   };
   const newWorktree = () => command("tray:new-worktree", "Create a worktree in the manager");
   const openManagerOverview = () => command("tray:overview", "Opening all worktrees");
-  const openSettings = () => {
-    openManager();
-    showToast("Settings — opening the manager");
-  };
+  const openSettings = () => command("tray:settings", "Settings — opening the manager");
 
   return (
     <div className="pop" ref={popRef}>

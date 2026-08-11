@@ -9,7 +9,7 @@ import { Check, Cube, Play, Spinner } from "../../icons";
 import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
 import type { WorktreeNode } from "../../types";
-import Modal, { Hint, Spacer } from "./Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
 /** setup.rs emits `{label} [2/5]: pnpm install` — the operation label comes
     first, so the marker is matched anywhere in the line rather than anchored. */
@@ -77,6 +77,13 @@ export default function SetupRunnerModal({
   const done = !running && !failed && steps.length > 0;
   const errored = failed || (op?.lines ?? []).some((l) => l.lv === "err");
   const elapsed = ((Date.now() - startedAt.current) / 1000).toFixed(1);
+
+  // the ⏎ the Start-services button advertises. This dialog has no text
+  // fields, so a bare ⏎ has nothing to take it from.
+  usePrimaryAction("enter", done, () => {
+    onStartServices();
+    onClose();
+  });
 
   return (
     <Modal

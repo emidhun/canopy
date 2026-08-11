@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { errText, hasBackend, ipc, type Branches, type OpEvent } from "../ipc";
-import { useStore } from "../store";
+import { backgroundOp, useStore } from "../store";
 import { Alert, ChevRight, Fork, Info, Plus, Refresh, Spinner } from "../icons";
-import Modal, { Hint, Spacer } from "./canopy/Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./canopy/Modal";
 import RefPick from "./canopy/RefPick";
 import { seedWtContext } from "./WorktreeContext";
 
@@ -25,6 +25,7 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   const tree = useStore((s) => s.tree);
   const select = useStore((s) => s.select);
   const showToast = useStore((s) => s.showToast);
+  const createWorktree = useStore((s) => s.createWorktree);
 
   const repos = tree.map((r) => ({ id: r.repoId, name: r.name }));
   const [repo, setRepo] = useState(repoId || repos[0]?.id || "");
@@ -108,13 +109,41 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     }
   }
 
-  const branch = mode === "new" ? name.trim() : existing;
-  const ok = !!branch;
+  const picked = mode === "new" ? name.trim() : existing;
+  const ok = !!picked;
+
+  /* What create_worktree will actually be asked for. `git worktree add <path>
+     origin/foo` checks out the remote-tracking ref DETACHED, so a remote pick
+     has to become a real local branch tracking it — reuse the local one if it
+     already exists, otherwise create it. Derived once, because the destination
+     panel and the create call must agree on the branch NAME (they didn't for
+     remote picks, which land under the local name, not `origin/…`). */
+  const payload = useMemo(() => {
+    const localOf = (ref: string) => ref.replace(/^[^/]+\//, "");
+    if (mode === "new") return { branch: picked, base: base || undefined, createBranch: true };
+    if (existingKind === "tags")
+      // checking out a tag → create a local branch named after it
+      return { branch: existing, base: `refs/tags/${existing}`, createBranch: true };
+    if (existingKind === "remote")
+      return {
+        branch: localOf(existing),
+        base: existing,
+        createBranch: !branches?.local.includes(localOf(existing)),
+      };
+    return { branch: existing, base: undefined, createBranch: false };
+  }, [mode, picked, base, existing, existingKind, branches]);
+
+  const branch = payload.branch;
   // create_worktree: `${worktree_dir || repo.path + "-worktrees"}/${sanitize_branch(branch)}`
   const destination =
     ok && worktreeDir !== null && activeRepo
       ? `${worktreeDir.trim() || `${activeRepo.path}-worktrees`}/${sanitizeBranch(branch)}`
       : null;
+  /* The key the in-progress row and the failure notice are filed under. It is
+     the destination when we can predict it — that is what worktree:op events
+     are keyed by, so the row can show live steps. When the repo's settings
+     could not be read we still create; the row just has no step detail. */
+  const opKey = destination ?? `${repo}::${branch}`;
 
   async function create() {
     if (!ok) return;
@@ -122,29 +151,16 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     setProgress([]);
     setError(null);
     try {
-      if (!hasBackend()) {
-        showToast("New worktree needs the desktop app");
-        return;
-      }
-      // `git worktree add <path> origin/foo` checks out the remote-tracking ref
-      // DETACHED. A remote pick has to become a real local branch tracking it —
-      // reuse the local one if it already exists, otherwise create it.
-      const localOf = (ref: string) => ref.replace(/^[^/]+\//, "");
-      const payload =
-        mode === "new"
-          ? { branch, base: base || undefined, createBranch: true }
-          : existingKind === "tags"
-            ? // checking out a tag → create a local branch named after it
-              { branch: existing, base: `refs/tags/${existing}`, createBranch: true }
-            : existingKind === "remote"
-              ? { branch: localOf(existing), base: existing, createBranch: !branches?.local.includes(localOf(existing)) }
-              : { branch: existing, createBranch: false };
-
-      const wtPath = await ipc.createWorktree({ repoId: repo, ...payload });
-      // seed the human handoff now, keyed by the new path — the runtime
-      // details are read back from the authoritative tree afterwards
-      seedWtContext(wtPath, { title: branch, pr, prDescription, issue, issueDescription });
-      showToast(`Worktree ready — ${branch}`);
+      const wtPath = await createWorktree({
+        repoId: repo,
+        repoName: activeRepo?.name ?? "",
+        wtPath: opKey,
+        ...payload,
+        // seed the human handoff keyed by the REAL path — the runtime details
+        // are read back from the authoritative tree afterwards. Runs whether or
+        // not this dialog is still open, so a backgrounded create still gets it.
+        onCreated: (path) => seedWtContext(path, { title: branch, pr, prDescription, issue, issueDescription }),
+      });
       select(wtPath);
       onClose();
     } catch (e) {
@@ -153,6 +169,18 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       setBusy(false);
     }
   }
+
+  /* Dismiss the dialog and let the create finish on its own. The job is
+     backend-owned and runs to completion either way; what changes is where it
+     reports — the sidebar shows an in-progress row, and the outcome lands in
+     "Needs you" instead of in a dialog that is no longer on screen. */
+  function runInBackground() {
+    backgroundOp(opKey);
+    onClose();
+  }
+
+  // the ⌘⏎ the Create button has always advertised
+  usePrimaryAction("mod-enter", ok && !busy, create);
 
   return (
     <Modal
@@ -163,11 +191,19 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
       onClose={onClose}
       foot={
         <>
-          <Hint icon={Info}>Ports and database are derived automatically</Hint>
+          <Hint icon={Info}>
+            {busy ? "Setup keeps running if you close this" : "Ports and database are derived automatically"}
+          </Hint>
           <Spacer />
-          <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </button>
+          {busy ? (
+            <button className="cx-btn cx-btn--ghost" onClick={runInBackground}>
+              Run in background
+            </button>
+          ) : (
+            <button className="cx-btn cx-btn--ghost" onClick={onClose}>
+              Cancel
+            </button>
+          )}
           <button className="cx-btn cx-btn--primary" onClick={create} disabled={busy || !ok}>
             {busy ? (
               <>

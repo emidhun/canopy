@@ -468,6 +468,28 @@ pub async fn switch_branch(wt_path: &str, branch: &str, create: bool, base: Opti
     Ok(())
 }
 
+/// Put every submodule back on the commit the parent pins: `submodule sync`
+/// (re-reads URLs from .gitmodules, which a branch change can rewrite) then
+/// `submodule update --init --recursive`.
+///
+/// This is the counterpart to Pull, not a variant of it: Pull moves submodules
+/// FORWARD onto their own branches, while this moves them back to what the
+/// parent commit says — the repair for "my submodules are on the wrong commit".
+/// Returns how many submodules the worktree has.
+pub async fn sync_submodules(wt_path: &str) -> Result<usize, String> {
+    let subs = submodule_entries(wt_path).await;
+    if subs.is_empty() {
+        return Ok(0);
+    }
+    run_git(wt_path, &["submodule", "sync", "--recursive"]).await?;
+    run_git_net(
+        wt_path,
+        &["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"],
+    )
+    .await?;
+    Ok(subs.len())
+}
+
 /// `git fetch --prune` inside every submodule so ahead/behind-of-remote and
 /// drift are computed against fresh remote refs. Best-effort per submodule.
 pub async fn fetch_submodules(wt_path: &str) -> usize {

@@ -38,7 +38,9 @@ export default function Overview({
   const agentCount = Object.values(sessions)
     .flat()
     .filter((s) => s.kind === "agent" && s.running).length;
-  const needs = new Set(attn.map((a) => a.wtKey));
+  // a finished-in-the-background notice is news, not a demand — it stays in
+  // the queue without pulling its worktree into the Needs-you section
+  const needs = new Set(attn.filter((a) => a.kind !== "info").map((a) => a.wtKey));
 
   const head = (
     <tr>

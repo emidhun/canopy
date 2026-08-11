@@ -6,7 +6,7 @@
    private submodule clones, not just a directory. */
 import { useEffect, useState } from "react";
 import { errText, hasBackend, ipc } from "../ipc";
-import { useStore } from "../store";
+import { backgroundOp, useStore } from "../store";
 import type { WorktreeNode } from "../types";
 import { Alert, Info, Spinner, Trash } from "../icons";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
@@ -16,7 +16,7 @@ import Modal, { Hint, Spacer } from "./canopy/Modal";
 const DIRTY_CAP = 10;
 
 export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode; onClose: () => void }) {
-  const showToast = useStore((s) => s.showToast);
+  const removeWorktrees = useStore((s) => s.removeWorktrees);
   const [report, setReport] = useState<{ dirty: boolean; details: string[]; total: number } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [deleteBranch, setDeleteBranch] = useState(false);
@@ -50,18 +50,21 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
     setBusy(true);
     setError(null);
     try {
-      if (!hasBackend()) {
-        showToast("Remove needs the desktop app");
-        return;
-      }
-      await ipc.removeWorktree(wt.wtKey, deleteBranch, dropDb);
-      showToast(`Worktree removed — ${wt.branch}`);
+      await removeWorktrees([wt.wtKey], deleteBranch, dropDb);
       onClose();
     } catch (e) {
       setError(errText(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  /* Teardown (dropping the database, deleting a large tree) can take a while.
+     Dismissing hands the job to the background: the sidebar row shows it going,
+     and the outcome — including a failure — reports into "Needs you". */
+  function runInBackground() {
+    backgroundOp(wt.wtKey);
+    onClose();
   }
 
   return (
@@ -74,10 +77,12 @@ export default function RemoveWorktreeModal({ wt, onClose }: { wt: WorktreeNode;
       onClose={onClose}
       foot={
         <>
-          <Hint icon={Info}>The branch itself is kept unless you tick it</Hint>
+          <Hint icon={Info}>
+            {busy ? "Removal keeps running if you close this" : "The branch itself is kept unless you tick it"}
+          </Hint>
           <Spacer />
-          <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
-            Cancel
+          <button className="cx-btn cx-btn--ghost" onClick={busy ? runInBackground : onClose}>
+            {busy ? "Run in background" : "Cancel"}
           </button>
           <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy || !report || !!probeError}>
             {busy ? (

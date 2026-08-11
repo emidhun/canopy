@@ -74,7 +74,12 @@ const INDEX: { page: PageId; label: string; hint: string }[] = (
     ["notifications", "Service crash alerts", "interrupt when a service dies"],
     ["notifications", "Agent needs a decision", "blocked agent"],
     ["shortcuts", "Command palette", "⌘K"], ["shortcuts", "Save changes", "⌘S"],
-    ["shortcuts", "Toggle worktree list", "⌘B"], ["shortcuts", "Layout presets", "⌘1 ⌘2 ⌘3 ⌘4"],
+    ["shortcuts", "Toggle worktree list", "⌘B"], ["shortcuts", "Layout presets", "⌘1 ⌘2 ⌘3 ⌘4 ⌘5"],
+    ["shortcuts", "New worktree", "⌘N"], ["shortcuts", "Add repository", "⇧⌘N"],
+    ["shortcuts", "Sync submodules", "⇧⌘S"], ["shortcuts", "Switch branch", "⌘\\"],
+    ["shortcuts", "Pull everything", "⌘⏎"], ["shortcuts", "Run next action", "⏎"],
+    ["shortcuts", "Cross-worktree overview", "⌘O"], ["shortcuts", "Open settings", "⌘,"],
+    ["shortcuts", "Select several worktrees", "⌘click ⇧click"],
     ["advanced", "Diagnostics", "version, config path"], ["advanced", "Experiments", "parallel setup"],
     ["repo-general", "Repository path", "where the repo lives"], ["repo-general", "Worktree root", ".worktrees"],
     ["repo-general", "Remove repository", "stop tracking"],
@@ -448,7 +453,27 @@ function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) 
 
 /* ══════════════════════════ real: Files ════════════════════════════════ */
 const FMTS: ProvisionFormat[] = ["dotenv", "json", "yaml", "text"];
-function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
+
+/** A path inside the repo is stored RELATIVE to it — that is what provisioning
+    resolves against, and an absolute path would break the moment the repo moves
+    or the config is shared. Anything outside stays absolute. */
+function repoRelative(picked: string, repoPath: string | undefined): string {
+  const root = (repoPath || "").replace(/\/+$/, "");
+  if (root && picked.startsWith(root + "/")) return picked.slice(root.length + 1);
+  return picked;
+}
+
+/** Guess the format from the file the user picked, so choosing `config.json`
+    does not silently keep the dotenv parser. */
+function formatOf(path: string): ProvisionFormat | null {
+  const f = path.toLowerCase();
+  if (/\.ya?ml$/.test(f)) return "yaml";
+  if (f.endsWith(".json")) return "json";
+  if (/(^|\/)\.env(\.|$)/.test(f)) return "dotenv";
+  return null;
+}
+
+function FilesPage({ repo, cards, setCards, markDirty, flash }: PageProps) {
   const [selId, setSelId] = useState<string | null>(cards[0]?.id ?? null);
   const sel = cards.find((c) => c.id === selId) || cards[0] || null;
   const keyRef = useRef<number | null>(null);
@@ -458,6 +483,28 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
     const i = keyRef.current;
     if (i == null || !sel) { flash("Select a value field first, then insert"); return; }
     patch({ keys: sel.keys.map((k, j) => (j === i ? { ...k, v: (k.v || "") + tok } : k)) });
+  };
+  /* Both file fields are pickable. Typing `ee/.env` from memory is how you end
+     up provisioning a path that does not exist — and on macOS a dotfile cannot
+     be reached by the picker at all unless it starts inside the repo, which is
+     why the dialog opens there. */
+  const browse = async (which: "path" | "from") => {
+    if (!sel) return;
+    if (!hasBackend()) { flash("Choosing a file needs the desktop app"); return; }
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        directory: false,
+        defaultPath: repo?.path || undefined,
+        title: which === "path" ? "Choose the file to provision" : "Choose the source file",
+      });
+      if (typeof picked !== "string") return;
+      const rel = repoRelative(picked, repo?.path);
+      const fmt = which === "path" ? formatOf(rel) : null;
+      patch(which === "path" ? { path: rel, ...(fmt ? { format: fmt } : {}) } : { from: rel });
+    } catch (e) {
+      flash(`Could not open the file picker — ${errText(e)}`);
+    }
   };
   return (
     <>
@@ -495,17 +542,19 @@ function FilesPage({ cards, setCards, markDirty, flash }: PageProps) {
             <div className="sbody">
               <div className="row">
                 <input className="inp mono gr" value={sel.path} placeholder=".env or config/app.json" onChange={(e) => patch({ path: e.target.value })} />
+                <button className="ico" title="Browse for the file to provision" onClick={() => browse("path")}><Finder size={12} /></button>
                 <select className="inp" value={sel.format} onChange={(e) => patch({ format: e.target.value as ProvisionFormat })}>
                   {FMTS.map((f) => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
+              <div className="hint">Relative to each worktree's root. Browsing inside the repository stores the path relative to it.</div>
             </div>
 
             <div className={"stp" + (sel.from ? " done" : "")}><span className="num">2</span><span className="st"><b>Source</b><span>where to copy from</span></span></div>
             <div className="sbody">
               <div className="row">
                 <input className="inp mono gr" value={sel.from} placeholder="same path in the repo root" onChange={(e) => patch({ from: e.target.value })} />
-                <button className="ico" title="Browse for a source file (coming soon)" onClick={() => flash("Choosing a source file isn't wired yet")}><Finder size={12} /></button>
+                <button className="ico" title="Browse for a source file" onClick={() => browse("from")}><Finder size={12} /></button>
               </div>
               <div className="hint">Leave empty to read the same path from the repo root.</div>
             </div>
@@ -793,12 +842,51 @@ function NotificationsPage() {
   );
 }
 
+/* Every binding the app actually listens for, grouped by where it applies.
+   This table is a reference, so it is only worth having if it is exhaustive
+   and true — an entry here without a listener behind it is worse than a gap.
+   Sources: App.tsx (global + worktree), SettingsView (settings), Modal's
+   usePrimaryAction (dialogs), Palette / SearchOverlay (lists), SidebarNav
+   (selection chords) and Popover.tsx (the menu-bar window). */
 const KEYS: [string, string, string][] = [
-  ["Command palette", "⌘ K", "Global"], ["New worktree", "⌘ N", "Global"], ["Toggle worktree list", "⌘ B", "Global"],
-  ["Cross-worktree overview", "⌘ O", "Global"], ["Switch branch", "⌘ \\", "Worktree"], ["Runtime layout", "⌘ 1", "Worktree"],
-  ["Split layout", "⌘ 2", "Worktree"], ["Agent layout", "⌘ 3", "Worktree"], ["Shell layout", "⌘ 4", "Worktree"],
-  ["Run next action", "⏎", "Worktree"], ["Pull everything", "⌘ ⏎", "Worktree"],
-  ["Search settings", "⌘ F", "Settings"], ["Save changes", "⌘ S", "Settings"], ["Toggle preview", "⌘ P", "Settings"],
+  // global
+  ["Command palette", "⌘ K", "Global"],
+  ["New worktree", "⌘ N", "Global"],
+  ["Add repository", "⇧ ⌘ N", "Global"],
+  ["Toggle worktree list", "⌘ B", "Global"],
+  ["Cross-worktree overview", "⌘ O", "Global"],
+  ["Settings", "⌘ ,", "Global"],
+  // worktree
+  ["Run next action", "⏎", "Worktree"],
+  ["Switch branch", "⌘ \\", "Worktree"],
+  ["Sync submodules", "⇧ ⌘ S", "Worktree"],
+  ["Pull everything", "⌘ ⏎", "Pull menu"],
+  // layouts
+  ["Runtime layout", "⌘ 1", "Worktree"],
+  ["Split logs + agent", "⌘ 2", "Worktree"],
+  ["Agent layout", "⌘ 3", "Worktree"],
+  ["Terminal + logs layout", "⌘ 4", "Worktree"],
+  ["Terminal layout", "⌘ 5", "Worktree"],
+  // dialogs
+  ["Confirm the primary action", "⌘ ⏎", "Dialogs"],
+  ["Confirm a simple prompt", "⏎", "Dialogs"],
+  ["Close the dialog", "esc", "Dialogs"],
+  // lists and menus
+  ["Move through a list", "↑ ↓", "Lists"],
+  ["Choose the highlighted row", "⏎", "Lists"],
+  ["Close a menu or popover", "esc", "Lists"],
+  ["Add to the selection", "⌘ click", "Worktree list"],
+  ["Select a range", "⇧ click", "Worktree list"],
+  // settings
+  ["Search all settings", "⌘ F", "Settings"],
+  ["Save changes", "⌘ S", "Settings"],
+  ["Toggle the JSON preview", "⌘ P", "Settings"],
+  // menu-bar window
+  ["Focus the search field", "⌘ K", "Menu bar"],
+  ["New worktree", "⌘ N", "Menu bar"],
+  ["Settings", "⌘ ,", "Menu bar"],
+  ["Start or focus the highlighted worktree", "⏎", "Menu bar"],
+  ["Clear the search field", "esc", "Menu bar"],
 ];
 function ShortcutsPage() {
   const [q, setQ] = useState("");
@@ -812,8 +900,11 @@ function ShortcutsPage() {
       </div>
       <table className="keys">
         <thead><tr><th>Command</th><th>Keys</th><th>Scope</th></tr></thead>
+        {/* keyed by all three columns: the command name alone is not unique —
+            "New worktree" and "Settings" each exist in two scopes (the main
+            window and the menu bar) */}
         <tbody>{rows.map(([a, b, c]) => (
-          <tr key={a}><td>{a}</td>
+          <tr key={a + b + c}><td>{a}</td>
             <td><span className="kbdk">{b.split(" ").map((k, i) => <i key={i}>{k}</i>)}</span></td>
             <td style={{ color: "var(--text-tertiary)" }}>{c}</td></tr>))}</tbody>
       </table>
@@ -1028,12 +1119,17 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       const meta = e.metaKey || e.ctrlKey;
       if (meta && e.key.toLowerCase() === "f") { e.preventDefault(); setSearch(true); }
       else if (meta && e.key.toLowerCase() === "s") { e.preventDefault(); if (dirty.size) save(); }
-      else if (meta && e.key.toLowerCase() === "p") { e.preventDefault(); setPreview((v) => !v); }
+      // ⌘P previews the repo's config file — it has nothing to show from a
+      // platform page, where the panel would render blank
+      else if (meta && e.key.toLowerCase() === "p") {
+        e.preventDefault();
+        if (REPO_PAGE_IDS.has(page) && repoId) setPreview((v) => !v);
+      }
     };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty, settings, repoId, cardsByRepo, setupByRepo]);
+  }, [dirty, settings, repoId, page, cardsByRepo, setupByRepo]);
 
   useEffect(() => {
     if (!repoMenu) return;
@@ -1258,7 +1354,9 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         <div className="ttl"><span className="ic"><Cog size={13} /></span>Settings</div>
         <span className="sp" />
         <button className="ib" onClick={() => setSearch(true)} title="Search all settings (⌘F)"><Search size={13} />Search<span className="k">⌘F</span></button>
-        <button className={"ib" + (preview ? " on" : "")} onClick={() => setPreview((v) => !v)} title="Toggle config preview (⌘P)"><Braces size={13} /></button>
+        {/* The JSON preview belongs to a REPOSITORY's config, so it is offered
+            on the repo pages that have one (below) — not from the title bar,
+            where it sat over platform pages it has nothing to do with. */}
         <button className="ib" onClick={onClose} title="Close settings"><X size={14} /></button>
       </div>
 
@@ -1313,18 +1411,23 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
               {isRepoPage && repo && (
                 <button className={"btn sm" + (preview ? " pri" : "")} onClick={() => setPreview((v) => !v)}><Braces size={11} />{preview ? "Hide" : "Preview"} JSON<span className="k">⌘P</span></button>
               )}
-              <div style={{ position: "relative" }} ref={moreRef}>
-                <button className={"ib" + (moreMenu ? " on" : "")} title="More — the repo's .worktreemanager.json" onClick={() => setMoreMenu((m) => !m)} aria-haspopup="menu" aria-expanded={moreMenu} disabled={!repo}><More size={15} /></button>
-                {moreMenu && repo && (
-                  <div className="varmenu" style={{ top: 30, width: 244 }}>
-                    <div className="vh">.worktreemanager.json</div>
-                    <button className="vitem" onClick={() => { copyJson(); setMoreMenu(false); }}><Copy size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Copy JSON</span></button>
-                    <button className="vitem" onClick={() => { exportJson(); setMoreMenu(false); }}><Download size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Export config…</span></button>
-                    <button className="vitem" onClick={() => { reloadFromRepo(); setMoreMenu(false); }} title="Reads the repo's own .worktreemanager.json by path (it's hidden, so a file picker can't see it)"><Refresh size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Load from repo file</span></button>
-                    <button className="vitem" onClick={() => { triggerImport(); setMoreMenu(false); }}><Pull size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Import from file…</span></button>
-                  </div>
-                )}
-              </div>
+              {/* .worktreemanager.json is a property of one repository. On the
+                  platform pages there is no repo in scope, so the menu had
+                  nothing true to act on — it is not offered there. */}
+              {isRepoPage && repo && (
+                <div style={{ position: "relative" }} ref={moreRef}>
+                  <button className={"ib" + (moreMenu ? " on" : "")} title="More — the repo's .worktreemanager.json" onClick={() => setMoreMenu((m) => !m)} aria-haspopup="menu" aria-expanded={moreMenu}><More size={15} /></button>
+                  {moreMenu && (
+                    <div className="varmenu" style={{ top: 30, width: 244 }}>
+                      <div className="vh">.worktreemanager.json</div>
+                      <button className="vitem" onClick={() => { copyJson(); setMoreMenu(false); }}><Copy size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Copy JSON</span></button>
+                      <button className="vitem" onClick={() => { exportJson(); setMoreMenu(false); }}><Download size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Export config…</span></button>
+                      <button className="vitem" onClick={() => { reloadFromRepo(); setMoreMenu(false); }} title="Reads the repo's own .worktreemanager.json by path (it's hidden, so a file picker can't see it)"><Refresh size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Load from repo file</span></button>
+                      <button className="vitem" onClick={() => { triggerImport(); setMoreMenu(false); }}><Pull size={12} /><span style={{ marginLeft: 0, color: "var(--text-primary)" }}>Import from file…</span></button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="pbody">
@@ -1346,11 +1449,12 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <div className="statusline">
-          <span className="mono">.worktreemanager.json</span>
+          {/* name the file only where it IS the file being edited */}
+          <span className="mono">{isRepoPage && repo ? ".worktreemanager.json" : "Canopy settings"}</span>
           <span className="sdiv" />
           <span>All changes saved</span>
           <span style={{ flex: 1 }} />
-          {repo && <span>{wtCount(repo.id)} worktrees · {cards.length} provisioned files · {repo.services.length} services</span>}
+          {isRepoPage && repo && <span>{wtCount(repo.id)} worktrees · {cards.length} provisioned files · {repo.services.length} services</span>}
         </div>
       )}
 

@@ -6,14 +6,14 @@
    No type-to-confirm — the list itself is the confirmation. */
 import { useEffect, useMemo, useState } from "react";
 import { errText, hasBackend, ipc } from "../ipc";
-import { useStore } from "../store";
+import { backgroundOp, useStore } from "../store";
 import type { WorktreeNode } from "../types";
 import { Alert, Info, Spinner, Trash } from "../icons";
 import { clear as clearSelection } from "./multiselect";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 
 export default function RemoveWorktreesModal({ wts, onClose }: { wts: WorktreeNode[]; onClose: () => void }) {
-  const showToast = useStore((s) => s.showToast);
+  const removeWorktrees = useStore((s) => s.removeWorktrees);
   const [dropDb, setDropDb] = useState(true);
   const [deleteBranch, setDeleteBranch] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -46,16 +46,11 @@ export default function RemoveWorktreesModal({ wts, onClose }: { wts: WorktreeNo
     setBusy(true);
     setError(null);
     try {
-      if (!hasBackend()) {
-        showToast("Removing worktrees needs the desktop app");
-        return;
-      }
-      await ipc.removeWorktrees(
+      await removeWorktrees(
         wts.map((w) => w.wtKey),
         deleteBranch,
         dropDb,
       );
-      showToast(`Removed ${wts.length} worktree${wts.length === 1 ? "" : "s"}`);
       clearSelection();
       onClose();
     } catch (e) {
@@ -65,6 +60,15 @@ export default function RemoveWorktreesModal({ wts, onClose }: { wts: WorktreeNo
     } finally {
       setBusy(false);
     }
+  }
+
+  /* Removing several worktrees is the longest of these jobs. Dismissing hands
+     it off: each row goes into its removing state, and the outcome reports into
+     "Needs you" rather than into a dialog that has gone. */
+  function runInBackground() {
+    wts.forEach((w) => backgroundOp(w.wtKey));
+    clearSelection();
+    onClose();
   }
 
   return (
@@ -77,10 +81,12 @@ export default function RemoveWorktreesModal({ wts, onClose }: { wts: WorktreeNo
       onClose={onClose}
       foot={
         <>
-          <Hint icon={Info}>Branches are kept unless you tick it</Hint>
+          <Hint icon={Info}>
+            {busy ? "Removal keeps running if you close this" : "Branches are kept unless you tick it"}
+          </Hint>
           <Spacer />
-          <button className="cx-btn cx-btn--ghost" onClick={onClose} disabled={busy}>
-            Cancel
+          <button className="cx-btn cx-btn--ghost" onClick={busy ? runInBackground : onClose}>
+            {busy ? "Run in background" : "Cancel"}
           </button>
           <button className="cx-btn cx-btn--danger" onClick={remove} disabled={busy}>
             {busy ? (

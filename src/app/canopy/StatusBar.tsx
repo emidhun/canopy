@@ -4,7 +4,7 @@
    text plus one welded control: the word "Pull" pulls everything, the ▾ opens
    per-submodule control. Anchored to the control that opened it, not centred. */
 import { useEffect, useRef, useState } from "react";
-import { Bell, Chevron, Fork, Info, Pull, Search, Single, Sparkle, Split, Spinner } from "../../icons";
+import { Bell, Chevron, Fork, Info, Pull, Refresh, Search, Single, Sparkle, Split, Spinner } from "../../icons";
 import { errText, hasBackend, ipc, type Branches } from "../../ipc";
 import { useStore, type LaneSession } from "../../store";
 import type { SubmoduleStatus, WorktreeNode } from "../../types";
@@ -32,7 +32,9 @@ export default function StatusBar({
   panes: PaneKind[];
   onCycleLayout: () => void;
   onAttn: () => void;
-  onSwitchBranch: () => void;
+  /** absent when Settings has turned the Switch-branch action off — the branch
+      still shows, it just stops being a way in */
+  onSwitchBranch?: () => void;
   onDirty: () => void;
   worktreeCount: number;
   repoCount: number;
@@ -66,10 +68,17 @@ export default function StatusBar({
 
   return (
     <div className="cxs-statusbar">
-      <button className="cxs-sb cxs-sb--mono" onClick={onSwitchBranch} title="Switch branch…">
-        <Fork size={11} />
-        {wt.branch}
-      </button>
+      {onSwitchBranch ? (
+        <button className="cxs-sb cxs-sb--mono" onClick={onSwitchBranch} title="Switch branch…">
+          <Fork size={11} />
+          {wt.branch}
+        </button>
+      ) : (
+        <span className="cxs-sb cxs-sb--mono" title={wt.branch}>
+          <Fork size={11} />
+          {wt.branch}
+        </span>
+      )}
 
       {g && (g.ahead > 0 || g.behind > 0) && (
         <span className="cxs-sb cxs-sb--mono" title={`${g.ahead} ahead, ${g.behind} behind origin`}>
@@ -138,6 +147,8 @@ export default function StatusBar({
 
 function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => void; anchor?: React.RefObject<HTMLElement | null> }) {
   const showToast = useStore((s) => s.showToast);
+  const syncSubmodules = useStore((s) => s.syncSubmodules);
+  const syncing = useStore((s) => !!s.subSyncing[wt.wtKey]);
   const [subs, setSubs] = useState<SubmoduleStatus[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -177,6 +188,8 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
         pullAll();
       }
     };
+    // ⇧⌘S is handled globally (App.tsx) — it works whether or not this popover
+    // is open, so it is not re-bound here.
     document.addEventListener("mousedown", d);
     document.addEventListener("keydown", k);
     return () => {
@@ -234,6 +247,19 @@ function PullPop({ wt, onClose, anchor }: { wt: WorktreeNode; onClose: () => voi
         </span>
         <span className="cx-kbd">⌘⏎</span>
       </button>
+
+      {/* Pull moves submodules FORWARD onto their branches; this puts them back
+          on the commit the parent pins — the repair after a branch switch. */}
+      {subs.length > 0 && (
+        <button className="cxs-pp-all" onClick={() => syncSubmodules(wt.wtKey)} disabled={!hasBackend() || syncing}>
+          <span className="cxs-pp-ic">{syncing ? <Spinner size={14} /> : <Refresh size={14} />}</span>
+          <span className="cxs-pp-tx">
+            <b>Sync submodules</b>
+            <span>re-pin {subs.length} submodule{subs.length === 1 ? "" : "s"} to this commit</span>
+          </span>
+          <span className="cx-kbd">⇧⌘S</span>
+        </button>
+      )}
 
       {(subs.length > 0 || !loaded) && (
         <>

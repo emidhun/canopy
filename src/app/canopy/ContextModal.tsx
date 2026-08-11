@@ -7,7 +7,7 @@ import { Copy, Doc, Info, Link, Plus, Sparkle, X } from "../../icons";
 import { useStore } from "../../store";
 import type { RepoNode, WorktreeNode } from "../../types";
 import { composeContextMd, mdRender, runtimeFor, useWtContext } from "../WorktreeContext";
-import Modal, { Hint, Spacer } from "./Modal";
+import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
 export default function ContextModal({
   repo,
@@ -26,6 +26,13 @@ export default function ContextModal({
   /** the inline add-a-link field; null when the affordance is at rest */
   const [draftLink, setDraftLink] = useState<string | null>(null);
   const runtime = runtimeFor(repo, wt);
+
+  // the ⌘⏎ the Start-agent button advertises. Modifier-based, so it coexists
+  // with the plain ⏎ that commits the inline add-a-link field.
+  usePrimaryAction("mod-enter", true, () => {
+    onStartAgent();
+    onClose();
+  });
 
   return (
     <Modal
