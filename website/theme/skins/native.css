@@ -1,0 +1,164 @@
+/* Skin: native — the docs wearing Canopy's own design language.
+ *
+ * Values are lifted from src/styles/tokens.css: the layered charcoal ramp
+ * (never flat near-black), one scarce teal accent, Inter and JetBrains Mono
+ * bundled locally, and mono for anything git or the filesystem owns.
+ *
+ * Dark is the app's real palette. Light is the same system on paper, since a
+ * docs site people open from a search result can't be dark-only. */
+
+@font-face {
+  font-family: "Inter Variable";
+  src: url("assets/fonts/inter-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  src: url("assets/fonts/jetbrains-mono-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* light: the same structure on paper, with the app's teal darkened to hold
+     contrast on white */
+  --bg: #ffffff;
+  --bg-sunken: #f5f6f7;
+  --bg-raised: #ffffff;
+  --bg-code: #f2f4f5;
+  --bg-hover: #eaecee;
+  --line: #e0e3e6;
+  --line-soft: #eaecee;
+  --tx: #1a1c1f;
+  --tx-2: #4b5158;
+  --tx-3: #767b82;
+  --accent: #0b8a91;
+  --accent-2: #076f76;
+  --accent-dim: #e2f4f5;
+  --amber: #9a610a;
+  --amber-dim: #fdf2e0;
+  --red: #b23a2c;
+  --red-dim: #fdeeeb;
+  --green: #15774a;
+  --green-dim: #e8f6ee;
+  --shadow: 0 1px 2px rgba(16, 24, 32, 0.05), 0 6px 18px rgba(16, 24, 32, 0.06);
+  --hd-h: 50px;
+}
+
+/* dark: Canopy's actual surfaces, borders and text tiers */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1d1e22;
+    --bg-sunken: #17181b;
+    --bg-raised: #24262b;
+    --bg-code: #191a1d;
+    --bg-hover: #292b31;
+    --line: #34373d;
+    --line-soft: #2b2d33;
+    --tx: #edeef1;
+    --tx-2: #aeb0b6;
+    --tx-3: #7c7e86;
+    --accent: #5cc7cd;
+    --accent-2: #9fe0e4;
+    --accent-dim: rgba(92, 199, 205, 0.15);
+    --amber: #e6ad5f;
+    --amber-dim: rgba(230, 173, 95, 0.14);
+    --red: #e0533d;
+    --red-dim: rgba(224, 83, 61, 0.12);
+    --green: #4cc266;
+    --green-dim: rgba(76, 194, 102, 0.16);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1d1e22;
+  --bg-sunken: #17181b;
+  --bg-raised: #24262b;
+  --bg-code: #191a1d;
+  --bg-hover: #292b31;
+  --line: #34373d;
+  --line-soft: #2b2d33;
+  --tx: #edeef1;
+  --tx-2: #aeb0b6;
+  --tx-3: #7c7e86;
+  --accent: #5cc7cd;
+  --accent-2: #9fe0e4;
+  --accent-dim: rgba(92, 199, 205, 0.15);
+  --amber: #e6ad5f;
+  --amber-dim: rgba(230, 173, 95, 0.14);
+  --red: #e0533d;
+  --red-dim: rgba(224, 83, 61, 0.12);
+  --green: #4cc266;
+  --green-dim: rgba(76, 194, 102, 0.16);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* ── the app's density and chrome ─────────────────────────────────── */
+body { font-size: 14px; letter-spacing: -0.005em; }
+
+.hd { backdrop-filter: saturate(1.2) blur(12px); }
+.brand { font-weight: 600; letter-spacing: -0.01em; }
+/* the version reads as a chip, the way ports do in the app */
+.ver { font-family: var(--mono); font-size: 10.5px; border-radius: 5px; padding: 3px 7px; background: var(--bg-sunken); }
+.search { border-radius: 7px; height: 30px; }
+.ib { border-radius: 7px; width: 30px; height: 30px; }
+
+/* navigation: uppercase micro-labels and a teal rail on the active row, both
+   straight out of the sidebar */
+.navgrp__t { font-size: 9.5px; letter-spacing: 0.09em; }
+.navgrp li a { border-radius: 6px; font-size: 13px; padding: 4px 9px; }
+.navgrp li a.on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+  border-radius: 0 6px 6px 0;
+}
+
+/* headings: tighter, and the section rule is a hairline like the app's */
+.doc h1 { font-size: 30px; letter-spacing: -0.9px; font-weight: 640; }
+.doc h2 { font-size: 20px; letter-spacing: -0.4px; }
+.doc h3 { font-size: 15.5px; }
+.doc p { line-height: 1.6; }
+
+/* code + inline mono: JetBrains Mono, chip-shaped, the way ports and branches
+   render in the product */
+.doc code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  border-radius: 5px;
+  padding: 1px 5px;
+  background: var(--bg-code);
+  border-color: var(--line-soft);
+}
+.code { border-radius: 8px; }
+.code pre { padding: 13px 15px; }
+.code pre code { font-family: var(--mono); font-size: 12px; line-height: 1.6; }
+.code[data-lang]::before { font-family: var(--mono); letter-spacing: 0.02em; }
+
+/* tables: the overview's geometry — quiet header, hairline rows */
+table { font-size: 13px; }
+th { font-size: 11.5px; letter-spacing: 0.02em; text-transform: none; }
+td, th { padding: 8px 12px; }
+.tablewrap { border-radius: 8px; }
+
+/* callouts: the app's alert shape, a 2px accent edge and a dim wash */
+.callout { border-radius: 7px; border-left-width: 2px; padding: 12px 14px; }
+.callout__t { font-size: 10.5px; letter-spacing: 0.07em; }
+
+/* screenshots sit on the sunken surface, like panels in the app */
+.shot__img { border-radius: 8px; }
+
+.card { border-radius: 9px; }
+.card b { font-size: 14px; }
+.pn { border-radius: 8px; }
+
+/* the search field's ⌘K hint, monospaced like every key hint in the product */
+.search input::placeholder { font-family: var(--sans); }
+.results b { font-size: 13px; }
+.results span { font-family: var(--mono); font-size: 11px; }

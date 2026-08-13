@@ -1,0 +1,173 @@
+/* Skin: editorial — a manual you read, not a reference you scan.
+ *
+ * Same information, slower pace: a wider measure, larger body type, real
+ * paragraph rhythm, and headings set in the system serif (New York on macOS,
+ * Georgia elsewhere — all local, no webfont fetched). Canopy's teal stays as
+ * the one accent so it still belongs to the product. */
+
+@font-face {
+  font-family: "Inter Variable";
+  src: url("assets/fonts/inter-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono Variable";
+  src: url("assets/fonts/jetbrains-mono-variable-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --sans: "Inter Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --serif: ui-serif, "New York", Charter, Georgia, "Iowan Old Style", serif;
+  --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* warm paper rather than clinical white */
+  --bg: #fdfcfa;
+  --bg-sunken: #f5f2ed;
+  --bg-raised: #fffefc;
+  --bg-code: #f4f1ec;
+  --bg-hover: #ebe7e0;
+  --line: #e2ddd4;
+  --line-soft: #ece8e1;
+  --tx: #1c1a17;
+  --tx-2: #4d4842;
+  --tx-3: #7d766c;
+  --accent: #0c7f86;
+  --accent-2: #085f65;
+  --accent-dim: #e4f2f2;
+  --amber: #8f6212;
+  --amber-dim: #faf1e0;
+  --red: #a83c2c;
+  --red-dim: #faeeeb;
+  --green: #196b46;
+  --green-dim: #e9f4ed;
+  --shadow: 0 1px 2px rgba(40, 30, 20, 0.05), 0 10px 26px rgba(40, 30, 20, 0.07);
+
+  --hd-h: 58px;
+  --side-w: 250px;
+  --toc-w: 190px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1a1917;
+    --bg-sunken: #151413;
+    --bg-raised: #211f1d;
+    --bg-code: #171614;
+    --bg-hover: #2a2724;
+    --line: #332f2b;
+    --line-soft: #272421;
+    --tx: #efece7;
+    --tx-2: #b8b2a9;
+    --tx-3: #8a837a;
+    --accent: #67cbd0;
+    --accent-2: #96e0e3;
+    --accent-dim: rgba(103, 203, 208, 0.14);
+    --amber: #e3b06a;
+    --amber-dim: rgba(227, 176, 106, 0.13);
+    --red: #e37f6c;
+    --red-dim: rgba(227, 127, 108, 0.13);
+    --green: #67c48d;
+    --green-dim: rgba(103, 196, 141, 0.14);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1a1917;
+  --bg-sunken: #151413;
+  --bg-raised: #211f1d;
+  --bg-code: #171614;
+  --bg-hover: #2a2724;
+  --line: #332f2b;
+  --line-soft: #272421;
+  --tx: #efece7;
+  --tx-2: #b8b2a9;
+  --tx-3: #8a837a;
+  --accent: #67cbd0;
+  --accent-2: #96e0e3;
+  --accent-dim: rgba(103, 203, 208, 0.14);
+  --amber: #e3b06a;
+  --amber-dim: rgba(227, 176, 106, 0.13);
+  --red: #e37f6c;
+  --red-dim: rgba(227, 127, 108, 0.13);
+  --green: #67c48d;
+  --green-dim: rgba(103, 196, 141, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* ── a reading measure, not a scanning one ───────────────────────── */
+body { font-size: 16px; line-height: 1.72; }
+.main { padding: 46px 40px 90px; gap: 44px; }
+.doc { max-width: 720px; }
+
+.brand { font-family: var(--serif); font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+.brand__d { font-family: var(--sans); font-size: 13px; }
+
+.doc h1 {
+  font-family: var(--serif);
+  font-size: 40px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+/* the standfirst: the first paragraph carries the page's promise */
+.doc h1 + p {
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--tx-2);
+  margin-bottom: 30px;
+}
+.doc h2 {
+  font-family: var(--serif);
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-top: 52px;
+  padding-top: 0;
+  border-top: 0;
+}
+.doc h3 { font-family: var(--serif); font-size: 20px; font-weight: 600; margin-top: 34px; }
+.doc h4 { font-size: 15px; }
+.doc p { margin-bottom: 18px; }
+.doc ul, .doc ol { margin-bottom: 20px; }
+.doc li { margin: 7px 0; }
+.doc hr { margin: 40px 0; }
+
+/* navigation recedes so the page is the object on screen */
+.side { padding-top: 28px; }
+.navgrp__t { font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.1em; }
+.navgrp li a { font-size: 14px; padding: 5px 10px; border-radius: 6px; }
+.navgrp li a.on { background: none; color: var(--accent); font-weight: 600; }
+.toc__t { letter-spacing: 0.1em; }
+.toc li a { font-size: 13px; }
+
+/* code stays mono and quiet — it's evidence inside an argument */
+.doc code { font-family: var(--mono); font-size: 0.83em; background: var(--bg-code); border: 0; padding: 2px 6px; border-radius: 4px; }
+.code { border-radius: 6px; background: var(--bg-code); }
+.code pre { padding: 16px 18px; }
+.code pre code { font-family: var(--mono); font-size: 13px; line-height: 1.7; }
+
+table { font-size: 14.5px; }
+th, td { padding: 11px 15px; }
+th { font-size: 13px; font-weight: 600; }
+
+/* a callout reads as an aside in the margin of a book */
+.callout { border-radius: 4px; border-left-width: 2px; padding: 16px 20px; margin-bottom: 22px; }
+.callout__t { font-family: var(--sans); font-size: 11px; letter-spacing: 0.08em; }
+.callout p { font-size: 15px; }
+
+blockquote { font-family: var(--serif); font-size: 17px; font-style: italic; }
+
+.shot { margin: 10px 0 30px; }
+.shot__img { border-radius: 4px; }
+.shot figcaption { font-family: var(--serif); font-style: italic; font-size: 14px; text-align: center; margin-top: 12px; }
+
+.card b { font-family: var(--serif); font-size: 17px; font-weight: 600; }
+.card span { font-size: 13.5px; }
+.pn b { font-family: var(--serif); font-size: 16px; }

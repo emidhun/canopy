@@ -7,6 +7,11 @@
 
 # Canopy — Documentation
 
+> **These pages predate the redesign.** They describe the older UI — service cards, a log tab per
+> service, the five-step add-repository wizard — none of which the current build has. The maintained
+> documentation is the site in [`../website/`](../website/); build it with
+> `node website/scripts/build.mjs` and open `website/site/index.html`.
+
 Canopy is a lightweight **menu-bar git-worktree + dev-service manager**. It discovers
 every worktree of your registered repos, provisions each one (deps, isolated database, ports),
 and lets you start/stop services, watch logs, manage databases, and change ports — from a tray
