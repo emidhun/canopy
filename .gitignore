@@ -29,7 +29,3 @@ dist-ssr
 
 # Private working notes — never committed
 private-notes/
-
-# Docs-site build output (regenerate with: node website/scripts/build.mjs)
-website/site/
-website/preview/

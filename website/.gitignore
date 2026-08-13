@@ -1,9 +1,0 @@
-# Build output — reproducible from content/ + theme/ + assets/ with
-# `node scripts/build.mjs`, and rebuilt by the Pages workflow on every push.
-# Committing it would duplicate every screenshot in the history.
-site/
-
-.DS_Store
-*.log
-node_modules/
-preview/
