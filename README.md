@@ -144,6 +144,25 @@ environment gotchas that have bitten us (Node 18 vs 22, `pg_dump` versioning, th
 
 ## Documentation
 
+The full documentation is a static site in **[`website/`](website/)** — 31 pages covering install,
+onboarding, every feature, both settings scopes, the config-file reference, worked examples, and
+building from source, with screenshots of every screen in light and dark.
+
+```sh
+node website/scripts/build.mjs   # content/*.md → website/site/
+node website/scripts/serve.mjs   # preview on http://localhost:4180
+```
+
+It has no dependencies: the content is Markdown and the generator is plain Node. Pushing a change
+under `website/` publishes it through `.github/workflows/docs.yml`. See
+[website/README.md](website/README.md) for how to write a page, add a screenshot, or change the look.
+
+<details>
+<summary>Earlier per-topic notes in <code>docs/</code></summary>
+
+These predate the redesign and describe the older UI (service cards, per-service log tabs, the
+five-step wizard). Kept for now; `website/` is the current source of truth.
+
 | Doc | What it covers |
 |---|---|
 | [docs/README.md](docs/README.md) | Documentation index + 60-second mental model |
@@ -156,6 +175,8 @@ environment gotchas that have bitten us (Node 18 vs 22, `pg_dump` versioning, th
 | [docs/distribution.md](docs/distribution.md) | Installing the DMG, signing/notarization, why no App Store |
 | [docs/tooljet-config.md](docs/tooljet-config.md) | The ToolJet `.worktreemanager.json` reproduced |
 | [docs/roadmap.md](docs/roadmap.md) | What's done, follow-ups, v2 ideas |
+
+</details>
 
 ---
 
