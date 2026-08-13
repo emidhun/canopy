@@ -17,11 +17,27 @@ export interface Appearance {
   theme: Theme;
   density: Density;
   accent: Accent;
+  /** app-wide text zoom (⌘+ / ⌘- / ⌘0) — multiplies every `--fs-*` token */
+  fontScale: number;
 }
 
 const KEY = "canopy.appearance";
 const THEMES: Theme[] = ["dark", "light", "system"];
 const ACCENTS: Accent[] = ["teal", "green", "amber", "violet"];
+
+// Font zoom is a multiplier on the size ramp, clamped so text stays legible and
+// the layout never collapses. 10% steps land on clean values off the 1.0 base.
+export const FONT_SCALE_MIN = 0.8;
+export const FONT_SCALE_MAX = 1.6;
+export const FONT_SCALE_STEP = 0.1;
+const FONT_SCALE_DEFAULT = 1;
+
+/** Round to one decimal and clamp — keeps repeated nudges off floating dust. */
+function normScale(n: number): number {
+  if (!Number.isFinite(n)) return FONT_SCALE_DEFAULT;
+  const r = Math.round(n * 10) / 10;
+  return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, r));
+}
 
 export function getAppearance(): Appearance {
   try {
@@ -32,12 +48,13 @@ export function getAppearance(): Appearance {
         theme: THEMES.includes(p.theme as Theme) ? (p.theme as Theme) : "dark",
         density: p.density === "compact" ? "compact" : "comfortable",
         accent: ACCENTS.includes(p.accent as Accent) ? (p.accent as Accent) : "teal",
+        fontScale: normScale(typeof p.fontScale === "number" ? p.fontScale : FONT_SCALE_DEFAULT),
       };
     }
   } catch {
     /* corrupt or unavailable storage — fall through to defaults */
   }
-  return { theme: "dark", density: "comfortable", accent: "teal" };
+  return { theme: "dark", density: "comfortable", accent: "teal", fontScale: FONT_SCALE_DEFAULT };
 }
 
 /** "system" resolves to the OS scheme; everything else is literal. */
@@ -53,6 +70,19 @@ export function applyAppearance(a: Appearance = getAppearance()): void {
   root.dataset.theme = resolveTheme(a.theme);
   root.dataset.density = a.density;
   root.dataset.accent = a.accent;
+  root.style.setProperty("--font-scale", String(a.fontScale));
+}
+
+/** Bump the app-wide text zoom by whole steps (⌘+ / ⌘-). Persists + applies
+    live across every Canopy window. Returns the resolved scale. */
+export function nudgeFontScale(steps: number): number {
+  const next = normScale(getAppearance().fontScale + steps * FONT_SCALE_STEP);
+  return setAppearance({ fontScale: next }).fontScale;
+}
+
+/** Reset text zoom to 100% (⌘0). */
+export function resetFontScale(): number {
+  return setAppearance({ fontScale: FONT_SCALE_DEFAULT }).fontScale;
 }
 
 /** Persist + apply live, and notify this window's UI and the app's others. */

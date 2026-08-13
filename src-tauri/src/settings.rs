@@ -45,7 +45,8 @@ pub struct RepoCfg {
     pub id: String,
     pub name: String,
     pub path: String,
-    /// Directory where new worktrees are created (e.g. <repo>-worktrees)
+    /// Directory where new worktrees are created. Absolute, or relative to the
+    /// repo root (e.g. ".worktrees"). Empty falls back to `<repo>/.worktrees`.
     pub worktree_dir: String,
     /// Command run in the worktree root for "Reset DB" (empty = action hidden)
     pub reset_db: String,

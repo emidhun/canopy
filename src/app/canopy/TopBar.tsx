@@ -4,7 +4,7 @@
    global entry point (⌘K), right is the cross-worktree signal — how much is
    running, how many agents, and what needs a human. */
 import { useEffect, useRef, type RefObject } from "react";
-import { Bell, Check, ChevRight, Chevron, Cube, Fork, Refresh, Settings, Sparkle, Alert, X } from "../../icons";
+import { Bell, Check, ChevRight, Cube, Fork, Refresh, Settings, Sparkle, Alert, X } from "../../icons";
 import type { AttnItem } from "../nextAction";
 import type { RepoNode, WorktreeNode } from "../../types";
 
@@ -49,14 +49,13 @@ export function TopBar({
         </div>
         <span className="cxs-tdiv" />
         {repo && wt && (
-          <button className="cxs-crumb" onClick={onPalette} title="Switch worktree  (⌘K)">
+          <div className="cxs-crumb">
             <span className="rp">{repo.name}</span>
             <span className="rpchev">
               <ChevRight size={11} />
             </span>
             <span className="br">{wt.branch}</span>
-            <Chevron size={11} />
-          </button>
+          </div>
         )}
       </div>
 
@@ -167,10 +166,14 @@ export function AttentionPop({
                 <span className="tt">{a.title}</span>
                 <span className="wt">{a.wt}</span>
               </span>
-              <span className="go">
-                {a.act}
-                <ChevRight size={11} />
-              </span>
+              {/* a completion notice is dismissed by the X alone — showing a
+                  second "Dismiss ›" affordance beside it is redundant */}
+              {a.kind !== "info" && (
+                <span className="go">
+                  {a.act}
+                  <ChevRight size={11} />
+                </span>
+              )}
             </button>
             {a.noticeId && (
               <button className="cxs-attn-x" title="Dismiss" aria-label={`Dismiss ${a.title}`} onClick={() => onDismiss(a)}>

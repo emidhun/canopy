@@ -134,11 +134,16 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
   }, [mode, picked, base, existing, existingKind, branches]);
 
   const branch = payload.branch;
-  // create_worktree: `${worktree_dir || repo.path + "-worktrees"}/${sanitize_branch(branch)}`
+  // Mirror create_worktree's resolution: empty → `<repo>/.worktrees`, a relative
+  // dir is taken relative to the repo, an absolute dir is used verbatim.
+  const worktreeRoot = (() => {
+    if (!activeRepo) return "";
+    const d = (worktreeDir ?? "").trim();
+    if (!d) return `${activeRepo.path}/.worktrees`;
+    return d.startsWith("/") ? d : `${activeRepo.path}/${d}`;
+  })();
   const destination =
-    ok && worktreeDir !== null && activeRepo
-      ? `${worktreeDir.trim() || `${activeRepo.path}-worktrees`}/${sanitizeBranch(branch)}`
-      : null;
+    ok && worktreeDir !== null && activeRepo ? `${worktreeRoot}/${sanitizeBranch(branch)}` : null;
   /* The key the in-progress row and the failure notice are filed under. It is
      the destination when we can predict it — that is what worktree:op events
      are keyed by, so the row can show live steps. When the repo's settings

@@ -107,14 +107,18 @@
   --mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --ui: var(--sans);
 
+  /* app-wide text zoom (⌘+ / ⌘- / ⌘0) — appearance.ts sets this on <html>;
+     every size below multiplies by it so one knob scales the whole ramp */
+  --font-scale: 1;
+
   /* size ramp — dense by design; 9.5px is legible only in caps + tracking */
-  --fs-label: 9.5px;
-  --fs-micro: 10.5px;
-  --fs-small: 11.5px;
-  --fs-body: 12.5px;
-  --fs-md: 13.5px;
-  --fs-lg: 15px;
-  --fs-xl: 19px;
+  --fs-label: calc(9.5px * var(--font-scale));
+  --fs-micro: calc(10.5px * var(--font-scale));
+  --fs-small: calc(11.5px * var(--font-scale));
+  --fs-body: calc(12.5px * var(--font-scale));
+  --fs-md: calc(13.5px * var(--font-scale));
+  --fs-lg: calc(15px * var(--font-scale));
+  --fs-xl: calc(19px * var(--font-scale));
 
   --lh-tight: 1.35;
   --lh-body: 1.55;
@@ -199,8 +203,11 @@
   --dot: 6px;
   --dot-sm: 5px;
 
-  --w-sidebar: 238px;
-  --w-sidebar-narrow: 210px; /* below the 1180px breakpoint */
+  /* Sidebar tracks the text zoom (⌘+/⌘-) so labels keep breathing room, but
+     only a little: it grows to a hard cap (~1.2×) and won't shrink past a floor,
+     so the panel never dominates the window or squeezes to nothing. */
+  --w-sidebar: clamp(214px, calc(238px * var(--font-scale)), 288px);
+  --w-sidebar-narrow: clamp(198px, calc(210px * var(--font-scale)), 254px); /* below the 1180px breakpoint */
   /* Declared by the handoff's layout.css but referenced by none of its
      screens. Carried for token parity; nothing consumes it yet. */
   --w-rail-collapsed: 52px;

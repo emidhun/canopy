@@ -856,6 +856,9 @@ const KEYS: [string, string, string][] = [
   ["Toggle worktree list", "⌘ B", "Global"],
   ["Cross-worktree overview", "⌘ O", "Global"],
   ["Settings", "⌘ ,", "Global"],
+  ["Increase text size", "⌘ +", "Global"],
+  ["Decrease text size", "⌘ -", "Global"],
+  ["Reset text size", "⌘ 0", "Global"],
   // worktree
   ["Run next action", "⏎", "Worktree"],
   ["Switch branch", "⌘ \\", "Worktree"],
@@ -1060,6 +1063,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const showToast = useStore((s) => s.showToast);
   const tree = useStore((s) => s.tree);
   const bumpSettings = useStore((s) => s.bumpSettings);
+  const settingsRev = useStore((s) => s.settingsRev);
   const selKey = useStore((s) => s.selKey);
 
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -1113,6 +1117,25 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     }).catch((e) => showToast(`Failed to load settings: ${e}`));
   }
   useEffect(load, []);
+
+  // Sync (and Save) bump settingsRev. When it changes while Settings is open,
+  // re-read each repo's `.worktreemanager.json` from disk so Setup, Files and
+  // Migrate reflect edits made outside the app — but never clobber a repo the
+  // user is mid-edit on (still in dirtyRepos with unsaved changes).
+  const didMount = useRef(false);
+  useEffect(() => {
+    if (!didMount.current) { didMount.current = true; return; }
+    if (!hasBackend() || !settings) return;
+    settings.repos.forEach((r) => {
+      if (dirtyRepos.current.has(r.id)) return;
+      ipc.getRepoConfig(r.id).then((c) => {
+        setCardsByRepo((m) => ({ ...m, [r.id]: toCards(c.provision) }));
+        setSetupByRepo((m) => ({ ...m, [r.id]: c.setup }));
+        setExtrasByRepo((m) => ({ ...m, [r.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
+      }).catch(() => {});
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsRev]);
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {

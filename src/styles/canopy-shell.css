@@ -144,19 +144,12 @@
   border-radius: var(--r-md);
   border: 0;
   background: none;
-  cursor: pointer;
+  /* identity, not a control — no cursor/hover, it isn't clickable */
   color: var(--text-secondary);
   font-family: var(--sans);
   font-size: var(--fs-body);
   min-width: 0;
   flex: 0 1 auto;
-  transition:
-    background var(--dur-fast),
-    color var(--dur-fast);
-}
-.cxs-crumb:hover {
-  background: var(--btn);
-  color: var(--text-primary);
 }
 .cxs-crumb .rp {
   color: var(--text-tertiary);
