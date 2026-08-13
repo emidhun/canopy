@@ -89,9 +89,22 @@ before first paint, so the two sets differ only in palette. Environment: `CANOPY
 
 ## Deploying
 
-`node scripts/build.mjs` produces a directory of relative-linked static HTML — any host works.
-For GitHub Pages, see the workflow in `.github/workflows/pages.yml` (and note the `.nojekyll`
-step, without which Pages drops files it does not recognise).
+`node scripts/build.mjs` produces a directory of relative-linked static HTML — every link and
+asset path is relative, so it works from any host and from any sub-path (`user.github.io/canopy/`
+needs no base-path config).
+
+**GitHub Pages, free.** The workflow in [`.github/workflows/docs.yml`](../.github/workflows/docs.yml)
+builds `website/` on the runner and publishes `site/` — nothing is committed, and there is nothing
+to install (the content is Markdown, the generator is plain Node). It runs on any push to `main`
+that touches `website/`, and can be triggered by hand from the Actions tab. On pull requests it
+builds and asserts the output but does not deploy.
+
+One-time setup on the repository: **Settings → Pages → Build and deployment → Source: GitHub
+Actions**. After the first run the site is live at `https://emidhun.github.io/canopy/`. Pages is
+free for public repositories (and included on every plan for private ones).
+
+The workflow ends with a `touch site/.nojekyll` step — without it Pages runs the output through
+Jekyll and drops the files and folders it does not recognise.
 
 ## Conventions
 

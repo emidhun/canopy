@@ -3,6 +3,10 @@
 # Committing it would duplicate every screenshot in the history.
 site/
 
+# Raw demo recordings + frame checkpoints from scripts/demo.mjs. The finished
+# GIFs live in docs/assets/ (committed); these webms are just their source.
+assets/demo/
+
 .DS_Store
 *.log
 node_modules/
