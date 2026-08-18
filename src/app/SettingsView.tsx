@@ -140,7 +140,7 @@ function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], mi
 }
 
 let agentSeq = 0;
-const emptyAgent = (): AgentCfg => ({ id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true });
+const emptyAgent = (): AgentCfg => ({ id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true, waitingPatterns: "" });
 const emptyService = (): ServiceCfg => ({ id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {} });
 function migrateAgents(r: RepoCfg): RepoCfg {
   if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
@@ -171,7 +171,10 @@ const MOCK: Settings = {
     ],
     customCommands: [{ label: "Lint", command: "pnpm lint", group: "Checks" }, { label: "Unit tests", command: "pnpm test --run", group: "Checks" }],
     agentCommand: "claude",
-    agents: [{ id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true }, { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true }],
+    agents: [
+      { id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true, waitingPatterns: "" },
+      { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true, waitingPatterns: "" },
+    ],
   }],
 };
 const MOCK_CARDS: ProvisionEntry[] = [
@@ -345,6 +348,20 @@ function AgentsPage({ repo, patchRepo, markDirty, flash }: PageProps) {
                   <div className="tglrow" style={{ borderTop: 0 }}>
                     <span className="tt"><b>Prompt on launch</b><span>Append Canopy's structured handoff as the first prompt.</span></span>
                     <Toggle on={a.promptOnLaunch} onClick={() => patch(a.id, { promptOnLaunch: !a.promptOnLaunch })} />
+                  </div>
+                  <div className="fgrid">
+                    <span className="lb">Waiting phrases</span>
+                    <textarea
+                      className="inp mono"
+                      rows={3}
+                      value={a.waitingPatterns}
+                      placeholder={"Do you want to proceed?\nApprove this edit"}
+                      onChange={(e) => patch(a.id, { waitingPatterns: e.target.value })}
+                    />
+                  </div>
+                  <div className="hint">
+                    One phrase per line. Canopy already recognises the common prompt shapes —
+                    add a line only when this CLI asks in a way it misses.
                   </div>
                 </div>
               )}

@@ -66,12 +66,13 @@ export type AgentState = "busy" | "waiting" | "idle";
 
 /** What an agent session is doing.
 
-    TODO(#54): "waiting" is never returned — the backend cannot yet distinguish
-    an agent that is working from one blocked on a prompt, because `LaneSession`
-    only knows `running`. Every render path for "waiting" is implemented and
-    styled; wiring the detector up is a change to this function alone. */
+    A stopped session is idle. A running one is whatever the backend's PTY
+    detector last reported — defaulting to "busy" until the first
+    `terminal:state` arrives, so a freshly launched agent is never announced as
+    needing a human before it has printed anything. */
 export function agentState(s: LaneSession): AgentState {
-  return s.running ? "busy" : "idle";
+  if (!s.running) return "idle";
+  return s.activity ?? "busy";
 }
 
 /** True once the backend can tell us a worktree has never been provisioned.

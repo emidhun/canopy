@@ -37,6 +37,9 @@ export interface AgentCfg {
   name: string;
   command: string;
   promptOnLaunch: boolean;
+  /** extra literal snippets (one per line) that mean this agent is blocked on
+      a human, on top of the built-in prompt shapes */
+  waitingPatterns: string;
 }
 
 export interface RepoCfg {
@@ -252,6 +255,13 @@ export interface TerminalDataEvent {
 export interface TerminalExitEvent {
   id: string;
 }
+/** A live agent PTY is either working or blocked on a human. "idle" is the
+    absence of a running session, which the store derives from `running` — the
+    backend never reports it, because nothing can observe it. */
+export interface TerminalStateEvent {
+  id: string;
+  state: "busy" | "waiting";
+}
 /** Scrollback snapshot + the cursor it ends at (race-free rehydrate). */
 export interface TerminalSnapshot {
   buffer: string;
@@ -277,6 +287,8 @@ export const on = {
     listen<TerminalDataEvent>("terminal:data", (e) => cb(e.payload)),
   terminalExit: (cb: (e: TerminalExitEvent) => void): Promise<UnlistenFn> =>
     listen<TerminalExitEvent>("terminal:exit", (e) => cb(e.payload)),
+  terminalState: (cb: (e: TerminalStateEvent) => void): Promise<UnlistenFn> =>
+    listen<TerminalStateEvent>("terminal:state", (e) => cb(e.payload)),
 };
 
 /** Structured backend error — every command rejects with `{ code, message }`. */
