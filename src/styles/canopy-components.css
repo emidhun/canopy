@@ -195,6 +195,13 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-kv dt{color:var(--text-tertiary)}
 .cx-kv dd{margin:0;font:var(--fs-small) var(--mono);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cx-kv dd em{font-style:normal;color:var(--action-primary)}
+/* Resolved service environment: a scrolling list, since a real .env runs to
+   dozens of keys and the modal must not grow past the viewport. */
+.cx-kv--env{max-height:190px;overflow-y:auto;gap:var(--sp-tight) var(--sp-4)}
+.cx-kv--env .cx-kv__row{display:contents}
+.cx-kv--env dt{font:var(--fs-small) var(--mono);color:var(--text-tertiary)}
+/* a withheld value reads as withheld, never as the literal characters */
+.cx-kv__masked{color:var(--text-tertiary);letter-spacing:.5px}
 
 /* ── Coming soon ───────────────────────────────────────────────────
    For designed surfaces whose backend does not exist yet. A whole screen

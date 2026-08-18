@@ -83,6 +83,20 @@ export interface RepoConfigFile {
   migrate: string[];
 }
 
+/** One resolved environment variable of a service.
+
+    `spawn` is what Canopy puts in the child's environment; `dotenv` is what
+    setup provisioned into a .env the process loads itself. Spawn wins on a
+    collision, because a dotenv loader does not overwrite an already-set
+    process variable. */
+export interface EnvEntry {
+  key: string;
+  /** masked when the key looks secret, or a URL carried credentials */
+  value: string;
+  source: "spawn" | "dotenv";
+  masked: boolean;
+}
+
 export interface Branches {
   local: string[];
   remote: string[];
@@ -171,6 +185,8 @@ export const ipc = {
     invoke<void>("write_worktree_context", { wtPath, contents }),
   resolveAgentCommand: (wtKey: string) => invoke<string>("resolve_agent_command", { wtKey }),
 
+  /** every variable the service runs with, ordered spawn-first and masked */
+  serviceEnv: (svcKey: string) => invoke<EnvEntry[]>("service_env", { svcKey }),
   serviceStart: (svcKey: string) => invoke<void>("service_start", { svcKey }),
   serviceStop: (svcKey: string) => invoke<void>("service_stop", { svcKey }),
   serviceRestart: (svcKey: string) => invoke<void>("service_restart", { svcKey }),

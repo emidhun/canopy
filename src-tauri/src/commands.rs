@@ -408,6 +408,14 @@ pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> Stri
     }
 }
 
+/// Every environment variable a service runs with, with its source, masked.
+/// Answers "why is this talking to the wrong database?" without printing the
+/// repo's secrets into a modal.
+#[tauri::command]
+pub fn service_env(app: AppHandle, svc_key: String) -> Result<Vec<services::EnvEntry>, CanopyError> {
+    services::resolved_env(&app, &svc_key).map_err(CanopyError::not_found)
+}
+
 #[tauri::command]
 pub async fn service_start(app: AppHandle, svc_key: String) -> Result<(), CanopyError> {
     services::start_service(&app, &svc_key).await.map_err(CanopyError::process)
