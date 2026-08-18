@@ -822,6 +822,11 @@ pub async fn create_worktree(
     })
     .await;
 
+    // Record the outcome before the rescan, so the tree this create publishes
+    // already carries the marker rather than reading as unprovisioned until
+    // the next 60s refresh.
+    crate::setup::write_setup_marker(&wt_path, setup_result.is_ok());
+
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
 
@@ -856,11 +861,15 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     let app3 = app.clone();
     let wt3 = wt_key.clone();
     emit_op(&app, &wt_key, "create", "progress", "running setup…");
-    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
+    let result = crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
         emit_op(&app3, &wt3, "create", "progress", line)
     })
-    .await
-    {
+    .await;
+    crate::setup::write_setup_marker(&wt_key, result.is_ok());
+    // the marker is part of the tree, so republish it rather than making the
+    // caller wait for the next background refresh
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    match result {
         Ok(()) => {
             emit_op(&app, &wt_key, "create", "done", "setup complete");
             Ok(())

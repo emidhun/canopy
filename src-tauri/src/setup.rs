@@ -208,6 +208,127 @@ pub fn write_repo_config(repo_path: &str, provision: &[ProvisionFile], setup: &[
     std::fs::write(&path, body + "\n").map_err(|e| e.to_string())
 }
 
+// ── the setup marker ──────────────────────────────────────────────────
+//
+// Whether a worktree has ever been provisioned is a *durable* fact about the
+// worktree, not about this run of Canopy — so it lives next to the worktree
+// (`.canopy/setup.json`) rather than in app state. That survives a restart, a
+// `get_tree` rescan, and a Canopy reinstall, and it is greppable when
+// debugging a repo by hand.
+//
+// `.canopy/` is already the worktree-local Canopy directory (see
+// `write_worktree_context`) and self-ignores via its own `.gitignore`, so the
+// marker never shows up in `git status`.
+
+/// The marker's on-disk shape. `ok` records whether the run that wrote it
+/// succeeded — a failed setup still leaves a marker, so the UI can say "last
+/// run failed" instead of the much weaker "never provisioned".
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupMarker {
+    /// schema version, so a future field can be added without a silent misread
+    version: u32,
+    /// unix seconds when the run finished
+    ran_at: i64,
+    ok: bool,
+}
+
+/// How we know a worktree was provisioned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SetupSource {
+    /// read from `.canopy/setup.json` — authoritative
+    Marker,
+    /// no marker, but every declared provisioned file is already present.
+    /// Worktrees created before the marker existed land here; without this
+    /// they would all claim "never provisioned" and invite a pointless
+    /// re-install of every dependency tree on the machine.
+    Inferred,
+}
+
+/// What Canopy knows about a worktree's provisioning.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupState {
+    /// unix seconds of the recorded run; absent when inferred
+    pub ran_at: Option<i64>,
+    /// did the recorded run succeed (inferred state is always `true` —
+    /// the files exist, so *something* provisioned them)
+    pub ok: bool,
+    pub source: SetupSource,
+}
+
+fn marker_path(wt_path: &str) -> std::path::PathBuf {
+    Path::new(wt_path).join(".canopy").join("setup.json")
+}
+
+/// Record that setup finished for a worktree. Best-effort: setup itself
+/// already succeeded (or failed) by the time this runs, and a marker we
+/// couldn't write must never turn a good run into a reported failure — the
+/// worst case is the worktree reads as unprovisioned and offers a re-run.
+pub fn write_setup_marker(wt_path: &str, ok: bool) {
+    let dir = Path::new(wt_path).join(".canopy");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("setup marker: mkdir {} failed: {e}", dir.display());
+        return;
+    }
+    // keep `.canopy/` out of git the same way write_worktree_context does,
+    // without ever truncating an existing ignore file
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        let _ = std::fs::write(&ignore, "*\n");
+    }
+    let ran_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let marker = SetupMarker { version: 1, ran_at, ok };
+    match serde_json::to_string_pretty(&marker) {
+        Ok(body) => {
+            if let Err(e) = std::fs::write(marker_path(wt_path), body + "\n") {
+                log::warn!("setup marker: write failed for {wt_path}: {e}");
+            }
+        }
+        Err(e) => log::warn!("setup marker: serialize failed: {e}"),
+    }
+}
+
+/// A worktree's provisioning state plus whether its repo declares any
+/// provisioning at all — the pair the tree needs, from a single config read.
+///
+/// Called once per worktree per tree rebuild, so it stays cheap: one small
+/// read for the marker, one for the config, and — only when the marker misses
+/// — an `exists()` per declared provisioned file. No directory walks.
+///
+/// Returns `(state, configured)`. `state == None` means "never provisioned as
+/// far as Canopy can tell"; that is only actionable when `configured` is true.
+pub fn setup_status(wt_path: &str, repo_path: &str) -> (Option<SetupState>, bool) {
+    let cfg = read_config(wt_path, repo_path);
+    let configured = !cfg.provision.is_empty() || !cfg.setup.is_empty();
+
+    if let Ok(txt) = std::fs::read_to_string(marker_path(wt_path)) {
+        if let Ok(m) = serde_json::from_str::<SetupMarker>(&txt) {
+            let state = SetupState { ran_at: Some(m.ran_at), ok: m.ok, source: SetupSource::Marker };
+            return (Some(state), configured);
+        }
+        // a corrupt marker is not evidence of anything — fall through to the
+        // file-presence inference rather than trusting a half-written file
+        log::warn!("setup marker at {wt_path} is unreadable — falling back to file inference");
+    }
+
+    // No usable marker. If the repo declares provisioned files and every one
+    // of them already exists here, provisioning demonstrably happened.
+    let declared: Vec<&ProvisionFile> = cfg.provision.iter().filter(|p| !p.path.trim().is_empty()).collect();
+    if declared.is_empty() {
+        // Nothing to infer from: a setup-commands-only repo leaves no
+        // inspectable trace, so absence of a marker is all we have.
+        return (None, configured);
+    }
+    let all_present = declared.iter().all(|p| Path::new(wt_path).join(&p.path).exists());
+    let state = all_present.then_some(SetupState { ran_at: None, ok: true, source: SetupSource::Inferred });
+    (state, configured)
+}
+
 /// Stable, db-safe per-worktree identifier from the worktree folder name:
 /// lowercased, non-alphanumerics → '_'.
 pub fn wt_slug(wt_path: &str) -> String {
@@ -681,6 +802,70 @@ async fn run_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setup_marker_round_trips_and_infers_for_legacy_worktrees() {
+        let dir = std::env::temp_dir().join("canopy_setup_marker_test_xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        // a repo that declares one provisioned file + a setup command
+        std::fs::write(
+            dir.join(".worktreemanager.json"),
+            r#"{ "provision": [{"path": ".env", "format": "dotenv", "keys": {"A": "1"}}], "setup": ["echo hi"] }"#,
+        )
+        .unwrap();
+
+        // no marker, no provisioned file → never provisioned, but configured
+        let (state, configured) = setup_status(d, d);
+        assert!(state.is_none(), "no marker and no provisioned file = never ran");
+        assert!(configured, "the repo declares provisioning");
+
+        // legacy worktree: the declared file exists but no marker was ever
+        // written — inferred rather than reported as unprovisioned
+        std::fs::write(dir.join(".env"), "A=1\n").unwrap();
+        let (state, _) = setup_status(d, d);
+        let state = state.expect("presence of every declared file infers a run");
+        assert_eq!(state.source, SetupSource::Inferred);
+        assert!(state.ran_at.is_none(), "an inferred run has no timestamp");
+        assert!(state.ok);
+
+        // a real run writes the marker, which outranks the inference
+        write_setup_marker(d, true);
+        let (state, _) = setup_status(d, d);
+        let state = state.expect("marker present");
+        assert_eq!(state.source, SetupSource::Marker, "the marker wins over inference");
+        assert!(state.ran_at.unwrap() > 0, "marker carries a timestamp");
+        assert!(state.ok);
+        assert_eq!(std::fs::read_to_string(dir.join(".canopy/.gitignore")).unwrap(), "*\n", "marker dir self-ignores");
+
+        // a failed run is recorded as a failure, not as "never ran" — the UI
+        // needs to distinguish half-provisioned from untouched
+        write_setup_marker(d, false);
+        let (state, _) = setup_status(d, d);
+        assert!(!state.expect("marker present").ok, "failure is recorded");
+
+        // a corrupt marker falls back to inference rather than being trusted
+        std::fs::write(dir.join(".canopy/setup.json"), "{ truncated").unwrap();
+        let (state, _) = setup_status(d, d);
+        assert_eq!(state.expect("falls back").source, SetupSource::Inferred);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn setup_status_reports_unconfigured_repos() {
+        let dir = std::env::temp_dir().join("canopy_setup_unconfigured_test_xyz");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+        // no .worktreemanager.json at all → nothing to provision, so a missing
+        // marker must NOT read as an actionable "never provisioned"
+        let (state, configured) = setup_status(d, d);
+        assert!(state.is_none());
+        assert!(!configured, "no config = nothing to run");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn wt_slug_is_db_safe() {
