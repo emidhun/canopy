@@ -817,7 +817,7 @@ pub async fn create_worktree(
     // The worktree exists either way; surface setup failure but keep the tree fresh.
     let app3 = app.clone();
     let wt_path3 = wt_path.clone();
-    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
+    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, false, move |line| {
         emit_op(&app3, &wt_path3, "create", "progress", line)
     })
     .await;
@@ -840,7 +840,7 @@ pub async fn create_worktree(
 /// Manually (re)run a worktree's setup commands — for worktrees created before
 /// setup was configured, or to retry after a failure.
 #[tauri::command]
-pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+pub async fn run_worktree_setup(app: AppHandle, wt_key: String, dry_run: bool) -> Result<(), CanopyError> {
     let ctx = app
         .state::<AppState>()
         .wt_context(&wt_key)
@@ -855,14 +855,14 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, is_main);
     let app3 = app.clone();
     let wt3 = wt_key.clone();
-    emit_op(&app, &wt_key, "create", "progress", "running setup…");
-    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
+    emit_op(&app, &wt_key, "create", "progress", if dry_run { "dry run — nothing will be executed" } else { "running setup…" });
+    match crate::setup::run_setup(&wt_key, &repo_path, &vars, dry_run, move |line| {
         emit_op(&app3, &wt3, "create", "progress", line)
     })
     .await
     {
         Ok(()) => {
-            emit_op(&app, &wt_key, "create", "done", "setup complete");
+            emit_op(&app, &wt_key, "create", "done", if dry_run { "dry run complete — nothing was executed" } else { "setup complete" });
             Ok(())
         }
         Err(e) => {
@@ -1293,12 +1293,50 @@ pub struct ProvisionEntry {
     pub keys: Vec<(String, String)>,
 }
 
+/// One setup task as exchanged with the Settings UI.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupTaskEntry {
+    pub cmd: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPolicyEntry {
+    #[serde(default)]
+    pub continue_on_failure: bool,
+    #[serde(default)]
+    pub timeout_secs: u64,
+}
+
+impl From<crate::setup::SetupTask> for SetupTaskEntry {
+    fn from(t: crate::setup::SetupTask) -> Self {
+        SetupTaskEntry { cmd: t.cmd, cwd: t.cwd, enabled: t.enabled }
+    }
+}
+
+impl From<SetupTaskEntry> for crate::setup::SetupTask {
+    fn from(e: SetupTaskEntry) -> Self {
+        crate::setup::SetupTask { cmd: e.cmd, cwd: e.cwd, enabled: e.enabled }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoConfig {
     /// files provisioned into each new worktree (the root `.env` is one entry)
     pub provision: Vec<ProvisionEntry>,
-    pub setup: Vec<String>,
+    pub setup: Vec<SetupTaskEntry>,
+    #[serde(default)]
+    pub setup_policy: SetupPolicyEntry,
     /// read-only in the Settings UI today — surfaced so the preview/export
     /// match what's actually on disk
     #[serde(default)]
@@ -1332,7 +1370,11 @@ pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, Ca
     let c = crate::setup::read_repo_config(&path);
     Ok(RepoConfig {
         provision: c.provision.into_iter().map(Into::into).collect(),
-        setup: c.setup,
+        setup: c.setup.into_iter().map(Into::into).collect(),
+        setup_policy: SetupPolicyEntry {
+            continue_on_failure: c.setup_policy.continue_on_failure,
+            timeout_secs: c.setup_policy.timeout_secs,
+        },
         teardown: c.teardown,
         migrate: c.migrate,
     })
@@ -1351,10 +1393,21 @@ pub fn save_text_file(path: String, contents: String) -> Result<(), CanopyError>
 
 /// Write provisioned files + setup commands to the repo's `.worktreemanager.json`.
 #[tauri::command]
-pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<ProvisionEntry>, setup: Vec<String>) -> Result<(), CanopyError> {
+pub fn save_repo_config(
+    app: AppHandle,
+    repo_id: String,
+    provision: Vec<ProvisionEntry>,
+    setup: Vec<SetupTaskEntry>,
+    setup_policy: Option<SetupPolicyEntry>,
+) -> Result<(), CanopyError> {
     let path = repo_path(&app, &repo_id)?;
     let files: Vec<crate::setup::ProvisionFile> = provision.into_iter().map(Into::into).collect();
-    crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
+    let tasks: Vec<crate::setup::SetupTask> = setup.into_iter().map(Into::into).collect();
+    let policy = setup_policy.map(|p| crate::setup::SetupPolicy {
+        continue_on_failure: p.continue_on_failure,
+        timeout_secs: p.timeout_secs,
+    });
+    crate::setup::write_repo_config(&path, &files, &tasks, policy.as_ref()).map_err(CanopyError::config)
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.

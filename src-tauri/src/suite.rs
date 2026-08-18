@@ -167,7 +167,7 @@ pub fn run(app: AppHandle, repo_id: String) {
                 } else {
                     info(format!("running setup (npm install) on {branch} — several minutes…"));
                     let started = Instant::now();
-                    match commands::run_worktree_setup(app.clone(), wt_key.clone()).await {
+                    match commands::run_worktree_setup(app.clone(), wt_key.clone(), false).await {
                         Ok(()) => {
                             let deps = std::path::Path::new(wt_key).join("frontend/node_modules").exists();
                             if deps {

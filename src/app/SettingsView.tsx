@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getVersion } from "@tauri-apps/api/app";
-import { errText, hasBackend, ipc, type AgentCfg, type CustomCmd, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type ServiceCfg, type Settings } from "../ipc";
+import { errText, hasBackend, ipc, type AgentCfg, type CustomCmd, type ProvisionEntry, type ProvisionFormat, type RepoCfg, type SetupPolicy, type SetupTask, type ServiceCfg, type Settings } from "../ipc";
 import { useStore } from "../store";
 import Modal, { Hint, Spacer } from "./canopy/Modal";
 import {
@@ -122,7 +122,14 @@ function fromCards(cards: FileCardT[]): ProvisionEntry[] {
     keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
   }));
 }
-function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
+/** Serialize a setup task the way the backend does: a plain task stays a bare
+    string, so turning one option on for one task doesn't rewrite every line. */
+const taskJson = (t: SetupTask): unknown =>
+  t.cwd.trim() === "" && t.enabled
+    ? t.cmd
+    : { cmd: t.cmd, ...(t.cwd.trim() ? { cwd: t.cwd.trim() } : {}), ...(t.enabled ? {} : { enabled: false }) };
+
+function buildConfig(cards: FileCardT[], setup: SetupTask[], teardown: string[], migrate: string[], policy?: SetupPolicy) {
   const cfg: Record<string, unknown> = {
     $schema: "canopy://worktree-manager/v1",
     provision: cards.filter((c) => c.path.trim()).map((c) => {
@@ -132,8 +139,14 @@ function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], mi
       else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
       return o;
     }),
-    setup: setup.filter((s) => s.trim()),
+    setup: setup.filter((t) => t.cmd.trim()).map(taskJson),
   };
+  if (policy && (policy.continueOnFailure || policy.timeoutSecs > 0)) {
+    cfg.setupPolicy = {
+      onFailure: policy.continueOnFailure ? "continue" : "stop",
+      ...(policy.timeoutSecs > 0 ? { timeoutSecs: policy.timeoutSecs } : {}),
+    };
+  }
   if (teardown.length) cfg.teardown = teardown;
   if (migrate.length) cfg.migrate = migrate;
   return cfg;
@@ -161,6 +174,8 @@ function hlLine(line: string): string {
   return s;
 }
 
+const DEFAULT_POLICY: SetupPolicy = { continueOnFailure: false, timeoutSecs: 0 };
+
 const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
   repos: [{
@@ -178,7 +193,11 @@ const MOCK_CARDS: ProvisionEntry[] = [
   { path: ".env", format: "dotenv", from: ".env", interpolate: false, keys: [["PG_DB", "${INT_DB_NAME}"], ["PORT", "${WT_SERVICE_PORT}"]] },
   { path: "ee/.env", format: "dotenv", from: "ee/.env", interpolate: false, keys: [["LICENSE_KEY", ""]] },
 ];
-const MOCK_SETUP = ["pnpm install", "pnpm --filter server db:migrate", "pnpm build:plugins"];
+const MOCK_SETUP: SetupTask[] = [
+  { cmd: "pnpm install", cwd: "", enabled: true },
+  { cmd: "pnpm --filter server db:migrate", cwd: "server", enabled: true },
+  { cmd: "pnpm build:plugins", cwd: "", enabled: false },
+];
 
 /* ══════════════════════════ shared little controls ══════════════════════ */
 function Toggle({ on, onClick, disabled }: { on: boolean; onClick?: () => void; disabled?: boolean }) {
@@ -241,8 +260,10 @@ type PageProps = {
   flash: (m: string) => void;
   cards: FileCardT[];
   setCards: (c: FileCardT[]) => void;
-  setup: string[];
-  setSetup: (s: string[]) => void;
+  setup: SetupTask[];
+  setSetup: (s: SetupTask[]) => void;
+  policy: SetupPolicy;
+  setPolicy: (p: SetupPolicy) => void;
   onRemoveRepo: () => void;
   onExportJson: () => void;
   onImportJson: () => void;
@@ -631,42 +652,80 @@ function FilesPage({ repo, cards, setCards, markDirty, flash }: PageProps) {
 }
 
 /* ══════════════════════════ real: Setup ════════════════════════════════ */
-function SetupPage({ setup, setSetup, markDirty, flash }: PageProps) {
+function SetupPage({ setup, setSetup, policy, setPolicy, markDirty, flash, selKey }: PageProps) {
+  const [openTask, setOpenTask] = useState<number | null>(null);
   const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= setup.length) return; const n = setup.slice(); [n[i], n[j]] = [n[j], n[i]]; setSetup(n); markDirty("setup"); };
+  const patch = (i: number, p: Partial<SetupTask>) => { setSetup(setup.map((t, j) => (j === i ? { ...t, ...p } : t))); markDirty("setup"); };
+  const add = () => { setSetup(setup.concat([{ cmd: "", cwd: "", enabled: true }])); setOpenTask(setup.length); markDirty("setup"); };
+  const enabledCount = setup.filter((t) => t.enabled && t.cmd.trim()).length;
+
   return (
     <div className="sec">
       <div className="slab">Setup tasks<span className="n">run in order when a worktree is created</span></div>
       {setup.length === 0 ? (
         <div className="empty"><p>No setup tasks. Add commands like <code>pnpm install</code> — they run in order the first time a worktree is created.</p>
-          <button className="btn sm" onClick={() => { setSetup([""]); markDirty("setup"); }}><Plus size={10} />Add task</button></div>
+          <button className="btn sm" onClick={add}><Plus size={10} />Add task</button></div>
       ) : (
         <div className="objs">
           {setup.map((t, i) => (
-            <div className="obj" key={i}>
+            <div className={"obj" + (openTask === i ? " open" : "")} key={i}>
               <div className="ohead" style={{ cursor: "default" }}>
                 <span className="num" style={{ width: 16, height: 16, borderRadius: 4, display: "grid", placeItems: "center", font: "var(--fw-bold) var(--fs-label) var(--sans)", background: "var(--btn)", color: "var(--text-tertiary)", flex: "none" }}>{i + 1}</span>
-                <input className="inp mono gr" value={t} style={{ height: 25 }} placeholder="pnpm install" onChange={(e) => { setSetup(setup.map((x, j) => (j === i ? e.target.value : x))); markDirty("setup"); }} />
-                <Toggle on disabled />
+                <input className="inp mono gr" value={t.cmd} style={{ height: 25, opacity: t.enabled ? 1 : 0.55 }} placeholder="pnpm install" onChange={(e) => patch(i, { cmd: e.target.value })} />
+                <Toggle on={t.enabled} onClick={() => patch(i, { enabled: !t.enabled })} />
                 <span className="oacts" style={{ opacity: 1 }}>
+                  <span className="ico" title={openTask === i ? "Hide options" : "Working directory"} onClick={() => setOpenTask(openTask === i ? null : i)}><Chevron size={11} /></span>
                   <span className="ico" title="Move up" onClick={() => move(i, -1)}><Rot deg={180}><Chevron size={11} /></Rot></span>
                   <span className="ico" title="Move down" onClick={() => move(i, 1)}><Chevron size={11} /></span>
                   <span className="ico bad" title="Remove" onClick={() => { setSetup(setup.filter((_, j) => j !== i)); markDirty("setup"); }}><Trash size={11} /></span>
                 </span>
               </div>
+              {openTask === i && (
+                <div className="obody">
+                  <div className="fgrid">
+                    <span className="lb">Working directory</span>
+                    <input className="inp mono" value={t.cwd} placeholder="the worktree root" onChange={(e) => patch(i, { cwd: e.target.value })} />
+                  </div>
+                  <div className="hint">Relative to the worktree root, and must stay inside it. Leave blank to run from the root.</div>
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
       <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn" onClick={() => { setSetup(setup.concat([""])); markDirty("setup"); }}><Plus size={11} />Add task</button>
-        <button className="btn" title="Dry run (coming soon)" onClick={() => flash("Dry-running setup isn't wired yet")}><Play size={11} />Dry run</button>
+        <button className="btn" onClick={add}><Plus size={11} />Add task</button>
+        <button
+          className="btn"
+          title="Print exactly what would run, without running it"
+          onClick={() => {
+            if (!hasBackend() || !selKey) { flash("Open a worktree to dry-run setup"); return; }
+            ipc.runWorktreeSetup(selKey, true)
+              .then(() => flash(`Dry run complete — ${enabledCount} task${enabledCount === 1 ? "" : "s"} would run`))
+              .catch((e) => flash(`Dry run failed — ${errText(e)}`));
+          }}
+        ><Play size={11} />Dry run</button>
+        <span className="hint" style={{ marginTop: 0 }}>A dry run provisions nothing and executes nothing — it reports the plan in the setup runner.</span>
       </div>
-      <Adv n="not wired yet">
-        <Soon>The per-task enable toggle, working directory and the on-failure/timeout policy aren't stored yet — every task runs, in order, from the worktree root.</Soon>
-        <div className="soonwrap fgrid">
-          <span className="lb">On failure</span><select className="inp" disabled><option>Stop and report</option></select>
-          <span className="lb">Timeout</span><input className="inp mono" disabled defaultValue="600" style={{ width: 80 }} />
+      <Adv>
+        <div className="fgrid">
+          <span className="lb">On failure</span>
+          <select className="inp" value={policy.continueOnFailure ? "continue" : "stop"}
+            onChange={(e) => { setPolicy({ ...policy, continueOnFailure: e.target.value === "continue" }); markDirty("setup"); }}>
+            <option value="stop">Stop and report</option>
+            <option value="continue">Continue, report at the end</option>
+          </select>
+          <span className="lb">Timeout</span>
+          <div className="row">
+            <input className="inp mono" style={{ width: 90 }} value={policy.timeoutSecs || ""} placeholder="3600"
+              onChange={(e) => { setPolicy({ ...policy, timeoutSecs: Number(e.target.value) || 0 }); markDirty("setup"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Seconds any one task may run. Blank uses the built-in one hour.</span>
+          </div>
         </div>
+        <p className="hint">
+          Stop-and-report is the default because a task list usually encodes an order — continuing past a failed install
+          just produces a second, more confusing failure. Either way the run is reported as failed.
+        </p>
       </Adv>
     </div>
   );
@@ -1039,8 +1098,8 @@ function SearchOverlay({ onClose, onGo }: { onClose: () => void; onGo: (r: { pag
   );
 }
 
-function Preview({ cards, setup, extras, onClose }: { cards: FileCardT[]; setup: string[]; extras: { teardown: string[]; migrate: string[] }; onClose: () => void }) {
-  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+function Preview({ cards, setup, extras, policy, onClose }: { cards: FileCardT[]; setup: SetupTask[]; extras: { teardown: string[]; migrate: string[] }; policy: SetupPolicy; onClose: () => void }) {
+  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
   const lines = json.split("\n");
   return (
     <div className="ppreview">
@@ -1078,7 +1137,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const [dirty, setDirty] = useState<Set<PageId>>(new Set());
 
   const [cardsByRepo, setCardsByRepo] = useState<Record<string, FileCardT[]>>({});
-  const [setupByRepo, setSetupByRepo] = useState<Record<string, string[]>>({});
+  const [setupByRepo, setSetupByRepo] = useState<Record<string, SetupTask[]>>({});
+  const [policyByRepo, setPolicyByRepo] = useState<Record<string, SetupPolicy>>({});
   const [extrasByRepo, setExtrasByRepo] = useState<Record<string, { teardown: string[]; migrate: string[] }>>({});
   const dirtyRepos = useRef<Set<string>>(new Set());
   const repoMenuRef = useRef<HTMLDivElement>(null);
@@ -1111,6 +1171,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         ipc.getRepoConfig(r.id).then((c) => {
           setCardsByRepo((m) => ({ ...m, [r.id]: toCards(c.provision) }));
           setSetupByRepo((m) => ({ ...m, [r.id]: c.setup }));
+          setPolicyByRepo((m) => ({ ...m, [r.id]: c.setupPolicy ?? DEFAULT_POLICY }));
           setExtrasByRepo((m) => ({ ...m, [r.id]: { teardown: c.teardown || [], migrate: c.migrate || [] } }));
         }).catch(() => {});
       });
@@ -1181,9 +1242,11 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const patchRepo = (p: Partial<RepoCfg>) => patch({ repos: settings.repos.map((r, ri) => (ri === repoIndex ? { ...r, ...p } : r)) });
   const cards = (repo && cardsByRepo[repo.id]) || [];
   const setup = (repo && setupByRepo[repo.id]) || [];
+  const policy = (repo && policyByRepo[repo.id]) || DEFAULT_POLICY;
   const extras = (repo && extrasByRepo[repo.id]) || { teardown: [], migrate: [] };
   const setCards = (next: FileCardT[]) => { if (repo) setCardsByRepo((m) => ({ ...m, [repo.id]: next })); };
-  const setSetup = (next: string[]) => { if (repo) setSetupByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const setSetup = (next: SetupTask[]) => { if (repo) setSetupByRepo((m) => ({ ...m, [repo.id]: next })); };
+  const setPolicy = (next: SetupPolicy) => { if (repo) setPolicyByRepo((m) => ({ ...m, [repo.id]: next })); };
   const isRepoPage = REPO_PAGE_IDS.has(page);
   const p = pageOf(page);
 
@@ -1209,7 +1272,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
         const failures: string[] = [];
         await Promise.all(
           cleaned.repos.filter((r) => dirtyRepos.current.has(r.id)).map((r) =>
-            ipc.saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((c) => c.trim()))
+            ipc.saveRepoConfig(r.id, fromCards(cardsByRepo[r.id] || []), (setupByRepo[r.id] || []).filter((t) => t.cmd.trim()), policyByRepo[r.id])
               .then(() => dirtyRepos.current.delete(r.id))
               .catch((e) => failures.push(`${r.name}: ${e}`)),
           ),
@@ -1262,7 +1325,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
 
   /* ── .worktreemanager.json import / export (mirrors the previous repo
         config editor: native save + backend write out, FileReader in) ── */
-  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
   const copyJson = () => {
     if (!repo) return;
     navigator.clipboard?.writeText(configJson()).then(() => showToast("Copied .worktreemanager.json"), () => showToast("Copy failed"));
@@ -1295,7 +1358,19 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           : [];
         setCards(toCards(list));
         markDirty("files");
-        if (Array.isArray(parsed.setup)) { setSetup(parsed.setup.filter((x: unknown) => typeof x === "string")); markDirty("setup"); }
+        if (Array.isArray(parsed.setup)) {
+          // an imported config may use either shape — normalise on the way in
+          setSetup(
+            parsed.setup.flatMap((x: unknown): SetupTask[] =>
+              typeof x === "string"
+                ? [{ cmd: x, cwd: "", enabled: true }]
+                : x && typeof x === "object" && typeof (x as { cmd?: unknown }).cmd === "string"
+                  ? [{ cmd: String((x as { cmd: string }).cmd), cwd: String((x as { cwd?: string }).cwd ?? ""), enabled: (x as { enabled?: boolean }).enabled !== false }]
+                  : [],
+            ),
+          );
+          markDirty("setup");
+        }
         setPage("files");
         showToast(list.length ? `Imported ${list.length} file${list.length > 1 ? "s" : ""} — review, then Save` : "No provision entries found");
       } catch {
@@ -1322,7 +1397,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey };
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, policy, setPolicy, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey };
   const body = () => {
     if (isRepoPage && !repo) {
       return (
@@ -1456,7 +1531,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="pbody">
             <div className={"pmain" + (flashId?.startsWith(page + "-") ? " flashrow" : "")}>{body()}</div>
             {preview && isRepoPage && repo && (
-              <Preview cards={cards} setup={setup} extras={extras} onClose={() => setPreview(false)} />
+              <Preview cards={cards} setup={setup} extras={extras} policy={policy} onClose={() => setPreview(false)} />
             )}
           </div>
         </div>

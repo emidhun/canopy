@@ -78,9 +78,26 @@ export interface ProvisionEntry {
  * `migrate` are read-only there today — returned so preview/export match disk. */
 export interface RepoConfigFile {
   provision: ProvisionEntry[];
-  setup: string[];
+  setup: SetupTask[];
+  setupPolicy: SetupPolicy;
   teardown: string[];
   migrate: string[];
+}
+
+/** One setup task. A bare string in the config file parses to an enabled task
+    in the worktree root, so existing configs are unchanged. */
+export interface SetupTask {
+  cmd: string;
+  /** relative to the worktree root; empty = the root */
+  cwd: string;
+  /** a disabled task is skipped but stays in the file */
+  enabled: boolean;
+}
+
+export interface SetupPolicy {
+  continueOnFailure: boolean;
+  /** per-task ceiling in seconds; 0 = the built-in one hour */
+  timeoutSecs: number;
 }
 
 export interface Branches {
@@ -152,8 +169,8 @@ export const ipc = {
   listBranches: (repoId: string) => invoke<Branches>("list_branches", { repoId }),
   fetchBranches: (repoId: string) => invoke<Branches>("fetch_branches", { repoId }),
   getRepoConfig: (repoId: string) => invoke<RepoConfigFile>("get_repo_config", { repoId }),
-  saveRepoConfig: (repoId: string, provision: ProvisionEntry[], setup: string[]) =>
-    invoke<void>("save_repo_config", { repoId, provision, setup }),
+  saveRepoConfig: (repoId: string, provision: ProvisionEntry[], setup: SetupTask[], setupPolicy?: SetupPolicy) =>
+    invoke<void>("save_repo_config", { repoId, provision, setup, setupPolicy: setupPolicy ?? null }),
   saveTextFile: (path: string, contents: string) => invoke<void>("save_text_file", { path, contents }),
 
   getLogs: (svcKey: string) => invoke<LogLine[]>("get_logs", { svcKey }),
@@ -198,7 +215,9 @@ export const ipc = {
 
   createWorktree: (args: { repoId: string; branch: string; base?: string; createBranch: boolean }) =>
     invoke<string>("create_worktree", { ...args, base: args.base ?? null }),
-  runWorktreeSetup: (wtKey: string) => invoke<void>("run_worktree_setup", { wtKey }),
+  /** `dryRun` reports exactly what would run — same order, same working
+      directories, same skips — and executes nothing */
+  runWorktreeSetup: (wtKey: string, dryRun = false) => invoke<void>("run_worktree_setup", { wtKey, dryRun }),
   worktreeDirtyReport: (wtKey: string) => invoke<{ dirty: boolean; details: string[]; total: number }>("worktree_dirty_report", { wtKey }),
   worktreeStatus: (wtKey: string) => invoke<StatusEntry[]>("worktree_status", { wtKey }),
   worktreeCommit: (wtKey: string, message: string, addUntracked: boolean) =>
