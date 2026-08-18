@@ -141,7 +141,7 @@ function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], mi
 
 let agentSeq = 0;
 const emptyAgent = (): AgentCfg => ({ id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true });
-const emptyService = (): ServiceCfg => ({ id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {} });
+const emptyService = (): ServiceCfg => ({ id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {}, health: "" });
 function migrateAgents(r: RepoCfg): RepoCfg {
   if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
   return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
@@ -166,8 +166,8 @@ const MOCK: Settings = {
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [
-      { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" } },
-      { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" } },
+      { id: "fe", name: "Frontend", kind: "web", command: "pnpm --filter frontend dev", cwd: "frontend", basePort: 8232, env: { NODE_ENV: "development" }, health: "" },
+      { id: "srv", name: "Server", kind: "server", command: "pnpm --filter server start:dev", cwd: "server", basePort: 3150, env: { LOG_LEVEL: "debug" }, health: "" },
     ],
     customCommands: [{ label: "Lint", command: "pnpm lint", group: "Checks" }, { label: "Unit tests", command: "pnpm test --run", group: "Checks" }],
     agentCommand: "claude",
@@ -296,7 +296,11 @@ function ServicesPage({ repo, patchRepo, markDirty }: PageProps) {
                     <span className="lb">Extra env</span>
                     <textarea className="inp" value={envToStr(s.env)} placeholder="KEY=VALUE (one per line)" onChange={(e) => patch(s.id, { env: strToEnv(e.target.value) })} />
                     <span className="lb">Health check</span>
-                    <input className="inp mono" disabled title="Health checks aren't wired yet" placeholder="coming soon" />
+                    <input className="inp mono" value={s.health} placeholder="/api/health" onChange={(e) => patch(s.id, { health: e.target.value })} />
+                    <span className="lb" />
+                    <span className="hint" style={{ marginTop: 0 }}>
+                      A path on this service's own port. While set, the service stays “starting” until it answers — so green means it responded, not that the shell forked.
+                    </span>
                   </div>
                 </Adv>
               </div>

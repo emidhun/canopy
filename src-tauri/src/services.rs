@@ -393,9 +393,44 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     };
     persist_orphans(app);
 
-    set_status(app, key, SvcStatus::Running, Some(started_unix), None);
-    if let Some(port) = env.get("PORT") {
-        push_log(app, key, LogLine::now("ok", format!("spawned — expecting http://localhost:{port}")));
+    let port = env.get("PORT").and_then(|p| p.parse::<u32>().ok());
+    let health = cfg.health.trim().to_string();
+    match (port, health.is_empty()) {
+        (Some(p), false) => {
+            // Stay in Starting and let the probe decide. The dot going green
+            // then means "it answered", not "the shell forked".
+            push_log(app, key, LogLine::now("info", format!("spawned — probing http://localhost:{p}{health}")));
+            let app2 = app.clone();
+            let key2 = key.to_string();
+            let h = health.clone();
+            tauri::async_runtime::spawn(async move {
+                if await_ready(&app2, &key2, p, &h, generation).await {
+                    set_status(&app2, &key2, SvcStatus::Running, Some(started_unix), None);
+                    push_log(&app2, &key2, LogLine::now("ok", format!("ready — http://localhost:{p}{h}")));
+                } else {
+                    // Only report a failure if this generation is still the
+                    // live one: a stop or restart while probing is not an error.
+                    let still_ours = {
+                        let table = app2.state::<ProcTable>();
+                        let procs = table.procs.lock();
+                        procs.get(&key2).is_some_and(|e| e.generation == generation)
+                    };
+                    if still_ours {
+                        push_log(&app2, &key2, LogLine::now("err", format!("never became ready — {h} did not answer on :{p}")));
+                        set_status(&app2, &key2, SvcStatus::Error, None, None);
+                    }
+                }
+            });
+        }
+        // No probe (or no port): Running as soon as the process exists — the
+        // behaviour before health checks, and the only honest answer when
+        // there is nothing to ask.
+        _ => {
+            set_status(app, key, SvcStatus::Running, Some(started_unix), None);
+            if let Some(p) = port {
+                push_log(app, key, LogLine::now("ok", format!("spawned — expecting http://localhost:{p}")));
+            }
+        }
     }
 
     // ── log pumps (batched) ──
@@ -763,6 +798,82 @@ pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
     // an unreadable start time (0) fails the match — skipping a sweep is safe,
     // killing an innocent process group is not
     actual != 0 && actual.abs_diff(recorded_secs) <= 5
+}
+
+// ── readiness probes ──────────────────────────────────────────────────
+//
+// A spawned process is not a working service. `pnpm dev` returns instantly
+// and then spends thirty seconds compiling; marking it "running" the moment
+// the shell forks is why the dot goes green before anything answers the port.
+//
+// When a service declares a health path, Canopy holds it in `Starting` until
+// that path answers, and only then calls it Running.
+//
+// The probe is a hand-rolled HTTP/1.1 GET over TcpStream rather than an HTTP
+// client dependency: the target is always `127.0.0.1:<own port>`, so there is
+// no TLS, no redirects, no proxies and no DNS. A crate for this would be a
+// large dependency to answer "did localhost return a 2xx".
+
+/// How long to keep probing before calling the start a failure. Generous: a
+/// cold TypeScript build legitimately takes this long.
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// Gap between attempts. Short enough to feel immediate, long enough not to
+/// spin while a compiler is using the CPU.
+const PROBE_INTERVAL: Duration = Duration::from_millis(400);
+/// A single attempt's budget — a server accepting the connection but never
+/// replying must not stall the whole probe loop.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// One GET against `127.0.0.1:port`. `Ok(true)` only for a 2xx or 3xx status.
+async fn probe_once(port: u32, path: &str) -> Result<bool, String> {
+    use tokio::io::AsyncWriteExt;
+    let path = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+        .await
+        .map_err(|e| e.to_string())?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: Canopy\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
+
+    // Only the status line is needed, and reading it alone means a health
+    // endpoint returning a large body costs nothing.
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+    let code: u16 = line.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    Ok((200..400).contains(&code))
+}
+
+/// Poll a service's health path until it answers, the deadline passes, or the
+/// process dies. Returns whether the service became ready.
+///
+/// The process check matters: without it, a service that crashes two seconds
+/// after spawning would sit in `Starting` for the full two minutes instead of
+/// reporting the failure immediately.
+pub async fn await_ready(app: &AppHandle, key: &str, port: u32, path: &str, generation: u64) -> bool {
+    let started = Instant::now();
+    let mut announced = false;
+    while started.elapsed() < READY_TIMEOUT {
+        // stopped, restarted, or exited — nothing left to wait for
+        let alive = {
+            let table = app.state::<ProcTable>();
+            let procs = table.procs.lock();
+            procs.get(key).is_some_and(|p| p.generation == generation)
+        };
+        if !alive {
+            return false;
+        }
+        match tokio::time::timeout(PROBE_TIMEOUT, probe_once(port, path)).await {
+            Ok(Ok(true)) => return true,
+            _ => {
+                if !announced {
+                    push_log(app, key, LogLine::now("info", format!("waiting for {path} on :{port}…")));
+                    announced = true;
+                }
+            }
+        }
+        tokio::time::sleep(PROBE_INTERVAL).await;
+    }
+    false
 }
 
 #[cfg(test)]
