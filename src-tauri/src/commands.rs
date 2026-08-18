@@ -88,6 +88,9 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
         custom_commands: Vec::new(),
         agent_command: String::new(),
         agents: Vec::new(),
+        agent_context: Default::default(),
+        max_parallel_agents: 0,
+        agent_idle_timeout_min: 0,
     };
 
     let updated = {
