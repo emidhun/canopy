@@ -300,21 +300,19 @@ fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, Ha
                         .ok_or("service gone")?
                         .clone();
                     let mut env = cfg.env.clone();
+                    // A service command must see exactly the variables setup saw
+                    // — same builder, no second implementation to drift from it
+                    // (see state::build_wt_vars).
+                    let siblings: Vec<(String, String, u32)> = w
+                        .services
+                        .iter()
+                        .filter_map(|sib| Some((sib.service_id.clone(), sib.name.clone(), sib.port?)))
+                        .collect();
+                    let idx = crate::state::existing_port_index(app, &r.repo_id, &w.path);
+                    env.extend(crate::state::build_wt_vars(&r.repo_id, &w.path, idx, &siblings));
                     if let Some(port) = s.port {
                         env.insert("PORT".into(), port.to_string());
                     }
-                    // expose every sibling service's port under both names: the
-                    // documented WT_<ID>_PORT and the back-compat WM_PORT_<ID>,
-                    // matching what setup/custom commands see (see setup.rs).
-                    for sib in w.services.iter() {
-                        if let Some(p) = sib.port {
-                            let id = sib.service_id.to_uppercase();
-                            env.insert(format!("WT_{id}_PORT"), p.to_string());
-                            env.insert(format!("WM_PORT_{id}"), p.to_string());
-                        }
-                    }
-                    // per-worktree identifier, matching what setup saw (e.g. for DB names)
-                    env.insert("WM_WT_SLUG".into(), crate::setup::wt_slug(&w.path));
                     return Ok((cfg, w.path.clone(), env));
                 }
             }
