@@ -1,0 +1,119 @@
+// #43 — Settings silently discards incomplete rows on save.
+//
+// Before: save() filtered out any service, custom command or agent row that
+// wasn't fully filled in, with no warning. Add an agent, type only the name,
+// hit Save, and the row vanished. It read as data loss.
+//
+// After: an incomplete row blocks the save, is named in the message, and is
+// marked in the editor. Nothing is discarded behind the user's back.
+import { describe, expect, it } from "vitest";
+import type { RepoCfg } from "../../ipc";
+import { describeIncomplete, incompleteRows, rowKey } from "./incomplete";
+
+const repo = (over: Partial<RepoCfg>): RepoCfg => ({
+  id: "r", name: "R", path: "/r", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+  services: [], customCommands: [], agentCommand: "", agents: [], ...over,
+} as RepoCfg);
+
+const svc = (over: Record<string, unknown> = {}) =>
+  ({ id: "web", name: "Frontend", kind: "web", command: "npm start", cwd: "", basePort: null, env: {}, ...over }) as never;
+
+describe("incompleteRows", () => {
+  it("finds nothing when every row is complete", () => {
+    const r = repo({
+      services: [svc()],
+      customCommands: [{ label: "Lint", command: "npm run lint", group: "" }],
+      agents: [{ id: "a", name: "Claude", command: "claude", promptOnLaunch: true }],
+    });
+    expect(incompleteRows(r)).toEqual([]);
+  });
+
+  it("names the service and what it is missing", () => {
+    const rows = incompleteRows(repo({ services: [svc({ command: "  " })] }));
+    expect(rows).toEqual([
+      { kind: "service", page: "services", key: "service:0", label: "Frontend", missing: ["a command"] },
+    ]);
+  });
+
+  it("lists every missing field on one row", () => {
+    const rows = incompleteRows(repo({ services: [svc({ id: "", command: "" })] }));
+    expect(rows[0].missing).toEqual(["an id", "a command"]);
+  });
+
+  it("falls back to a placeholder label when the row has neither name nor id", () => {
+    const rows = incompleteRows(repo({ services: [svc({ id: "", name: "", command: "npm start" })] }));
+    expect(rows[0].label).toBe("Untitled service");
+  });
+
+  it("uses the id as the label when only the name is blank", () => {
+    const rows = incompleteRows(repo({ services: [svc({ name: "", command: "" })] }));
+    expect(rows[0].label).toBe("web");
+  });
+
+  it("finds incomplete custom commands", () => {
+    const rows = incompleteRows(repo({ customCommands: [{ label: "", command: "npm test", group: "" }] }));
+    expect(rows).toEqual([
+      { kind: "command", page: "commands", key: "command:0", label: "Untitled command", missing: ["a label"] },
+    ]);
+  });
+
+  it("finds incomplete agents", () => {
+    const rows = incompleteRows(repo({ agents: [{ id: "a1", name: "Codex", command: "", promptOnLaunch: true }] }));
+    expect(rows).toEqual([
+      { kind: "agent", page: "agents", key: "agent:0", label: "Codex", missing: ["a command"] },
+    ]);
+  });
+
+  it("reports rows in page order and keeps each row's index", () => {
+    const rows = incompleteRows(repo({
+      services: [svc(), svc({ id: "api", name: "API", command: "" })],
+      agents: [{ id: "a1", name: "", command: "claude", promptOnLaunch: true }],
+    }));
+    expect(rows.map((r) => r.key)).toEqual(["service:1", "agent:0"]);
+  });
+
+  // "+ Add" drops an empty row into the editor. Blocking the save on a row the
+  // user has not typed into yet would make the button unusable, so an entirely
+  // untouched row is still dropped quietly — it carries nothing to lose.
+  it("ignores a row the user has not typed into at all", () => {
+    expect(incompleteRows(repo({ customCommands: [{ label: "", command: "", group: "" }] }))).toEqual([]);
+    expect(incompleteRows(repo({ agents: [{ id: "a1", name: "", command: "", promptOnLaunch: true }] }))).toEqual([]);
+    expect(incompleteRows(repo({ services: [svc({ id: "", name: "", command: "" })] }))).toEqual([]);
+  });
+});
+
+describe("rowKey", () => {
+  it("addresses a row by kind and index, so a blank id still marks the right row", () => {
+    expect(rowKey("service", 2)).toBe("service:2");
+  });
+});
+
+describe("describeIncomplete", () => {
+  it("says nothing when there is nothing to say", () => {
+    expect(describeIncomplete([])).toBe("");
+  });
+
+  it("names the single offending row and its one missing field", () => {
+    const rows = incompleteRows(repo({ services: [svc({ command: "" })] }));
+    expect(describeIncomplete(rows)).toBe('Nothing saved — the service "Frontend" needs a command.');
+  });
+
+  it("joins two missing fields with 'and'", () => {
+    const rows = incompleteRows(repo({ services: [svc({ id: "", command: "" })] }));
+    expect(describeIncomplete(rows)).toBe('Nothing saved — the service "Frontend" needs an id and a command.');
+  });
+
+  it("counts the rows and names the sections when several are incomplete", () => {
+    const rows = incompleteRows(repo({
+      services: [svc({ command: "" })],
+      customCommands: [{ label: "", command: "npm test", group: "" }],
+      agents: [{ id: "a", name: "Codex", command: "", promptOnLaunch: true }],
+    }));
+    expect(describeIncomplete(rows)).toBe("Nothing saved — 3 incomplete rows in Services, Commands and Agents.");
+  });
+
+  it("does not repeat a section that has two incomplete rows", () => {
+    const rows = incompleteRows(repo({ services: [svc({ command: "" }), svc({ id: "api", name: "API", command: "" })] }));
+    expect(describeIncomplete(rows)).toBe("Nothing saved — 2 incomplete rows in Services.");
+  });
+});

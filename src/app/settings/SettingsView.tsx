@@ -29,6 +29,7 @@ import { ALLPAGES, ICONS, pageOf, PLATFORM, REPOPAGES, REPO_PAGE_IDS, type PageI
 import type { PageProps } from "./types";
 import { MOCK, MOCK_CARDS, MOCK_SETUP } from "./mocks";
 import { buildConfig, cleanRepo, fromCards, migrateAgents, toCards, type FileCardT } from "./provision";
+import { describeIncomplete, incompleteRows, type IncompleteRow } from "./incomplete";
 import SearchOverlay from "./SearchOverlay";
 import Preview from "./Preview";
 import ServicesPage from "./pages/ServicesPage";
@@ -62,6 +63,8 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const [navQ, setNavQ] = useState("");
   const [flashId, setFlashId] = useState<string | null>(null);
   const [dirty, setDirty] = useState<Set<PageId>>(new Set());
+  // rows the last save refused (#43) — cleared as soon as the user edits again
+  const [invalid, setInvalid] = useState<ReadonlyMap<string, IncompleteRow>>(new Map());
 
   const [cardsByRepo, setCardsByRepo] = useState<Record<string, FileCardT[]>>({});
   const [setupByRepo, setSetupByRepo] = useState<Record<string, string[]>>({});
@@ -75,6 +78,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const flash = (m: string) => showToast(m);
   const markDirty = (id: PageId) => {
     setDirty((d) => new Set(d).add(id));
+    setInvalid((m) => (m.size ? new Map() : m));
     if ((id === "files" || id === "setup") && repoId) dirtyRepos.current.add(repoId);
   };
 
@@ -175,6 +179,23 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
 
   async function save() {
     if (!settings) return;
+
+    // A half-filled row cannot be persisted. It used to be filtered out here
+    // silently, which reads as data loss (#43) — refuse the save instead, name
+    // the row, and jump to the page holding it so it is on screen.
+    const bad = settings.repos.flatMap((r) =>
+      incompleteRows(r).map((row) => ({ ...row, repoId: r.id })),
+    );
+    if (bad.length) {
+      const first = bad[0];
+      setInvalid(new Map(bad.map((row) => [row.key, row])));
+      if (first.repoId !== repoId) setRepoId(first.repoId);
+      setPage(first.page);
+      showToast(describeIncomplete(bad));
+      return;
+    }
+    setInvalid(new Map());
+
     const cleaned: Settings = {
       ...settings,
       repos: settings.repos.map((r) => cleanRepo(r).repo),
@@ -299,7 +320,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey };
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid };
   const body = () => {
     if (isRepoPage && !repo) {
       return (
