@@ -23,7 +23,7 @@ import NoticeModal from "./canopy/NoticeModal";
 import SetupRunnerModal from "./canopy/SetupRunnerModal";
 import ServiceDetailModal from "./canopy/ServiceDetailModal";
 import ContextModal from "./canopy/ContextModal";
-import SettingsView from "./SettingsView";
+import SettingsView from "./settings/SettingsView";
 import NewWorktreeModal from "./NewWorktreeModal";
 import RemoveWorktreeModal from "./RemoveWorktreeModal";
 import RemoveWorktreesModal from "./RemoveWorktreesModal";
