@@ -5,7 +5,7 @@
 // are the exception: id backfilling is a deliberate change (#43 review), so
 // those assert the new contract, not the old one.
 import { describe, expect, it } from "vitest";
-import type { ProvisionEntry, RepoCfg } from "../../ipc";
+import type { ProvisionEntry, RepoCfg, SetupTask } from "../../ipc";
 import {
   buildConfig,
   cleanRepo,
@@ -15,6 +15,9 @@ import {
   hlLine,
   migrateAgents,
   strToEnv,
+  parseSetup,
+  taskJson,
+  DEFAULT_POLICY,
   toCards,
   uid,
   type FileCardT,
@@ -23,6 +26,8 @@ import {
 const card = (over: Partial<FileCardT> = {}): FileCardT => ({
   id: "f-1", path: ".env", format: "dotenv", from: "", interpolate: false, keys: [], ...over,
 });
+
+const task = (cmd: string, over: Partial<SetupTask> = {}): SetupTask => ({ cmd, cwd: "", enabled: true, ...over });
 
 describe("toCards / fromCards", () => {
   it("round-trips a dotenv entry's path, format, from and keys", () => {
@@ -77,8 +82,8 @@ describe("toCards / fromCards", () => {
 });
 
 describe("buildConfig", () => {
-  it("stamps the schema url and filters blank setup lines", () => {
-    const cfg = buildConfig([], ["npm ci", "   ", "npm run build"], [], []);
+  it("stamps the schema url and filters blank setup tasks", () => {
+    const cfg = buildConfig([], [task("npm ci"), task("   "), task("npm run build")], [], []);
     expect(cfg.$schema).toBe("canopy://worktree-manager/v1");
     expect(cfg.setup).toEqual(["npm ci", "npm run build"]);
   });
@@ -287,5 +292,61 @@ describe("uid", () => {
   it("never repeats within a session", () => {
     const ids = Array.from({ length: 50 }, () => uid("svc"));
     expect(new Set(ids).size).toBe(50);
+  });
+});
+
+// #87 / PR #116 — setup entries are "a bare string OR an object". The whole
+// design rests on a plain task surviving a round-trip as a bare string: without
+// that, setting one option on one task rewrites every line of a file that lives
+// in the user's repo and goes through code review.
+describe("setup tasks", () => {
+  it("writes a plain task back as a bare string", () => {
+    expect(taskJson(task("npm ci"))).toBe("npm ci");
+  });
+
+  it("writes an object only once a task carries a cwd or is disabled", () => {
+    expect(taskJson(task("npm run db:migrate", { cwd: "server" })))
+      .toEqual({ cmd: "npm run db:migrate", cwd: "server" });
+    expect(taskJson(task("npm run build:plugins", { enabled: false })))
+      .toEqual({ cmd: "npm run build:plugins", enabled: false });
+    expect(taskJson(task("x", { cwd: "server", enabled: false })))
+      .toEqual({ cmd: "x", cwd: "server", enabled: false });
+  });
+
+  it("round-trips a legacy all-strings config untouched", () => {
+    const legacy = ["pnpm install", "pnpm db:migrate"];
+    const cfg = buildConfig([], parseSetup(legacy), [], []);
+    expect(cfg.setup).toEqual(legacy);
+  });
+
+  it("parses either shape on the way in", () => {
+    expect(parseSetup(["a", { cmd: "b", cwd: "server" }, { cmd: "c", enabled: false }])).toEqual([
+      { cmd: "a", cwd: "", enabled: true },
+      { cmd: "b", cwd: "server", enabled: true },
+      { cmd: "c", cwd: "", enabled: false },
+    ]);
+  });
+
+  // an entry that is neither shape would otherwise coerce to an empty command
+  // and run `sh -c ""`, which passes and hides the broken config
+  it("skips an entry that is neither a string nor an object with cmd", () => {
+    expect(parseSetup(["ok", { cwd: "server" }, 42, null, {}])).toEqual([{ cmd: "ok", cwd: "", enabled: true }]);
+  });
+
+  it("returns nothing for a non-array", () => {
+    expect(parseSetup(undefined)).toEqual([]);
+    expect(parseSetup("pnpm install")).toEqual([]);
+  });
+
+  it("omits setupPolicy while it matches the built-in behaviour", () => {
+    expect(buildConfig([], [], [], [], DEFAULT_POLICY)).not.toHaveProperty("setupPolicy");
+    expect(buildConfig([], [], [], [])).not.toHaveProperty("setupPolicy");
+  });
+
+  it("writes setupPolicy once it differs", () => {
+    expect(buildConfig([], [], [], [], { continueOnFailure: true, timeoutSecs: 0 }).setupPolicy)
+      .toEqual({ onFailure: "continue" });
+    expect(buildConfig([], [], [], [], { continueOnFailure: false, timeoutSecs: 600 }).setupPolicy)
+      .toEqual({ onFailure: "stop", timeoutSecs: 600 });
   });
 });

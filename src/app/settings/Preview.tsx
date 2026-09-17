@@ -1,10 +1,11 @@
 // ⌘P — the repo's .worktreemanager.json as the save step would write it.
 import { ChevRight, X } from "../../icons";
+import type { SetupPolicy, SetupTask } from "../../ipc";
 import { buildConfig, hlLine, type FileCardT } from "./provision";
 import { Rot } from "./primitives";
 
-export default function Preview({ cards, setup, extras, onClose }: { cards: FileCardT[]; setup: string[]; extras: { teardown: string[]; migrate: string[] }; onClose: () => void }) {
-  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate), null, 2);
+export default function Preview({ cards, setup, extras, policy, onClose }: { cards: FileCardT[]; setup: SetupTask[]; extras: { teardown: string[]; migrate: string[] }; policy: SetupPolicy; onClose: () => void }) {
+  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
   const lines = json.split("\n");
   return (
     <div className="ppreview">

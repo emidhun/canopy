@@ -1,6 +1,6 @@
 // The prop bundle every Settings page receives. The shell owns all of this
 // state; a page reads what it needs and calls back to change it.
-import { type RepoCfg, type Settings } from "../../ipc";
+import { type RepoCfg, type Settings, type SetupPolicy, type SetupTask } from "../../ipc";
 import { type FileCardT } from "./provision";
 import { type PageId } from "./catalog";
 import type { IncompleteRow } from "./incomplete";
@@ -14,8 +14,10 @@ export type PageProps = {
   flash: (m: string) => void;
   cards: FileCardT[];
   setCards: (c: FileCardT[]) => void;
-  setup: string[];
-  setSetup: (s: string[]) => void;
+  setup: SetupTask[];
+  setSetup: (s: SetupTask[]) => void;
+  policy: SetupPolicy;
+  setPolicy: (p: SetupPolicy) => void;
   onRemoveRepo: () => void;
   onExportJson: () => void;
   onImportJson: () => void;
