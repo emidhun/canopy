@@ -12,7 +12,7 @@ export const MOCK: Settings = {
     ],
     customCommands: [{ label: "Lint", command: "pnpm lint", group: "Checks" }, { label: "Unit tests", command: "pnpm test --run", group: "Checks" }],
     agentCommand: "claude",
-    agents: [{ id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true }, { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true }],
+    agents: [{ id: "a1", name: "Claude Code", command: "claude", promptOnLaunch: true, waitingPatterns: "" }, { id: "a2", name: "Codex", command: "codex", promptOnLaunch: true, waitingPatterns: "" }],
   }, {
     // a second repo, freshly added and not configured yet — it gives the repo
     // picker something to switch between, and it is what the per-repo scoping
@@ -21,7 +21,7 @@ export const MOCK: Settings = {
     services: [],
     customCommands: [],
     agentCommand: "claude",
-    agents: [{ id: "c1", name: "Claude Code", command: "claude", promptOnLaunch: true }],
+    agents: [{ id: "c1", name: "Claude Code", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
   }],
 };
 export const MOCK_CARDS: ProvisionEntry[] = [

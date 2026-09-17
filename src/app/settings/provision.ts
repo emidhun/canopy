@@ -92,7 +92,7 @@ export function buildConfig(cards: FileCardT[], setup: SetupTask[], teardown: st
 /* ── empty rows ── */
 let agentSeq = 0;
 export const emptyAgent = (): AgentCfg => ({
-  id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true,
+  id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true, waitingPatterns: "",
 });
 export const emptyService = (): ServiceCfg => ({
   id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {}, health: "",

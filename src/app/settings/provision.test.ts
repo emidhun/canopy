@@ -141,11 +141,11 @@ describe("migrateAgents", () => {
   it("promotes a legacy agentCommand into a single agent row", () => {
     const out = migrateAgents({ ...base, agentCommand: "claude", agents: [] } as unknown as RepoCfg);
     expect(out.agents).toHaveLength(1);
-    expect(out.agents[0]).toMatchObject({ name: "Agent", command: "claude", promptOnLaunch: true });
+    expect(out.agents[0]).toMatchObject({ name: "Agent", command: "claude", promptOnLaunch: true, waitingPatterns: "" });
   });
 
   it("leaves an existing agent list alone", () => {
-    const agents = [{ id: "a", name: "Claude", command: "claude", promptOnLaunch: false }];
+    const agents = [{ id: "a", name: "Claude", command: "claude", promptOnLaunch: false, waitingPatterns: "" }];
     const out = migrateAgents({ ...base, agentCommand: "codex", agents } as unknown as RepoCfg);
     expect(out.agents).toEqual(agents);
   });
@@ -197,8 +197,8 @@ describe("cleanRepo", () => {
 
   it("drops agents missing a name or command", () => {
     const { repo: out } = cleanRepo(repo({ agents: [
-      { id: "a1", name: "Claude", command: "claude", promptOnLaunch: true },
-      { id: "a2", name: "Nameless", command: "", promptOnLaunch: true },
+      { id: "a1", name: "Claude", command: "claude", promptOnLaunch: true, waitingPatterns: "" },
+      { id: "a2", name: "Nameless", command: "", promptOnLaunch: true, waitingPatterns: "" },
     ] }));
     expect(out.agents.map((a) => a.id)).toEqual(["a1"]);
   });
@@ -206,7 +206,7 @@ describe("cleanRepo", () => {
   it("mirrors the surviving first agent's command into the legacy agentCommand", () => {
     const { repo: out } = cleanRepo(repo({
       agentCommand: "stale",
-      agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true }],
+      agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     expect(out.agentCommand).toBe("claude");
   });
@@ -220,7 +220,7 @@ describe("cleanRepo", () => {
     const { dropped } = cleanRepo(repo({
       services: [{ id: "s1", name: "Half", kind: "web", command: "", cwd: "", basePort: null, env: {}, health: "" }],
       customCommands: [{ label: "", command: "npm test", group: "" }],
-      agents: [{ id: "a", name: "Named", command: "", promptOnLaunch: true }],
+      agents: [{ id: "a", name: "Named", command: "", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     // the id-less service keeps its row (backfilled); only the truly
     // unsaveable rows count as dropped
@@ -244,7 +244,7 @@ describe("ensureIds", () => {
   it("leaves existing ids alone", () => {
     const out = ensureIds(repo({
       services: [{ id: "fe", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" }],
-      agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true }],
+      agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     expect(out.services[0].id).toBe("fe");
     expect(out.agents[0].id).toBe("a1");
@@ -253,7 +253,7 @@ describe("ensureIds", () => {
   it("gives a blank id a fresh one rather than dropping the row", () => {
     const out = ensureIds(repo({
       services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" }],
-      agents: [{ id: "  ", name: "Claude", command: "claude", promptOnLaunch: true }],
+      agents: [{ id: "  ", name: "Claude", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     expect(out.services[0].id).toBeTruthy();
     expect(out.agents[0].id).toBeTruthy();

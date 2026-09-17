@@ -23,7 +23,7 @@ describe("incompleteRows", () => {
     const r = repo({
       services: [svc()],
       customCommands: [{ label: "Lint", command: "npm run lint", group: "" }],
-      agents: [{ id: "a", name: "Claude", command: "claude", promptOnLaunch: true }],
+      agents: [{ id: "a", name: "Claude", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
     });
     expect(incompleteRows(r)).toEqual([]);
   });
@@ -68,7 +68,7 @@ describe("incompleteRows", () => {
   });
 
   it("finds incomplete agents", () => {
-    const rows = incompleteRows(repo({ agents: [{ id: "a1", name: "Codex", command: "", promptOnLaunch: true }] }));
+    const rows = incompleteRows(repo({ agents: [{ id: "a1", name: "Codex", command: "", promptOnLaunch: true, waitingPatterns: "" }] }));
     expect(rows).toEqual([
       { kind: "agent", page: "agents", key: "agent:0", label: "Codex", missing: ["a command"] },
     ]);
@@ -77,7 +77,7 @@ describe("incompleteRows", () => {
   it("reports rows in page order and keeps each row's index", () => {
     const rows = incompleteRows(repo({
       services: [svc(), svc({ id: "api", name: "API", command: "" })],
-      agents: [{ id: "a1", name: "", command: "claude", promptOnLaunch: true }],
+      agents: [{ id: "a1", name: "", command: "claude", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     expect(rows.map((r) => r.key)).toEqual(["service:1", "agent:0"]);
   });
@@ -87,7 +87,7 @@ describe("incompleteRows", () => {
   // untouched row is still dropped quietly — it carries nothing to lose.
   it("ignores a row the user has not typed into at all", () => {
     expect(incompleteRows(repo({ customCommands: [{ label: "", command: "", group: "" }] }))).toEqual([]);
-    expect(incompleteRows(repo({ agents: [{ id: "a1", name: "", command: "", promptOnLaunch: true }] }))).toEqual([]);
+    expect(incompleteRows(repo({ agents: [{ id: "a1", name: "", command: "", promptOnLaunch: true, waitingPatterns: "" }] }))).toEqual([]);
     expect(incompleteRows(repo({ services: [svc({ id: "", name: "", command: "" })] }))).toEqual([]);
   });
 });
@@ -126,7 +126,7 @@ describe("describeIncomplete", () => {
     const rows = incompleteRows(repo({
       services: [svc({ command: "" })],
       customCommands: [{ label: "", command: "npm test", group: "" }],
-      agents: [{ id: "a", name: "Codex", command: "", promptOnLaunch: true }],
+      agents: [{ id: "a", name: "Codex", command: "", promptOnLaunch: true, waitingPatterns: "" }],
     }));
     expect(describeIncomplete(rows)).toBe("Nothing saved — 3 incomplete rows in Services, Commands and Agents.");
   });
