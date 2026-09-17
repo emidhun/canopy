@@ -138,7 +138,17 @@ select.cx-input{appearance:none;cursor:pointer;background-image:linear-gradient(
 .cx-toast{position:absolute;bottom:34px;left:50%;transform:translateX(-50%);background:var(--toast-bg);color:var(--text-primary);padding:var(--sp-row) var(--sp-toast-x);border-radius:var(--r-xl);font-size:var(--fs-body);box-shadow:var(--shadow-toast);border:var(--border-w) solid var(--border);z-index:70;animation:cx-pop var(--dur) ease}
 
 /* ── StepList ── */
-.cx-step{display:flex;align-items:baseline;gap:var(--sp-4);padding:var(--sp-micro) 0;font:var(--fs-small) var(--mono)}
+/* A step is a row plus, on request, its own output. The row keeps the old
+   flex layout; the wrapper stacks it above the disclosure body. */
+.cx-step{display:block;padding:var(--sp-micro) 0;font:var(--fs-small) var(--mono)}
+.cx-step__head{display:flex;align-items:baseline;gap:var(--sp-4)}
+.cx-step__head[role="button"]{cursor:pointer}
+.cx-step__head[role="button"]:hover .cx-step__text{color:var(--text-primary)}
+.cx-step__head:focus-visible{outline:2px solid var(--action-primary);outline-offset:2px;border-radius:var(--r-2)}
+.cx-step__chev{flex:none;color:var(--text-tertiary);font-size:var(--fs-micro)}
+/* the output a step produced — scrolls rather than growing the dialog */
+.cx-step__body{margin:var(--sp-micro) 0 var(--sp-tight) 17px;display:flex;flex-direction:column;align-items:flex-start;gap:var(--sp-micro)}
+.cx-step__body pre{margin:0;max-height:160px;overflow:auto;width:100%;white-space:pre-wrap;word-break:break-word;font:var(--fs-micro) var(--mono);color:var(--text-secondary)}
 .cx-step__bullet{width:13px;flex:none;text-align:center;color:var(--text-tertiary)}
 .cx-step__text{flex:1;min-width:0;color:var(--text-secondary)}
 .cx-step__meta{font-size:var(--fs-micro);color:var(--text-tertiary);flex:none}
