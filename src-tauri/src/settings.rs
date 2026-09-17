@@ -46,6 +46,10 @@ pub struct Settings {
     /// where the handlers are — the backend only needs to persist the map.
     #[serde(default)]
     pub keybindings: HashMap<String, String>,
+    #[serde(default)]
+    pub updates: UpdatesCfg,
+    #[serde(default)]
+    pub crash_reports: CrashCfg,
 }
 /// Secret handling and git credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,10 +170,36 @@ impl Default for NotifyCfg {
             branch_moved: false,
             sound: false,
             badge: "count".into(),
-
         }
     }
+}
 
+/// Update-check preferences. Canopy checks the project's GitHub releases for a
+/// newer tag; it never downloads or installs anything on its own (see
+/// `updates.rs` for why).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdatesCfg {
+    /// check for a newer release in the background
+    pub auto_check: bool,
+}
+
+impl Default for UpdatesCfg {
+    fn default() -> Self {
+        // Checking is a single small request a few times a day and is the only
+        // way someone learns a fix shipped, so it is on by default. Anything
+        // that *installs* would not be.
+        Self { auto_check: true }
+    }
+}
+
+/// Crash-report preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CrashCfg {
+    /// record a stack trace to the log directory when Canopy panics.
+    /// Opt-in: off until the user turns it on.
+    pub enabled: bool,
 
 }
 
@@ -187,6 +217,8 @@ impl Default for Settings {
             experiments: HashMap::new(),
             notifications: NotifyCfg::default(),
             keybindings: HashMap::new(),
+            updates: UpdatesCfg::default(),
+            crash_reports: CrashCfg::default(),
 
         }
     }

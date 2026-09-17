@@ -1,7 +1,9 @@
 // General — appearance and launch behaviour.
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { hasBackend, ipc, type UpdateStatus } from "../../../ipc";
 import { getAppearance, setAppearance, type Accent, type Density, type Theme } from "../../../appearance";
-import { TRow, Adv, Soon } from "../primitives";
+import { TRow } from "../primitives";
 import type { PageProps } from "../types";
 
 export const ACCENT_SWATCHES: { id: Accent; name: string; color: string }[] = [
@@ -56,9 +58,85 @@ export default function GeneralPage({ settings, patch, markDirty }: PageProps) {
               style={{ background: a.color, borderColor: appr.accent === a.id ? "var(--text-primary)" : "transparent", width: 22, height: 22 }} />))}</div>
         </div>
       </div>
-      <Adv n="not wired yet">
-        <Soon>Automatic updates and crash reporting aren't configurable from here yet.</Soon>
-      </Adv>
+      <UpdatesSection settings={settings} patch={patch} markDirty={markDirty} />
     </>
+  );
+}
+
+/* Updates + crash reports.
+
+   Canopy checks whether a newer release exists and links to it; it does not
+   download or install. That needs signed release bundles, which this project
+   does not produce yet — an updater that silently fails every launch would be
+   worse than an honest link. Crash reports are written to the log directory
+   and never transmitted, because there is nowhere to transmit them to. */
+function UpdatesSection({ settings, patch, markDirty }: Pick<PageProps, "settings" | "patch" | "markDirty">) {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [crashes, setCrashes] = useState(0);
+
+  useEffect(() => {
+    if (!hasBackend()) return;
+    ipc.crashReportCount().then(setCrashes).catch(() => {});
+  }, [settings.crashReports?.enabled]);
+
+  const check = async () => {
+    if (!hasBackend()) return;
+    setChecking(true);
+    try {
+      setStatus(await ipc.checkForUpdate());
+    } catch {
+      /* the command reports its own failure in `error`; a rejection here means
+         the backend is gone, and there is nothing useful to say about that */
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="sec">
+      <div className="slab">Updates &amp; diagnostics</div>
+      <TRow
+        title="Check for updates automatically"
+        hint="Asks GitHub twice a day whether a newer release exists. Nothing is downloaded or installed."
+        on={settings.updates?.autoCheck !== false}
+        onToggle={() => { patch({ updates: { autoCheck: !(settings.updates?.autoCheck !== false) } }); markDirty("general"); }}
+      />
+      <div className="row" style={{ marginTop: 8, alignItems: "center", gap: 10 }}>
+        <button className="btn" onClick={check} disabled={checking || !hasBackend()}>
+          {checking ? "Checking…" : "Check now"}
+        </button>
+        <span className="hint" style={{ marginTop: 0 }}>
+          {!status
+            ? `You're on ${hasBackend() ? "this build" : "a dev build"}.`
+            : status.error
+              ? status.error
+              : status.available
+                ? `${status.latest} is available — you have ${status.current}.`
+                : `Up to date (${status.current}).`}
+        </span>
+        {status?.available && status.url && (
+          <button className="btn" onClick={() => openUrl(status.url as string).catch(() => {})}>
+            Open release
+          </button>
+        )}
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <TRow
+          title="Record crash reports"
+          hint="Writes a stack trace to the log folder if Canopy crashes. Stack traces only, and nothing is sent anywhere."
+          on={!!settings.crashReports?.enabled}
+          onToggle={() => { patch({ crashReports: { enabled: !settings.crashReports?.enabled } }); markDirty("general"); }}
+        />
+        {crashes > 0 && (
+          <div className="row" style={{ marginTop: 8, alignItems: "center", gap: 10 }}>
+            <button className="btn" onClick={() => ipc.openCrashReports().catch(() => {})}>
+              Show {crashes} report{crashes === 1 ? "" : "s"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
