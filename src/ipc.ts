@@ -19,6 +19,9 @@ export interface ServiceCfg {
   cwd: string;
   basePort: number | null;
   env: Record<string, string>;
+  /** readiness probe path (e.g. /api/health). Empty = none, and the service
+      counts as running the moment its process is alive. */
+  health: string;
 }
 
 export interface CustomCmd {

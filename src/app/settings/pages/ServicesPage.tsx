@@ -55,7 +55,11 @@ export default function ServicesPage({ repo, patchRepo, markDirty, invalid }: Pa
                     <span className="lb">Extra env</span>
                     <textarea className="inp" value={envToStr(s.env)} placeholder="KEY=VALUE (one per line)" onChange={(e) => patch(s.id, { env: strToEnv(e.target.value) })} />
                     <span className="lb">Health check</span>
-                    <input className="inp mono" disabled title="Health checks aren't wired yet" placeholder="coming soon" />
+                    <input className="inp mono" value={s.health} placeholder="/api/health" onChange={(e) => patch(s.id, { health: e.target.value })} />
+                    <span className="lb" />
+                    <span className="hint" style={{ marginTop: 0 }}>
+                      A path on this service's own port. While set, the service stays “starting” until it answers — so green means it responded, not that the shell forked.
+                    </span>
                   </div>
                 </Adv>
               </div>

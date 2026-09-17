@@ -173,9 +173,9 @@ describe("cleanRepo", () => {
 
   it("drops only services with no command — an id is never a reason to lose a row", () => {
     const { repo: out } = cleanRepo(ensureIds(repo({ services: [
-      { id: "ok", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} },
-      { id: "", name: "Half", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} },
-      { id: "nocmd", name: "Half", kind: "web", command: "  ", cwd: "", basePort: null, env: {} },
+      { id: "ok", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {}, health: "" },
+      { id: "", name: "Half", kind: "web", command: "npm start", cwd: "", basePort: null, env: {}, health: "" },
+      { id: "nocmd", name: "Half", kind: "web", command: "  ", cwd: "", basePort: null, env: {}, health: "" },
     ] })));
     expect(out.services).toHaveLength(2);
     expect(out.services[0].id).toBe("ok");
@@ -213,7 +213,7 @@ describe("cleanRepo", () => {
 
   it("reports what it dropped, so the caller can tell the user (#43)", () => {
     const { dropped } = cleanRepo(repo({
-      services: [{ id: "s1", name: "Half", kind: "web", command: "", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "s1", name: "Half", kind: "web", command: "", cwd: "", basePort: null, env: {}, health: "" }],
       customCommands: [{ label: "", command: "npm test", group: "" }],
       agents: [{ id: "a", name: "Named", command: "", promptOnLaunch: true }],
     }));
@@ -224,7 +224,7 @@ describe("cleanRepo", () => {
 
   it("reports nothing dropped when every row is complete", () => {
     const { dropped } = cleanRepo(repo({
-      services: [{ id: "web", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "web", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {}, health: "" }],
     }));
     expect(dropped).toEqual({ services: 0, customCommands: 0, agents: 0 });
   });
@@ -238,7 +238,7 @@ describe("ensureIds", () => {
 
   it("leaves existing ids alone", () => {
     const out = ensureIds(repo({
-      services: [{ id: "fe", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "fe", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" }],
       agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true }],
     }));
     expect(out.services[0].id).toBe("fe");
@@ -247,7 +247,7 @@ describe("ensureIds", () => {
 
   it("gives a blank id a fresh one rather than dropping the row", () => {
     const out = ensureIds(repo({
-      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" }],
       agents: [{ id: "  ", name: "Claude", command: "claude", promptOnLaunch: true }],
     }));
     expect(out.services[0].id).toBeTruthy();
@@ -259,9 +259,9 @@ describe("ensureIds", () => {
   // target the wrong process
   it("never mints an id that another row already holds", () => {
     const out = ensureIds(repo({ services: [
-      { id: "svc-1", name: "A", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
-      { id: "", name: "B", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
-      { id: "", name: "C", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
+      { id: "svc-1", name: "A", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" },
+      { id: "", name: "B", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" },
+      { id: "", name: "C", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" },
     ] }));
     const ids = out.services.map((s) => s.id);
     expect(new Set(ids).size).toBe(3);
@@ -270,7 +270,7 @@ describe("ensureIds", () => {
 
   it("is idempotent — a second pass changes nothing", () => {
     const once = ensureIds(repo({
-      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {}, health: "" }],
     }));
     expect(ensureIds(once)).toEqual(once);
   });
