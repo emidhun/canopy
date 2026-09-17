@@ -3,6 +3,7 @@
 import { type RepoCfg, type Settings } from "../../ipc";
 import { type FileCardT } from "./provision";
 import { type PageId } from "./catalog";
+import type { IncompleteRow } from "./incomplete";
 
 export type PageProps = {
   repo: RepoCfg | null;
@@ -20,4 +21,6 @@ export type PageProps = {
   onImportJson: () => void;
   onCopyJson: () => void;
   selKey: string | null;
+  /** rows the save step refused, keyed by rowKey() — the editors mark these (#43) */
+  invalid: ReadonlyMap<string, IncompleteRow>;
 };

@@ -4,9 +4,10 @@ import { type AgentCfg } from "../../../ipc";
 import { Check, ChevRight, Plus, Sparkle, Trash } from "../../../icons";
 import { emptyAgent } from "../provision";
 import { Toggle, TRow, Soon } from "../primitives";
+import { missingText, rowKey } from "../incomplete";
 import type { PageProps } from "../types";
 
-export default function AgentsPage({ repo, patchRepo, markDirty, flash }: PageProps) {
+export default function AgentsPage({ repo, patchRepo, markDirty, flash, invalid }: PageProps) {
   if (!repo) return null;
   const agents = repo.agents || [];
   const patch = (id: string, p: Partial<AgentCfg>) => { patchRepo({ agents: agents.map((a) => (a.id === id ? { ...a, ...p } : a)) }); markDirty("agents"); };
@@ -17,12 +18,15 @@ export default function AgentsPage({ repo, patchRepo, markDirty, flash }: PagePr
       <div className="sec">
         <div className="slab">Agent CLIs<span className="n">the first is the default</span></div>
         <div className="objs">
-          {agents.map((a, i) => (
-            <div className={"obj" + (open === a.id ? " open" : "")} key={a.id}>
+          {agents.map((a, i) => {
+            const bad = invalid.get(rowKey("agent", i));
+            return (
+            <div className={"obj" + (open === a.id ? " open" : "") + (bad ? " incomplete" : "")} aria-invalid={bad ? true : undefined} key={a.id}>
               <button className="ohead" onClick={() => setOpen(open === a.id ? null : a.id)}>
                 <span className="cv"><ChevRight size={11} /></span>
                 <Sparkle size={12} />
                 <span className="nm">{a.name || "Untitled"}</span>
+                {bad && <span className="tag warn">{missingText(bad)}</span>}
                 {i === 0 && <span className="tag" style={{ color: "var(--action-primary)", background: "var(--accent-dim)" }}>default</span>}
                 <span className="gr" />
                 <span className="mono">{a.command}</span>
@@ -44,7 +48,8 @@ export default function AgentsPage({ repo, patchRepo, markDirty, flash }: PagePr
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
         <button className="btn" style={{ marginTop: 8 }} onClick={() => { const a = { ...emptyAgent(), name: "New agent" }; patchRepo({ agents: agents.concat([a]) }); setOpen(a.id); markDirty("agents"); }}>
           <Plus size={11} />Add agent</button>

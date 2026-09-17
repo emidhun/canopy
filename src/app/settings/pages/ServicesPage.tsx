@@ -4,9 +4,10 @@ import { type ServiceCfg } from "../../../ipc";
 import { ChevRight, Copy, Plus, Trash } from "../../../icons";
 import { emptyService, envToStr, strToEnv, uid } from "../provision";
 import { Adv } from "../primitives";
+import { missingText, rowKey } from "../incomplete";
 import type { PageProps } from "../types";
 
-export default function ServicesPage({ repo, patchRepo, markDirty }: PageProps) {
+export default function ServicesPage({ repo, patchRepo, markDirty, invalid }: PageProps) {
   const [open, setOpen] = useState<string | null>(repo?.services[0]?.id ?? null);
   if (!repo) return null;
   const svcs = repo.services;
@@ -15,12 +16,15 @@ export default function ServicesPage({ repo, patchRepo, markDirty }: PageProps) 
     <div className="sec">
       <div className="slab">Services<span className="n">ports derive from the worktree index</span></div>
       <div className="objs">
-        {svcs.map((s) => (
-          <div className={"obj" + (open === s.id ? " open" : "")} key={s.id}>
+        {svcs.map((s, i) => {
+          const bad = invalid.get(rowKey("service", i));
+          return (
+          <div className={"obj" + (open === s.id ? " open" : "") + (bad ? " incomplete" : "")} aria-invalid={bad ? true : undefined} key={s.id}>
             <button className="ohead" onClick={() => setOpen(open === s.id ? null : s.id)}>
               <span className="cv"><ChevRight size={11} /></span>
               <span className="nm">{s.name || "New service"}</span>
               <span className="tag">{s.kind}</span>
+              {bad && <span className="tag warn">{missingText(bad)}</span>}
               <span className="gr" />
               <span className="mono" style={{ maxWidth: 210 }}>{s.command}</span>
               {s.basePort != null && <span className="port">:{s.basePort}</span>}
@@ -57,7 +61,8 @@ export default function ServicesPage({ repo, patchRepo, markDirty }: PageProps) 
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
       <button className="btn" style={{ marginTop: 8 }} onClick={() => { const s = { ...emptyService(), name: "New service", basePort: 4000 }; patchRepo({ services: svcs.concat([s]) }); setOpen(s.id); markDirty("services"); }}>
         <Plus size={11} />Add service</button>

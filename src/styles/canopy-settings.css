@@ -1358,3 +1358,19 @@
     padding-left: 0;
   }
 }
+
+/* ── a row the save step refused (#43) ────────────────────────────────────
+   Settings used to drop a half-filled service / command / agent row on save
+   without saying so. It is now kept, marked here, and named in the toast. */
+.cxset-root .obj.incomplete {
+  border-color: var(--state-error);
+  background: var(--red-wash);
+}
+.cxset-root .obj.incomplete .ohead .nm {
+  color: var(--state-error);
+}
+.cxset-root .ohead .tag.warn {
+  color: var(--warn);
+  background: var(--warn-dim);
+  border-color: transparent;
+}

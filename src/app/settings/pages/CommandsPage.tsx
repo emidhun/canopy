@@ -3,9 +3,10 @@ import { useState } from "react";
 import { errText, hasBackend, ipc, type CustomCmd } from "../../../ipc";
 import { ChevRight, Chevron, Copy, Play, Plus, Spinner, Trash } from "../../../icons";
 import { Rot } from "../primitives";
+import { missingText, rowKey } from "../incomplete";
 import type { PageProps } from "../types";
 
-export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey }: PageProps) {
+export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey, invalid }: PageProps) {
   const [open, setOpen] = useState<number | null>(null);
   const [ran, setRan] = useState<{ i: number; state: "running" | "done" } | null>(null);
   if (!repo) return null;
@@ -41,11 +42,14 @@ export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey
           </div>
         ) : (
           <div className="objs">
-            {cmds.map((c, i) => (
-              <div className={"obj" + (open === i ? " open" : "")} key={i}>
+            {cmds.map((c, i) => {
+              const bad = invalid.get(rowKey("command", i));
+              return (
+              <div className={"obj" + (open === i ? " open" : "") + (bad ? " incomplete" : "")} aria-invalid={bad ? true : undefined} key={i}>
                 <button className="ohead" onClick={() => setOpen(open === i ? null : i)}>
                   <span className="cv"><ChevRight size={11} /></span>
                   <span className="nm">{c.label || "Untitled"}</span>
+                  {bad && <span className="tag warn">{missingText(bad)}</span>}
                   <span className="gr" />
                   <span className="mono" style={{ maxWidth: 250 }}>{c.command}</span>
                   <span className="oacts">
@@ -77,7 +81,8 @@ export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
         {cmds.length > 0 && (
