@@ -28,7 +28,7 @@ import {
 import { ALLPAGES, ICONS, pageOf, PLATFORM, REPOPAGES, REPO_PAGE_IDS, type PageId, type PageMeta } from "./catalog";
 import type { PageProps } from "./types";
 import { MOCK, MOCK_CARDS, MOCK_SETUP } from "./mocks";
-import { buildConfig, cleanRepo, fromCards, migrateAgents, toCards, type FileCardT } from "./provision";
+import { buildConfig, cleanRepo, fromCards, normalizeRepo, toCards, type FileCardT } from "./provision";
 import { describeIncomplete, incompleteRows, type IncompleteRow } from "./incomplete";
 import SearchOverlay from "./SearchOverlay";
 import Preview from "./Preview";
@@ -44,6 +44,9 @@ import NotificationsPage from "./pages/NotificationsPage";
 import ShortcutsPage from "./pages/ShortcutsPage";
 import AdvancedPage from "./pages/AdvancedPage";
 import SecurityPage from "./pages/SecurityPage";
+
+/** a page whose repo has no refused rows gets this rather than a fresh Map */
+const NO_INVALID: ReadonlyMap<string, IncompleteRow> = new Map();
 
 /* ══════════════════════════════ shell ══════════════════════════════════ */
 export default function SettingsView({ onClose }: { onClose: () => void }) {
@@ -63,8 +66,11 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const [navQ, setNavQ] = useState("");
   const [flashId, setFlashId] = useState<string | null>(null);
   const [dirty, setDirty] = useState<Set<PageId>>(new Set());
-  // rows the last save refused (#43) — cleared as soon as the user edits again
-  const [invalid, setInvalid] = useState<ReadonlyMap<string, IncompleteRow>>(new Map());
+  // Rows the last save refused (#43), per repo. A row key is kind + index and
+  // carries no repo, so one flat map would mark repo B's valid row at the same
+  // index. Cleared as soon as the user edits, and on Discard.
+  const [invalidByRepo, setInvalidByRepo] = useState<ReadonlyMap<string, ReadonlyMap<string, IncompleteRow>>>(new Map());
+  const clearInvalid = () => setInvalidByRepo((m) => (m.size ? new Map() : m));
 
   const [cardsByRepo, setCardsByRepo] = useState<Record<string, FileCardT[]>>({});
   const [setupByRepo, setSetupByRepo] = useState<Record<string, string[]>>({});
@@ -78,13 +84,14 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
   const flash = (m: string) => showToast(m);
   const markDirty = (id: PageId) => {
     setDirty((d) => new Set(d).add(id));
-    setInvalid((m) => (m.size ? new Map() : m));
+    clearInvalid();
     if ((id === "files" || id === "setup") && repoId) dirtyRepos.current.add(repoId);
   };
 
   function load() {
+    clearInvalid();
     if (!hasBackend()) {
-      setSettings({ ...MOCK, repos: MOCK.repos.map(migrateAgents) });
+      setSettings({ ...MOCK, repos: MOCK.repos.map(normalizeRepo) });
       setRepoId(MOCK.repos[0].id);
       setCardsByRepo({ [MOCK.repos[0].id]: toCards(MOCK_CARDS) });
       setSetupByRepo({ [MOCK.repos[0].id]: MOCK_SETUP });
@@ -93,7 +100,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       return;
     }
     ipc.getSettings().then((s) => {
-      setSettings({ ...s, repos: s.repos.map(migrateAgents) });
+      setSettings({ ...s, repos: s.repos.map(normalizeRepo) });
       if (s.repos[0]) setRepoId(s.repos[0].id);
       setDirty(new Set());
       dirtyRepos.current = new Set();
@@ -183,18 +190,27 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     // A half-filled row cannot be persisted. It used to be filtered out here
     // silently, which reads as data loss (#43) — refuse the save instead, name
     // the row, and jump to the page holding it so it is on screen.
+    // Name the repo in the message when there is more than one — the save jumps
+    // scope, and "which repository?" is otherwise unanswerable from the toast.
+    const many = settings.repos.length > 1;
     const bad = settings.repos.flatMap((r) =>
-      incompleteRows(r).map((row) => ({ ...row, repoId: r.id })),
+      incompleteRows(r).map((row) => ({ ...row, repoId: r.id, repo: many ? r.name : undefined })),
     );
     if (bad.length) {
       const first = bad[0];
-      setInvalid(new Map(bad.map((row) => [row.key, row])));
+      const byRepo = new Map<string, Map<string, IncompleteRow>>();
+      for (const row of bad) {
+        const m = byRepo.get(row.repoId) ?? new Map<string, IncompleteRow>();
+        m.set(row.key, row);
+        byRepo.set(row.repoId, m);
+      }
+      setInvalidByRepo(byRepo);
       if (first.repoId !== repoId) setRepoId(first.repoId);
       setPage(first.page);
       showToast(describeIncomplete(bad));
       return;
     }
-    setInvalid(new Map());
+    clearInvalid();
 
     const cleaned: Settings = {
       ...settings,
@@ -232,7 +248,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     try {
       const added = await ipc.addRepo(dir);
       const fresh = await ipc.getSettings();
-      setSettings({ ...fresh, repos: fresh.repos.map(migrateAgents) });
+      setSettings({ ...fresh, repos: fresh.repos.map(normalizeRepo) });
       setRepoId(added.id);
       setPage("repo-general");
       showToast("Repository added — configure it below");
@@ -245,7 +261,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     try {
       await ipc.removeRepo(repo.id);
       const fresh = await ipc.getSettings();
-      setSettings({ ...fresh, repos: fresh.repos.map(migrateAgents) });
+      setSettings({ ...fresh, repos: fresh.repos.map(normalizeRepo) });
       setRepoId(fresh.repos[0]?.id ?? "");
       setPage("general");
       showToast(`Removed ${repo.name}`);
@@ -320,7 +336,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid };
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid: (repo && invalidByRepo.get(repo.id)) || NO_INVALID };
   const body = () => {
     if (isRepoPage && !repo) {
       return (

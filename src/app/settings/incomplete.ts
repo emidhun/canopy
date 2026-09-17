@@ -15,6 +15,9 @@ export type RowKind = "service" | "command" | "agent";
 
 export type IncompleteRow = {
   kind: RowKind;
+  /** set by the caller when more than one repo is configured, so the message
+      can say which one is at fault rather than silently switching scope */
+  repo?: string;
   page: PageId;
   /** kind + index: a blank id still addresses the right row */
   key: string;
@@ -38,10 +41,13 @@ function rowsOf(r: RepoCfg): { kind: RowKind; index: number; fields: Spec[]; lab
   return [
     ...r.services.map((s, index) => ({
       kind: "service" as const, index,
+      // the id is generated, never typed — like an agent's, it neither marks
+      // the row as touched nor blocks the save; cleanRepo backfills a blank one
       fields: [
-        { label: "id", value: s.id, required: "an id" },
         { label: "name", value: s.name },
         { label: "command", value: s.command, required: "a command" },
+        { label: "directory", value: s.cwd },
+        { label: "base port", value: s.basePort == null ? "" : String(s.basePort) },
       ],
       label: s.name?.trim() || s.id?.trim() || "Untitled service",
     })),
@@ -83,10 +89,15 @@ export function describeIncomplete(rows: IncompleteRow[]): string {
   if (!rows.length) return "";
   if (rows.length === 1) {
     const r = rows[0];
-    return `Nothing saved — the ${NOUN[r.kind]} "${r.label}" needs ${listOf(r.missing)}.`;
+    const where = r.repo ? ` in ${r.repo}` : "";
+    return `Nothing saved — the ${NOUN[r.kind]} "${r.label}"${where} needs ${listOf(r.missing)}.`;
   }
   const sections = [...new Set(rows.map((r) => SECTION[r.kind]))];
-  return `Nothing saved — ${rows.length} incomplete rows in ${listOf(sections)}.`;
+  // the save jumps repo scope to reach the first bad row, so name the repos
+  // here too — otherwise "which repository?" is unanswerable from the toast
+  const repos = [...new Set(rows.map((r) => r.repo).filter(Boolean) as string[])];
+  const where = repos.length ? ` (${listOf(repos)})` : "";
+  return `Nothing saved — ${rows.length} incomplete rows in ${listOf(sections)}${where}.`;
 }
 
 /** the note shown on the row itself: "needs an id and a command" */

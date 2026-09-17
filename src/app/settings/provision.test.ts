@@ -1,19 +1,22 @@
-// Characterization tests for the pure helpers that back the Settings editors.
+// Tests for the pure helpers that back the Settings editors.
 //
-// These pin the behaviour that exists TODAY, before SettingsView.tsx is split
-// into per-page files. Every assertion here was read off the pre-split
-// implementation; if the split changes one of them, the split is wrong.
+// Most of these started as characterization tests taken off the pre-split
+// SettingsView.tsx and still pin that behaviour exactly. The cleanRepo cases
+// are the exception: id backfilling is a deliberate change (#43 review), so
+// those assert the new contract, not the old one.
 import { describe, expect, it } from "vitest";
 import type { ProvisionEntry, RepoCfg } from "../../ipc";
 import {
   buildConfig,
   cleanRepo,
+  ensureIds,
   envToStr,
   fromCards,
   hlLine,
   migrateAgents,
   strToEnv,
   toCards,
+  uid,
   type FileCardT,
 } from "./provision";
 
@@ -168,13 +171,15 @@ describe("cleanRepo", () => {
     services: [], customCommands: [], agentCommand: "", agents: [], ...over,
   } as RepoCfg);
 
-  it("drops services missing an id or a command", () => {
-    const { repo: out } = cleanRepo(repo({ services: [
+  it("drops only services with no command — an id is never a reason to lose a row", () => {
+    const { repo: out } = cleanRepo(ensureIds(repo({ services: [
       { id: "ok", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} },
       { id: "", name: "Half", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} },
       { id: "nocmd", name: "Half", kind: "web", command: "  ", cwd: "", basePort: null, env: {} },
-    ] }));
-    expect(out.services.map((s) => s.id)).toEqual(["ok"]);
+    ] })));
+    expect(out.services).toHaveLength(2);
+    expect(out.services[0].id).toBe("ok");
+    expect(out.services.map((s) => s.name)).toEqual(["Web", "Half"]);
   });
 
   it("drops custom commands missing a label or a command", () => {
@@ -185,7 +190,7 @@ describe("cleanRepo", () => {
     expect(out.customCommands.map((c) => c.label)).toEqual(["Lint"]);
   });
 
-  it("drops agents missing an id, name or command", () => {
+  it("drops agents missing a name or command", () => {
     const { repo: out } = cleanRepo(repo({ agents: [
       { id: "a1", name: "Claude", command: "claude", promptOnLaunch: true },
       { id: "a2", name: "Nameless", command: "", promptOnLaunch: true },
@@ -208,10 +213,12 @@ describe("cleanRepo", () => {
 
   it("reports what it dropped, so the caller can tell the user (#43)", () => {
     const { dropped } = cleanRepo(repo({
-      services: [{ id: "", name: "Half", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      services: [{ id: "s1", name: "Half", kind: "web", command: "", cwd: "", basePort: null, env: {} }],
       customCommands: [{ label: "", command: "npm test", group: "" }],
       agents: [{ id: "a", name: "Named", command: "", promptOnLaunch: true }],
     }));
+    // the id-less service keeps its row (backfilled); only the truly
+    // unsaveable rows count as dropped
     expect(dropped).toEqual({ services: 1, customCommands: 1, agents: 1 });
   });
 
@@ -220,5 +227,65 @@ describe("cleanRepo", () => {
       services: [{ id: "web", name: "Web", kind: "web", command: "npm start", cwd: "", basePort: null, env: {} }],
     }));
     expect(dropped).toEqual({ services: 0, customCommands: 0, agents: 0 });
+  });
+});
+
+describe("ensureIds", () => {
+  const repo = (over: Partial<RepoCfg>): RepoCfg => ({
+    id: "r", name: "R", path: "/r", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
+    services: [], customCommands: [], agentCommand: "", agents: [], ...over,
+  } as RepoCfg);
+
+  it("leaves existing ids alone", () => {
+    const out = ensureIds(repo({
+      services: [{ id: "fe", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      agents: [{ id: "a1", name: "Claude", command: "claude", promptOnLaunch: true }],
+    }));
+    expect(out.services[0].id).toBe("fe");
+    expect(out.agents[0].id).toBe("a1");
+  });
+
+  it("gives a blank id a fresh one rather than dropping the row", () => {
+    const out = ensureIds(repo({
+      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+      agents: [{ id: "  ", name: "Claude", command: "claude", promptOnLaunch: true }],
+    }));
+    expect(out.services[0].id).toBeTruthy();
+    expect(out.agents[0].id).toBeTruthy();
+  });
+
+  // service identity is `{wt_path}::{service_id}` — two services sharing an id
+  // collapse onto one key, and log routing, port overrides and start/stop all
+  // target the wrong process
+  it("never mints an id that another row already holds", () => {
+    const out = ensureIds(repo({ services: [
+      { id: "svc-1", name: "A", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
+      { id: "", name: "B", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
+      { id: "", name: "C", kind: "web", command: "x", cwd: "", basePort: null, env: {} },
+    ] }));
+    const ids = out.services.map((s) => s.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids[0]).toBe("svc-1");
+  });
+
+  it("is idempotent — a second pass changes nothing", () => {
+    const once = ensureIds(repo({
+      services: [{ id: "", name: "Web", kind: "web", command: "x", cwd: "", basePort: null, env: {} }],
+    }));
+    expect(ensureIds(once)).toEqual(once);
+  });
+});
+
+describe("uid", () => {
+  // ids generated here are PERSISTED, and the counter resets on every page
+  // load — without a per-session token, a fresh `svc-1` would collide with a
+  // `svc-1` already in settings.json
+  it("does not repeat the bare counter shape across sessions", () => {
+    expect(uid("svc")).not.toMatch(/^svc-\d+$/);
+  });
+
+  it("never repeats within a session", () => {
+    const ids = Array.from({ length: 50 }, () => uid("svc"));
+    expect(new Set(ids).size).toBe(50);
   });
 });

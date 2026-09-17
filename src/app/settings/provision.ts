@@ -7,9 +7,14 @@
 // them. Nothing here touches React, Tauri or the DOM.
 import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, ServiceCfg } from "../../ipc";
 
-/* ── client-side provision model (stable ids for React keys) ── */
+/* ── client-side provision model (stable ids for React keys) ──
+   The counter resets on every page load, and service ids generated here are
+   PERSISTED — so a bare `svc-1` would collide with a `svc-1` already in
+   settings.json the next time the app starts. A per-session token makes that
+   impossible without needing to know what is already taken. */
+const SESSION = Math.random().toString(36).slice(2, 8);
 let _uid = 0;
-export const uid = (p: string) => `${p}-${++_uid}`;
+export const uid = (p: string) => `${p}-${SESSION}-${++_uid}`;
 
 export type KeyRow = { id: string; k: string; v: string };
 export type FileCardT = {
@@ -98,9 +103,12 @@ export function hlLine(line: string): string {
 export type DroppedRows = { services: number; customCommands: number; agents: number };
 
 export function cleanRepo(r: RepoCfg): { repo: RepoCfg; dropped: DroppedRows } {
-  const services = r.services.filter((s) => s.id.trim() && s.command.trim());
+  // Ids are guaranteed present by ensureIds() at load, so nothing is dropped
+  // for lacking one — only rows that carry no command (or no name, for an
+  // agent) are unsaveable.
+  const services = r.services.filter((s) => s.command.trim());
   const customCommands = (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim());
-  const agents = (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim());
+  const agents = (r.agents || []).filter((a) => a.name.trim() && a.command.trim());
   return {
     repo: { ...r, services, customCommands, agents, agentCommand: agents[0]?.command ?? "" },
     dropped: {
@@ -110,3 +118,20 @@ export function cleanRepo(r: RepoCfg): { repo: RepoCfg; dropped: DroppedRows } {
     },
   };
 }
+
+/* A service or agent id is generated, never typed, and it is the key the rest
+   of the app addresses the thing by — services are `{wt_path}::{service_id}`.
+   A row that reaches us without one (a hand-edited settings.json, a partial
+   write) gets a fresh id ONCE, here at load, rather than at save: minting it
+   during save would hand out a new id on every save and orphan everything
+   keyed by the old one — port overrides, persisted pgids, log files. */
+export function ensureIds(r: RepoCfg): RepoCfg {
+  return {
+    ...r,
+    services: r.services.map((s) => (s.id?.trim() ? s : { ...s, id: uid("svc") })),
+    agents: (r.agents || []).map((a) => (a.id?.trim() ? a : { ...a, id: emptyAgent().id })),
+  };
+}
+
+/** Everything a repo needs on the way in from disk, in one call. */
+export const normalizeRepo = (r: RepoCfg): RepoCfg => ensureIds(migrateAgents(r));

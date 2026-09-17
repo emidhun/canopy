@@ -2,6 +2,12 @@
 import { useState } from "react";
 import { Search } from "../../../icons";
 
+/* Every binding the app actually listens for, grouped by where it applies.
+   This table is a reference, so it is only worth having if it is exhaustive
+   and true — an entry here without a listener behind it is worse than a gap.
+   Sources: App.tsx (global + worktree), SettingsView (settings), Modal's
+   usePrimaryAction (dialogs), Palette / SearchOverlay (lists), SidebarNav
+   (selection chords) and Popover.tsx (the menu-bar window). */
 const KEYS: [string, string, string][] = [
   // global
   ["Command palette", "⌘ K", "Global"],
