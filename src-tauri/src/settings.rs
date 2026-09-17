@@ -36,6 +36,16 @@ pub struct Settings {
     pub experiments: HashMap<String, bool>,
     #[serde(default)]
     pub notifications: NotifyCfg,
+    /// Keybinding overrides: action id → binding ("Mod+k"). Only ids the
+    /// running build knows are honoured, so an override for a shortcut that
+    /// was removed is ignored rather than being an error.
+    ///
+    /// A map for the same reason experiments are: shortcuts are added and
+    /// renamed, and a named field per action would be a schema change every
+    /// time. The registry lives in the frontend (`src/app/keys.ts`), which is
+    /// where the handlers are — the backend only needs to persist the map.
+    #[serde(default)]
+    pub keybindings: HashMap<String, String>,
 }
 /// Secret handling and git credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +169,8 @@ impl Default for NotifyCfg {
 
         }
     }
+
+
 }
 
 impl Default for Settings {
@@ -174,6 +186,7 @@ impl Default for Settings {
             embedded_terminal: TermCfg::default(),
             experiments: HashMap::new(),
             notifications: NotifyCfg::default(),
+            keybindings: HashMap::new(),
 
         }
     }
