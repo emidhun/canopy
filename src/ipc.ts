@@ -254,7 +254,23 @@ export const ipc = {
     invoke<void>("remove_worktrees", { wtKeys, deleteBranch, dropDb }),
   listPrunableWorktrees: () => invoke<PrunableWorktree[]>("list_prunable_worktrees"),
   pruneWorktrees: (items: PruneItem[]) => invoke<void>("prune_worktrees", { items }),
+
+  /** every measurement held so far — instant, from cache */
+  getDiskUsage: () => invoke<Record<string, DiskUsage>>("get_disk_usage"),
+  /** queue worktrees for measurement; resolves immediately, results arrive as
+      `worktree:disk`. Fresh figures are skipped unless `force`. */
+  scanDiskUsage: (wtKeys: string[], force = false) => invoke<void>("scan_disk_usage", { wtKeys, force }),
 };
+
+/** A worktree's on-disk footprint: everything under its root, `node_modules`
+    and build output included — that is what removing it actually frees. */
+export interface DiskUsage {
+  bytes: number;
+  /** unix seconds */
+  scannedAt: number;
+  /** the walk hit a budget and stopped early, so `bytes` is a floor */
+  partial: boolean;
+}
 
 export interface GitEvent extends GitMeta {
   wtKey: string;
@@ -300,6 +316,10 @@ export interface TerminalStateEvent {
   id: string;
   state: "busy" | "waiting";
 }
+
+export interface DiskEvent extends DiskUsage {
+  wtKey: string;
+}
 /** Scrollback snapshot + the cursor it ends at (race-free rehydrate). */
 export interface TerminalSnapshot {
   buffer: string;
@@ -327,6 +347,8 @@ export const on = {
     listen<TerminalExitEvent>("terminal:exit", (e) => cb(e.payload)),
   terminalState: (cb: (e: TerminalStateEvent) => void): Promise<UnlistenFn> =>
     listen<TerminalStateEvent>("terminal:state", (e) => cb(e.payload)),
+  worktreeDisk: (cb: (e: DiskEvent) => void): Promise<UnlistenFn> =>
+    listen<DiskEvent>("worktree:disk", (e) => cb(e.payload)),
 };
 
 /** Structured backend error — every command rejects with `{ code, message }`. */
