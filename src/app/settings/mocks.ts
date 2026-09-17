@@ -1,9 +1,10 @@
 // Fixtures the Settings editors render against when there is no Tauri backend
 // (browser preview / mock mode). Never used when hasBackend() is true.
 import { type ProvisionEntry, type Settings, type SetupTask } from "../../ipc";
+import { DEFAULT_SECURITY } from "./provision";
 
 export const MOCK: Settings = {
-  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, pinnedWorktrees: [],
+  version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true, pinnedWorktrees: [], security: DEFAULT_SECURITY,
   repos: [{
     id: "tooljet", name: "ToolJet", path: "~/ToolJetSpace/CE/ToolJet", worktreeDir: ".worktrees", resetDb: "", migrateDb: "",
     services: [

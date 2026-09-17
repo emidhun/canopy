@@ -4,8 +4,8 @@ import type { SetupPolicy, SetupTask } from "../../ipc";
 import { buildConfig, hlLine, type FileCardT } from "./provision";
 import { Rot } from "./primitives";
 
-export default function Preview({ cards, setup, extras, policy, onClose }: { cards: FileCardT[]; setup: SetupTask[]; extras: { teardown: string[]; migrate: string[] }; policy: SetupPolicy; onClose: () => void }) {
-  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
+export default function Preview({ cards, setup, extras, policy, mask, onClose }: { cards: FileCardT[]; setup: SetupTask[]; extras: { teardown: string[]; migrate: string[] }; policy: SetupPolicy; mask: boolean; onClose: () => void }) {
+  const json = JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy, mask), null, 2);
   const lines = json.split("\n");
   return (
     <div className="ppreview">

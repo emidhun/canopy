@@ -280,7 +280,11 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
 
   /* ── .worktreemanager.json import / export (mirrors the previous repo
         config editor: native save + backend write out, FileReader in) ── */
-  const configJson = () => JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy), null, 2);
+  /* Masking applies to what LEAVES the app (copy / export), never to what is
+     saved: a masked config written back to disk would provision the literal
+     string "••••••••" into every worktree. save_repo_config is unaffected. */
+  const configJson = () =>
+    JSON.stringify(buildConfig(cards, setup, extras.teardown, extras.migrate, policy, !!settings.security?.maskInExports), null, 2);
   const copyJson = () => {
     if (!repo) return;
     navigator.clipboard?.writeText(configJson()).then(() => showToast("Copied .worktreemanager.json"), () => showToast("Copy failed"));
@@ -362,7 +366,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
       case "notifications": return <NotificationsPage />;
       case "shortcuts": return <ShortcutsPage />;
       case "advanced": return <AdvancedPage {...pageProps} />;
-      case "security": return <SecurityPage />;
+      case "security": return <SecurityPage {...pageProps} />;
       default: return <GeneralPage {...pageProps} />;
     }
   };
@@ -475,7 +479,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
           <div className="pbody">
             <div className={"pmain" + (flashId?.startsWith(page + "-") ? " flashrow" : "")}>{body()}</div>
             {preview && isRepoPage && repo && (
-              <Preview cards={cards} setup={setup} extras={extras} policy={policy} onClose={() => setPreview(false)} />
+              <Preview cards={cards} setup={setup} extras={extras} policy={policy} mask={settings.security?.maskSecrets !== false} onClose={() => setPreview(false)} />
             )}
           </div>
         </div>

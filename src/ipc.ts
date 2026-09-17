@@ -68,6 +68,17 @@ export interface Settings {
   showSwitchBranch: boolean;
   /** worktrees pinned to the top of the sidebar, by wtKey */
   pinnedWorktrees: string[];
+  security: SecurityCfg;
+}
+
+export interface SecurityCfg {
+  /** render secret-looking values as bullets in the preview and in streamed
+      setup output */
+  maskSecrets: boolean;
+  /** export key names but not their values */
+  maskInExports: boolean;
+  sshKey: string;
+  credentialHelper: string;
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
