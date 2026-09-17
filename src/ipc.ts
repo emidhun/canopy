@@ -95,6 +95,7 @@ export interface Settings {
   /** worktrees pinned to the top of the sidebar, by wtKey */
   pinnedWorktrees: string[];
   security: SecurityCfg;
+  embeddedTerminal: TermCfg;
 }
 
 export interface SecurityCfg {
@@ -105,6 +106,24 @@ export interface SecurityCfg {
   maskInExports: boolean;
   sshKey: string;
   credentialHelper: string;
+}
+
+/** Embedded-shell configuration. Every field has an "unset" value meaning
+    *keep the built-in behaviour* (empty string, or 0), so the renderer's
+    defaults live in one place instead of being duplicated as magic numbers. */
+export interface TermCfg {
+  program: string;
+  args: string;
+  fontFamily: string;
+  fontSize: number;
+  scrollback: number;
+  /** block | underline | bar; empty = block */
+  cursor: string;
+  cursorBlink: boolean;
+  bell: boolean;
+  cwdWorktree: boolean;
+  inheritEnv: boolean;
+
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
