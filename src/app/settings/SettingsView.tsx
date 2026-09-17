@@ -348,7 +348,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     } catch (e) { showToast(`Couldn't read the config file: ${e}`); }
   };
 
-  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, policy, setPolicy, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, invalid: (repo && invalidByRepo.get(repo.id)) || NO_INVALID };
+  const pageProps: PageProps = { repo, patchRepo, settings, patch, markDirty, flash, cards, setCards, setup, setSetup, policy, setPolicy, onRemoveRepo: removeRepo, onExportJson: exportJson, onImportJson: triggerImport, onCopyJson: copyJson, selKey, reload: load, invalid: (repo && invalidByRepo.get(repo.id)) || NO_INVALID };
   const body = () => {
     if (isRepoPage && !repo) {
       return (

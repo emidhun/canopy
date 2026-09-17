@@ -1002,10 +1002,11 @@ pub async fn create_worktree(
     // Assign the worktree's ports first so .env overrides can reference them.
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_path, false);
     // The worktree exists either way; surface setup failure but keep the tree fresh.
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
     let setup_result = if repo.worktree_defaults.run_setup {
         let app3 = app.clone();
         let wt_path3 = wt_path.clone();
-        crate::setup::run_setup(&wt_path, &repo.path, &vars, false, move |p| {
+        crate::setup::run_setup(&wt_path, &repo.path, &vars, false, parallel, move |p| {
             emit_progress(&app3, &wt_path3, "create", p)
         })
         .await
@@ -1020,6 +1021,7 @@ pub async fn create_worktree(
     // already carries the marker rather than reading as unprovisioned until
     // the next 60s refresh.
     crate::setup::write_setup_marker(&wt_path, setup_result.is_ok());
+
 
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
@@ -1069,7 +1071,8 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String, dry_run: bool) -
     let app3 = app.clone();
     let wt3 = wt_key.clone();
     emit_op(&app, &wt_key, "create", "progress", if dry_run { "dry run — nothing will be executed" } else { "running setup…" });
-    let result = crate::setup::run_setup(&wt_key, &repo_path, &vars, dry_run, move |p| {
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
+    let result = crate::setup::run_setup(&wt_key, &repo_path, &vars, dry_run, parallel, move |p| {
         emit_progress(&app3, &wt3, "create", p)
     })
     .await;
@@ -1664,6 +1667,52 @@ pub fn scan_disk_usage(app: AppHandle, wt_keys: Vec<String>, force: bool) -> Res
     };
     crate::disk::request(&app, known, force);
     Ok(())
+}
+
+// ── diagnostics / caches / reset (Settings → Advanced) ──
+
+/// An environment summary for a bug report, plus the same thing as markdown so
+/// the UI can put one string on the clipboard.
+#[tauri::command]
+pub fn gather_diagnostics(app: AppHandle) -> (crate::diagnostics::Diagnostics, String) {
+    let d = crate::diagnostics::gather(&app);
+    let md = crate::diagnostics::as_markdown(&d);
+    (d, md)
+}
+
+/// The experiments this build ships, so Settings renders the ones that exist
+/// rather than a hardcoded list that drifts from what the app honours.
+#[tauri::command]
+pub fn list_experiments() -> Vec<crate::diagnostics::Experiment> {
+    crate::diagnostics::EXPERIMENTS.to_vec()
+}
+
+/// Reveal the log directory — the thing a bug report attaches.
+#[tauri::command]
+pub fn open_log_dir(app: AppHandle) -> Result<(), CanopyError> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| CanopyError::not_found(format!("no log directory: {e}")))?;
+    std::fs::create_dir_all(&dir).map_err(|e| CanopyError::internal(e.to_string()))?;
+    reveal_in_finder(dir.to_string_lossy().into_owned())
+}
+
+/// Delete Canopy's own regenerable files (rotated service logs). Never touches
+/// a worktree, a database, a repository or a settings file.
+#[tauri::command]
+pub fn clear_caches(app: AppHandle) -> crate::diagnostics::ClearedCaches {
+    crate::diagnostics::clear_caches(&app)
+}
+
+/// Restore default settings, keeping registered repositories. The confirmation
+/// lives in the UI; this command is the irreversible half and does exactly
+/// what its name says.
+#[tauri::command]
+pub async fn reset_settings(app: AppHandle) -> Result<Settings, CanopyError> {
+    crate::diagnostics::reset_settings(&app).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(app.state::<AppState>().settings.read().clone())
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.
