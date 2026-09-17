@@ -3,6 +3,7 @@ import { useState } from "react";
 import { errText, hasBackend, ipc, type CustomCmd } from "../../../ipc";
 import { ChevRight, Chevron, Copy, Play, Plus, Spinner, Trash } from "../../../icons";
 import { Rot } from "../primitives";
+import { groupNames } from "../../canopy/commandGroups";
 import { missingText, rowKey } from "../incomplete";
 import type { PageProps } from "../types";
 
@@ -20,7 +21,7 @@ export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey
   };
   // Existing groups become suggestions: grouping is only useful when names
   // match exactly, and free typing is how you end up with "Build" and "build".
-  const groupNames = Array.from(new Set(cmds.map((c) => (c.group ?? "").trim()).filter(Boolean)));
+  const groupNameList = groupNames(cmds);
   return (
     <>
       <div className="sec">
@@ -33,7 +34,7 @@ export default function CommandsPage({ repo, patchRepo, markDirty, flash, selKey
         </div>
       </div>
       <div className="sec">
-        <datalist id="cx-cmd-groups">{groupNames.map((g) => <option key={g} value={g} />)}</datalist>
+        <datalist id="cx-cmd-groups">{groupNameList.map((g) => <option key={g} value={g} />)}</datalist>
         <div className="slab">Custom commands<span className="n">launchers in the agent lane's + menu</span></div>
         {cmds.length === 0 ? (
           <div className="empty">
