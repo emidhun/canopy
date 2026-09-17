@@ -98,8 +98,8 @@ export interface Settings {
   embeddedTerminal: TermCfg;
   /** opt-in experiment flags by id; unknown ids are ignored */
   experiments: Record<string, boolean>;
+  notifications: NotifyCfg;
 }
-
 export interface SecurityCfg {
   /** render secret-looking values as bullets in the preview and in streamed
       setup output */
@@ -152,6 +152,19 @@ export interface Diagnostics {
 export interface ClearedCaches {
   serviceLogs: number;
   bytes: number;
+}
+
+/** Which backend events raise an OS notification. Every one of these also
+    appears in the in-app attention queue; a notification is for when Canopy is
+    in the tray and you're looking at something else. */
+export interface NotifyCfg {
+  serviceCrash: boolean;
+  agentWaiting: boolean;
+  setupDone: boolean;
+  branchMoved: boolean;
+  sound: boolean;
+  /** count | dot | off */
+  badge: string;
 
 }
 

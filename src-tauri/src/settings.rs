@@ -34,8 +34,9 @@ pub struct Settings {
     /// unknown key is simply an experiment this build no longer has.
     #[serde(default)]
     pub experiments: HashMap<String, bool>,
+    #[serde(default)]
+    pub notifications: NotifyCfg,
 }
-
 /// Secret handling and git credentials.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -121,6 +122,45 @@ impl Default for TermCfg {
     }
 }
 
+/// Which backend events raise an OS notification.
+///
+/// Every one of these already appears in the in-app attention queue. A
+/// notification is for when Canopy is in the tray and you are looking at
+/// something else — so the defaults follow one rule: notify only when a human
+/// is BLOCKING something, never for progress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotifyCfg {
+    /// a service exited unexpectedly
+    pub service_crash: bool,
+    /// an agent is blocked waiting on input
+    pub agent_waiting: bool,
+    /// provisioning finished (success or failure)
+    pub setup_done: bool,
+    /// the worktree's branch moved on origin
+    pub branch_moved: bool,
+    /// play the system sound with the notification
+    pub sound: bool,
+    /// "count" | "dot" | "off" — the app-icon badge
+    pub badge: String,
+}
+
+impl Default for NotifyCfg {
+    fn default() -> Self {
+        Self {
+            // the two states that mean "something is stuck on you"
+            service_crash: true,
+            agent_waiting: true,
+            // progress, not a block — you asked for it and you can watch it
+            setup_done: false,
+            branch_moved: false,
+            sound: false,
+            badge: "count".into(),
+
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -133,6 +173,8 @@ impl Default for Settings {
             security: SecurityCfg::default(),
             embedded_terminal: TermCfg::default(),
             experiments: HashMap::new(),
+            notifications: NotifyCfg::default(),
+
         }
     }
 }

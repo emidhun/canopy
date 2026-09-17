@@ -115,7 +115,7 @@ struct StatusEvent<'a> {
 
 pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Option<u64>, exit_code: Option<i32>) {
     let state = app.state::<AppState>();
-    state.statuses.write().insert(key.to_string(), status);
+    let previous = state.statuses.write().insert(key.to_string(), status);
     // patch cached tree so late get_tree calls see fresh statuses
     {
         let mut tree = state.tree.write();
@@ -130,6 +130,32 @@ pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Opt
         }
     }
     let _ = app.emit("service:status", &StatusEvent { svc_key: key, status, started_at, exit_code });
+
+    // Notify on the TRANSITION into error, not on the state: a status
+    // re-broadcast (a tree rebuild, a refresh) would otherwise re-notify about
+    // a crash the user already knows about.
+    if status == SvcStatus::Error && previous != Some(SvcStatus::Error) {
+        let name = {
+            let tree = state.tree.read();
+            tree.iter()
+                .flat_map(|r| r.worktrees.iter())
+                .flat_map(|w| w.services.iter().map(move |s| (w, s)))
+                .find(|(_, s)| s.svc_key == key)
+                .map(|(w, s)| format!("{} · {}", s.name, w.branch))
+                .unwrap_or_else(|| key.to_string())
+        };
+        crate::notify::notify(
+            app,
+            crate::notify::Kind::ServiceCrash,
+            key,
+            "A service crashed",
+            &match exit_code {
+                Some(c) => format!("{name} exited with code {c}"),
+                None => format!("{name} exited"),
+            },
+        );
+    }
+    crate::notify::refresh_badge(app);
 }
 
 
