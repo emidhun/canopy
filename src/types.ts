@@ -18,6 +18,20 @@ export interface GitMeta {
   lastCommitMsg: string;
 }
 
+/** How Canopy knows a worktree was provisioned. `marker` is the durable
+    `.canopy/setup.json` record; `inferred` means there was no marker but every
+    declared provisioned file is present — the back-compat path for worktrees
+    created before the marker existed. */
+export type SetupSource = "marker" | "inferred";
+
+export interface SetupState {
+  /** unix seconds of the recorded run; null when inferred */
+  ranAt: number | null;
+  /** did that run succeed */
+  ok: boolean;
+  source: SetupSource;
+}
+
 export interface WorktreeNode {
   wtKey: string;
   branch: string;
@@ -25,6 +39,10 @@ export interface WorktreeNode {
   isMain: boolean;
   git: GitMeta | null;
   dbName: string | null;
+  /** provisioning record; null = never provisioned as far as Canopy can tell */
+  setup: SetupState | null;
+  /** does the owning repo declare anything to provision or run? */
+  setupConfigured: boolean;
   services: ServiceNode[];
 }
 
