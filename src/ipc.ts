@@ -61,6 +61,11 @@ export interface RepoCfg {
   /** branch new worktrees are created from by default; empty = the modal's own default */
   defaultBase: string;
   worktreeDefaults: WorktreeDefaults;
+  agentContext: AgentContextCfg;
+  /** most agent sessions at once in this repo; 0 = no limit */
+  maxParallelAgents: number;
+  /** minutes an agent may sit idle before Canopy closes it; 0 = never */
+  agentIdleTimeoutMin: number;
 }
 
 /** What create_worktree does after `git worktree add`, per repository. */
@@ -70,6 +75,15 @@ export interface WorktreeDefaults {
   /** off makes ${WT_DB_NAME} resolve to the main checkout's PG_DB, so the
       worktree shares that database instead of getting one of its own */
   isolatedDatabase: boolean;
+}
+
+/** What Canopy puts in the handoff every agent receives. */
+export interface AgentContextCfg {
+  worktreeContext: boolean;
+  runtimeFacts: boolean;
+  /** opt-in: the one part that can carry arbitrary process output — including
+      a value read from a .env — into a prompt sent to a third-party CLI */
+  failingLogs: boolean;
 }
 
 export interface Settings {

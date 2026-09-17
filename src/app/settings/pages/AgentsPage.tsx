@@ -3,8 +3,9 @@ import { useState } from "react";
 import { type AgentCfg } from "../../../ipc";
 import { Check, ChevRight, Plus, Sparkle, Trash } from "../../../icons";
 import { emptyAgent } from "../provision";
-import { Toggle, TRow, Soon } from "../primitives";
+import { Toggle, TRow } from "../primitives";
 import { missingText, rowKey } from "../incomplete";
+import { DEFAULT_AGENT_CONTEXT } from "../provision";
 import type { PageProps } from "../types";
 
 export default function AgentsPage({ repo, patchRepo, markDirty, flash, invalid }: PageProps) {
@@ -13,6 +14,8 @@ export default function AgentsPage({ repo, patchRepo, markDirty, flash, invalid 
   const patch = (id: string, p: Partial<AgentCfg>) => { patchRepo({ agents: agents.map((a) => (a.id === id ? { ...a, ...p } : a)) }); markDirty("agents"); };
   const makeDefault = (id: string) => { const a = agents.find((x) => x.id === id); if (!a) return; patchRepo({ agents: [a, ...agents.filter((x) => x.id !== id)] }); markDirty("agents"); flash(`${a.name || a.command} is now the default agent`); };
   const [open, setOpen] = useState<string | null>(null);
+  const ac = repo.agentContext ?? DEFAULT_AGENT_CONTEXT;
+  const setAc = (p: Partial<typeof ac>) => { patchRepo({ agentContext: { ...ac, ...p } }); markDirty("agents"); };
   return (
     <>
       <div className="sec">
@@ -70,11 +73,26 @@ export default function AgentsPage({ repo, patchRepo, markDirty, flash, invalid 
       </div>
       <div className="sec">
         <div className="slab">Context handed to every agent</div>
-        <Soon>The per-agent context toggles and concurrency limit aren't wired yet — Canopy currently seeds the worktree context by default.</Soon>
-        <div className="soonwrap">
-          <TRow title="Worktree context" hint="Task title, description and linked PR or issue." on disabled />
-          <TRow title="Runtime facts" hint="Branch, ports, database name and running services." on disabled />
-          <TRow title="Recent failing logs" hint="The last 40 error lines, when a service is unhealthy." on={false} disabled />
+        <TRow title="Worktree context" hint="Task title, description and linked PR or issue." on={ac.worktreeContext} onToggle={() => setAc({ worktreeContext: !ac.worktreeContext })} />
+        <TRow title="Runtime facts" hint="Branch, path, database name and resolved ports." on={ac.runtimeFacts} onToggle={() => setAc({ runtimeFacts: !ac.runtimeFacts })} />
+        <TRow title="Recent failing logs" hint="The last error lines from unhealthy services. Off by default — it is the one part that can carry arbitrary process output into a prompt sent to a third-party CLI." on={ac.failingLogs} onToggle={() => setAc({ failingLogs: !ac.failingLogs })} />
+        <p className="hint">The task title always survives, whatever these say — a handoff opening with no heading reads as a truncation bug rather than a configured omission.</p>
+      </div>
+      <div className="sec">
+        <div className="slab">Advanced</div>
+        <div className="fgrid">
+          <span className="lb">Max parallel</span>
+          <div className="row">
+            <input className="inp mono" style={{ width: 80 }} value={repo.maxParallelAgents || ""} placeholder="no limit"
+              onChange={(e) => { patchRepo({ maxParallelAgents: Number(e.target.value) || 0 }); markDirty("agents"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Agents at once across this repo. A launch past the limit is refused, not queued.</span>
+          </div>
+          <span className="lb">Idle timeout</span>
+          <div className="row">
+            <input className="inp mono" style={{ width: 80 }} value={repo.agentIdleTimeoutMin || ""} placeholder="never"
+              onChange={(e) => { patchRepo({ agentIdleTimeoutMin: Number(e.target.value) || 0 }); markDirty("agents"); }} />
+            <span className="hint" style={{ marginTop: 0 }}>Minutes with no output or input before an agent is closed. Blank never closes one — a quiet agent may just be waiting for you.</span>
+          </div>
         </div>
       </div>
     </>
