@@ -66,6 +66,8 @@ export interface Settings {
   terminal: string;
   repos: RepoCfg[];
   showSwitchBranch: boolean;
+  /** worktrees pinned to the top of the sidebar, by wtKey */
+  pinnedWorktrees: string[];
 }
 
 export type ProvisionFormat = "dotenv" | "json" | "yaml" | "text";
@@ -260,6 +262,7 @@ export const ipc = {
   /** queue worktrees for measurement; resolves immediately, results arrive as
       `worktree:disk`. Fresh figures are skipped unless `force`. */
   scanDiskUsage: (wtKeys: string[], force = false) => invoke<void>("scan_disk_usage", { wtKeys, force }),
+  setWorktreePinned: (wtKey: string, pinned: boolean) => invoke<void>("set_worktree_pinned", { wtKey, pinned }),
 };
 
 /** A worktree's on-disk footprint: everything under its root, `node_modules`
