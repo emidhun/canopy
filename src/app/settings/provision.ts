@@ -1,0 +1,112 @@
+// Pure helpers behind the Settings editors — the client-side provision model,
+// the .worktreemanager.json builder, env <-> text conversion, the JSON preview
+// highlighter, and the row cleaning the save step applies.
+//
+// These live apart from the page components so they can be tested directly and
+// shared: SettingsView's save path and the Files/Setup pages both reach for
+// them. Nothing here touches React, Tauri or the DOM.
+import type { AgentCfg, ProvisionEntry, ProvisionFormat, RepoCfg, ServiceCfg } from "../../ipc";
+
+/* ── client-side provision model (stable ids for React keys) ── */
+let _uid = 0;
+export const uid = (p: string) => `${p}-${++_uid}`;
+
+export type KeyRow = { id: string; k: string; v: string };
+export type FileCardT = {
+  id: string;
+  path: string;
+  format: ProvisionFormat;
+  from: string;
+  interpolate: boolean;
+  keys: KeyRow[];
+};
+
+export function toCards(entries: ProvisionEntry[]): FileCardT[] {
+  return entries.map((e) => ({
+    id: uid("f"), path: e.path, format: e.format, from: e.from || "", interpolate: !!e.interpolate,
+    keys: (e.keys || []).map(([k, v]) => ({ id: uid("k"), k, v })),
+  }));
+}
+
+export function fromCards(cards: FileCardT[]): ProvisionEntry[] {
+  return cards.filter((c) => c.path.trim()).map((c) => ({
+    path: c.path.trim(), format: c.format, from: c.from.trim(),
+    interpolate: c.format === "text" ? c.interpolate : false,
+    keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
+  }));
+}
+
+export function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
+  const cfg: Record<string, unknown> = {
+    $schema: "canopy://worktree-manager/v1",
+    provision: cards.filter((c) => c.path.trim()).map((c) => {
+      const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
+      if (c.from.trim()) o.from = c.from.trim();
+      if (c.format === "text") o.interpolate = c.interpolate;
+      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
+      return o;
+    }),
+    setup: setup.filter((s) => s.trim()),
+  };
+  if (teardown.length) cfg.teardown = teardown;
+  if (migrate.length) cfg.migrate = migrate;
+  return cfg;
+}
+
+/* ── empty rows ── */
+let agentSeq = 0;
+export const emptyAgent = (): AgentCfg => ({
+  id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true,
+});
+export const emptyService = (): ServiceCfg => ({
+  id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {},
+});
+
+/* A repo saved before the agent list existed carries a single `agentCommand`;
+   surface it as one row so the editor has something to show. */
+export function migrateAgents(r: RepoCfg): RepoCfg {
+  if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
+  return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
+}
+
+/* ── env text <-> map ── */
+export const envToStr = (env: Record<string, string>) =>
+  Object.entries(env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+
+export const strToEnv = (s: string): Record<string, string> =>
+  Object.fromEntries(s.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
+    const i = l.indexOf("=");
+    return i < 0 ? [l, ""] : [l.slice(0, i), l.slice(i + 1)];
+  }));
+
+/* ── JSON preview highlight — escape first, then wrap tokens (values are
+      escaped so this is safe to inject) ── */
+export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+export function hlLine(line: string): string {
+  let s = esc(line);
+  s = s.replace(/"([^"]*)"(\s*:)/g, '<span class="jk">"$1"</span>$2');
+  s = s.replace(/:\s*"([^"]*)"/g, (_m, v: string) => `: <span class="jv">"${v}"</span>`);
+  s = s.replace(/:\s*(-?\d+(?:\.\d+)?)/g, ': <span class="jn">$1</span>');
+  return s;
+}
+
+/* ── save-time row cleaning ──
+   A half-filled service / command / agent row cannot be persisted, so it is
+   dropped. The counts come back with it: dropping rows silently reads as data
+   loss, so the caller has to be able to say what went missing (#43). */
+export type DroppedRows = { services: number; customCommands: number; agents: number };
+
+export function cleanRepo(r: RepoCfg): { repo: RepoCfg; dropped: DroppedRows } {
+  const services = r.services.filter((s) => s.id.trim() && s.command.trim());
+  const customCommands = (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim());
+  const agents = (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim());
+  return {
+    repo: { ...r, services, customCommands, agents, agentCommand: agents[0]?.command ?? "" },
+    dropped: {
+      services: r.services.length - services.length,
+      customCommands: (r.customCommands || []).length - customCommands.length,
+      agents: (r.agents || []).length - agents.length,
+    },
+  };
+}

@@ -25,6 +25,10 @@ import {
   Spinner, Terminal, Trash, X,
 } from "../icons";
 import { getAppearance, setAppearance, type Accent, type Density, type Theme } from "../appearance";
+import {
+  buildConfig, cleanRepo, emptyAgent, emptyService, envToStr, fromCards, hlLine, migrateAgents,
+  strToEnv, toCards, uid, type FileCardT,
+} from "./settings/provision";
 
 /* icons don't accept `style`; wrap when a glyph needs rotating */
 const Rot = ({ children, deg }: { children: React.ReactNode; deg: number }) => (
@@ -102,64 +106,6 @@ const VARS: { t: string; d: string }[] = [
   { t: "${WT_PATH}", d: "~/ToolJet/.worktrees/…" },
   { t: "${REPO_PATH}", d: "~/ToolJet" },
 ];
-
-/* ── client-side provision model (stable ids for React keys) ── */
-let _uid = 0;
-const uid = (p: string) => `${p}-${++_uid}`;
-type KeyRow = { id: string; k: string; v: string };
-type FileCardT = { id: string; path: string; format: ProvisionFormat; from: string; interpolate: boolean; keys: KeyRow[] };
-
-function toCards(entries: ProvisionEntry[]): FileCardT[] {
-  return entries.map((e) => ({
-    id: uid("f"), path: e.path, format: e.format, from: e.from || "", interpolate: !!e.interpolate,
-    keys: (e.keys || []).map(([k, v]) => ({ id: uid("k"), k, v })),
-  }));
-}
-function fromCards(cards: FileCardT[]): ProvisionEntry[] {
-  return cards.filter((c) => c.path.trim()).map((c) => ({
-    path: c.path.trim(), format: c.format, from: c.from.trim(),
-    interpolate: c.format === "text" ? c.interpolate : false,
-    keys: c.format === "text" ? [] : (c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v]) as [string, string][]),
-  }));
-}
-function buildConfig(cards: FileCardT[], setup: string[], teardown: string[], migrate: string[]) {
-  const cfg: Record<string, unknown> = {
-    $schema: "canopy://worktree-manager/v1",
-    provision: cards.filter((c) => c.path.trim()).map((c) => {
-      const o: Record<string, unknown> = { path: c.path.trim(), format: c.format };
-      if (c.from.trim()) o.from = c.from.trim();
-      if (c.format === "text") o.interpolate = c.interpolate;
-      else { o.mode = "upsert"; o.keys = Object.fromEntries(c.keys.filter((k) => k.k.trim()).map((k) => [k.k, k.v])); }
-      return o;
-    }),
-    setup: setup.filter((s) => s.trim()),
-  };
-  if (teardown.length) cfg.teardown = teardown;
-  if (migrate.length) cfg.migrate = migrate;
-  return cfg;
-}
-
-let agentSeq = 0;
-const emptyAgent = (): AgentCfg => ({ id: `agent-${Date.now().toString(36)}-${agentSeq++}`, name: "", command: "", promptOnLaunch: true });
-const emptyService = (): ServiceCfg => ({ id: uid("svc"), name: "", kind: "worker", command: "", cwd: "", basePort: null, env: {} });
-function migrateAgents(r: RepoCfg): RepoCfg {
-  if (r.agents?.length || !r.agentCommand?.trim()) return { ...r, agents: r.agents ?? [] };
-  return { ...r, agents: [{ ...emptyAgent(), name: "Agent", command: r.agentCommand.trim() }] };
-}
-const envToStr = (env: Record<string, string>) => Object.entries(env || {}).map(([k, v]) => `${k}=${v}`).join("\n");
-const strToEnv = (s: string): Record<string, string> =>
-  Object.fromEntries(s.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf("="); return i < 0 ? [l, ""] : [l.slice(0, i), l.slice(i + 1)]; }));
-
-/* JSON preview highlight — escape first, then wrap tokens (values are escaped
-   so this is safe to inject) */
-const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-function hlLine(line: string): string {
-  let s = esc(line);
-  s = s.replace(/"([^"]*)"(\s*:)/g, '<span class="jk">"$1"</span>$2');
-  s = s.replace(/:\s*"([^"]*)"/g, (_m, v: string) => `: <span class="jv">"${v}"</span>`);
-  s = s.replace(/:\s*(-?\d+(?:\.\d+)?)/g, ': <span class="jn">$1</span>');
-  return s;
-}
 
 const MOCK: Settings = {
   version: 1, editor: { command: "code" }, terminal: "Terminal", showSwitchBranch: true,
@@ -1191,16 +1137,7 @@ export default function SettingsView({ onClose }: { onClose: () => void }) {
     if (!settings) return;
     const cleaned: Settings = {
       ...settings,
-      repos: settings.repos.map((r) => {
-        const agents = (r.agents || []).filter((a) => a.id.trim() && a.name.trim() && a.command.trim());
-        return {
-          ...r,
-          services: r.services.filter((s) => s.id.trim() && s.command.trim()),
-          customCommands: (r.customCommands || []).filter((c) => c.label.trim() && c.command.trim()),
-          agents,
-          agentCommand: agents[0]?.command ?? "",
-        };
-      }),
+      repos: settings.repos.map((r) => cleanRepo(r).repo),
     };
     setSaving(true);
     try {
