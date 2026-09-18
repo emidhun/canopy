@@ -15,6 +15,11 @@ import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
     first, so the marker is matched anywhere in the line rather than anchored. */
 const STEP = /\[(\d+)\/(\d+)\]:\s*(.*)$/;
 
+/** Provisioning carries no [k/n] marker — it is not one of the numbered setup
+    tasks. `run_setup` announces it with this line and reports its count as
+    StepResult{index:0}, which is why it is step 0 everywhere below. */
+const PROVISION = /^provisioning \d+ file/;
+
 const EMPTY_RESULTS: Record<number, string> = {};
 
 export default function SetupRunnerModal({
@@ -55,14 +60,22 @@ export default function SetupRunnerModal({
 
   /* Rebuild the step list from the op buffer. Every marker seen is a step;
      the highest marker is the one in flight, everything before it is done. */
-  const { steps, current, total, output } = useMemo(() => {
+  const { steps, current, total, output, provisioning } = useMemo(() => {
     const seen: { n: number; cmd: string }[] = [];
     // every non-marker line belongs to the step whose marker last appeared, so
     // a step can show its own output rather than the whole run's
     const output: Record<number, string[]> = {};
     let total = 0;
-    let at = 0;
+    // -1 until something claims the output: on create, the git and submodule
+    // lines arrive before provisioning does, and they are not its output.
+    let at = -1;
+    let provisioning = false;
     for (const l of op?.lines ?? []) {
+      if (PROVISION.test(l.text)) {
+        provisioning = true;
+        at = 0;
+        continue; // the row's label and count already say this
+      }
       const m = STEP.exec(l.text);
       if (m) {
         total = Number(m[2]);
@@ -74,7 +87,7 @@ export default function SetupRunnerModal({
       (output[at] ??= []).push(l.text);
     }
     seen.sort((a, b) => a.n - b.n);
-    return { steps: seen, current: seen.length ? seen[seen.length - 1].n : 0, total, output };
+    return { steps: seen, current: seen.length ? seen[seen.length - 1].n : 0, total, output, provisioning };
   }, [op]);
 
   // A step is expanded on request. The one that failed opens itself — its
@@ -92,6 +105,10 @@ export default function SetupRunnerModal({
   const done = !running && !failed && steps.length > 0;
   const errored = failed || (op?.lines ?? []).some((l) => l.lv === "err");
   const elapsed = ((Date.now() - startedAt.current) / 1000).toFixed(1);
+  /* Rendered from the moment the line appears, not from its count: a run that
+     dies while writing .env used to show no provisioning step at all, leaving
+     the file list with nothing to belong to. */
+  const provState = !provisioning ? null : results[0] ? "done" : errored ? "failed" : "active";
 
   const copyLog = (lines: string[], what: string) => {
     const text = lines.join("\n");
@@ -153,7 +170,7 @@ export default function SetupRunnerModal({
         </>
       }
     >
-      {steps.length === 0 && !errored && (
+      {steps.length === 0 && !errored && !provState && (
         <div className="cxm-prog" style={{ borderTop: 0, marginTop: 0, paddingTop: 0 }}>
           <span className="cxm-prog__ic">
             <Spinner size={13} />
@@ -162,51 +179,38 @@ export default function SetupRunnerModal({
         </div>
       )}
 
-      {results[0] && (
-        <div className="cx-step cx-step--done">
-          <span className="cx-step__bullet">✓</span>
-          <span className="cx-step__text">provision files</span>
-          <span className="cx-step__meta">{results[0]}</span>
-        </div>
-      )}
+      {provState &&
+        (() => {
+          const lines = output[0] ?? [];
+          const open = openStep === 0 || (provState === "failed" && openStep === null);
+          return (
+            <Step
+              state={provState}
+              text="provision files"
+              meta={results[0]}
+              lines={lines}
+              open={open}
+              onToggle={() => setOpenStep(open ? -1 : 0)}
+              onCopy={() => copyLog(lines, "provisioning output")}
+            />
+          );
+        })()}
 
       {steps.map((s) => {
         const state = s.n < current ? "done" : s.n === current && running ? "active" : errored && s.n === current ? "failed" : "done";
         const lines = output[s.n] ?? [];
-        const expandable = lines.length > 0;
         const open = openStep === s.n || (state === "failed" && openStep === null);
         return (
-          <div className={`cx-step cx-step--${state}${open ? " cx-step--open" : ""}`} key={s.n}>
-            <div
-              className="cx-step__head"
-              role={expandable ? "button" : undefined}
-              tabIndex={expandable ? 0 : undefined}
-              aria-expanded={expandable ? open : undefined}
-              title={expandable ? (open ? "Hide this step's output" : "Show this step's output") : undefined}
-              onClick={expandable ? () => setOpenStep(open ? -1 : s.n) : undefined}
-              onKeyDown={expandable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setOpenStep(open ? -1 : s.n); } } : undefined}
-            >
-              <span className="cx-step__bullet">
-                {state === "done" ? "✓" : state === "failed" ? "✕" : <Spinner size={10} />}
-              </span>
-              <span className="cx-step__text">{s.cmd}</span>
-              {/* Only steps whose output matched a known pattern have metadata;
-                  the rest render with the bullet alone. */}
-              {results[s.n] && <span className="cx-step__meta">{results[s.n]}</span>}
-              {expandable && <span className="cx-step__chev">{open ? "▾" : "▸"}</span>}
-            </div>
-            {open && expandable && (
-              <div className="cx-step__body">
-                <pre>{lines.join("\n")}</pre>
-                <button
-                  className="btn sm gh"
-                  onClick={(e) => { e.stopPropagation(); copyLog(lines, `step ${s.n}`); }}
-                >
-                  Copy this step's output
-                </button>
-              </div>
-            )}
-          </div>
+          <Step
+            key={s.n}
+            state={state}
+            text={s.cmd}
+            meta={results[s.n]}
+            lines={lines}
+            open={open}
+            onToggle={() => setOpenStep(open ? -1 : s.n)}
+            onCopy={() => copyLog(lines, `step ${s.n}`)}
+          />
         );
       })}
 
@@ -238,5 +242,75 @@ export default function SetupRunnerModal({
         </div>
       )}
     </Modal>
+  );
+}
+
+/* One row of the step list.
+
+   Provisioning and the numbered tasks both render through this. They used to
+   be written out separately, and drifted: when steps grew a disclosure the
+   bullet, label and count moved into `.cx-step__head` — the element that is
+   `display:flex` — and the provisioning row, still writing them straight into
+   the `display:block` wrapper, lost its alignment. */
+function Step({
+  state,
+  text,
+  meta,
+  lines,
+  open,
+  onToggle,
+  onCopy,
+}: {
+  state: "done" | "active" | "failed";
+  text: string;
+  meta?: string;
+  lines: string[];
+  open: boolean;
+  onToggle: () => void;
+  onCopy: () => void;
+}) {
+  const expandable = lines.length > 0;
+  return (
+    <div className={`cx-step cx-step--${state}${open ? " cx-step--open" : ""}`}>
+      <div
+        className="cx-step__head"
+        role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        aria-expanded={expandable ? open : undefined}
+        title={expandable ? (open ? "Hide this step's output" : "Show this step's output") : undefined}
+        onClick={expandable ? onToggle : undefined}
+        onKeyDown={
+          expandable
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onToggle();
+                }
+              }
+            : undefined
+        }
+      >
+        <span className="cx-step__bullet">{state === "done" ? "✓" : state === "failed" ? "✕" : <Spinner size={10} />}</span>
+        <span className="cx-step__text">{text}</span>
+        {/* Only steps whose output matched a known pattern have metadata; the
+            rest render with the bullet alone. */}
+        {meta && <span className="cx-step__meta">{meta}</span>}
+        {expandable && <span className="cx-step__chev">{open ? "▾" : "▸"}</span>}
+      </div>
+      {open && expandable && (
+        <div className="cx-step__body">
+          <pre>{lines.join("\n")}</pre>
+          <button
+            className="btn sm gh"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCopy();
+            }}
+          >
+            Copy this step's output
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

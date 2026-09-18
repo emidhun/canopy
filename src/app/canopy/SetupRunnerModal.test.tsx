@@ -35,6 +35,21 @@ beforeEach(() => {
 
 const open = () => render(<SetupRunnerModal wt={WT} onClose={() => {}} onStartServices={() => {}} />);
 
+/** Replace the op buffer for one test. `lv` defaults to plain output. */
+const setLines = (lines: { text: string; lv?: string }[], extra: Record<string, unknown> = {}) =>
+  useStore.setState({
+    showToast: (m: string) => { toasts.push(m); },
+    ops: {
+      [WT.wtKey]: { running: false, results: {}, lines: lines.map((l) => ({ lv: "out", ...l })), ...extra },
+    },
+  } as never);
+
+const PROVISION_LINES = [
+  { text: "provisioning 2 file(s)" },
+  { text: "  \u2192 .env (dotenv)" },
+  { text: "  \u2192 cypress-tests/cypress.env.json (json)" },
+];
+
 /* userEvent.setup() installs its own navigator.clipboard, so ours has to be
    defined after it — and defined rather than assigned, since it is a getter. */
 function userWithClipboard() {
@@ -77,6 +92,12 @@ describe("the setup runner", () => {
     expect(toasts[toasts.length - 1]).toMatch(/Copied the setup log — 5 lines/);
   });
 
+  it("reports the run's real total, not the count of whatever ran last", async () => {
+    setLines([{ text: "setup [1/5]: pnpm install" }, { text: "added 1842 packages" }], { running: true });
+    open();
+    expect(await screen.findByText("Step 1 of 5")).toBeInTheDocument();
+  });
+
   it("copies one step's output on its own", async () => {
     const user = userWithClipboard();
     open();
@@ -84,5 +105,58 @@ describe("the setup runner", () => {
     await user.click(within(step).getByRole("button"));
     await user.click(within(step).getByRole("button", { name: /copy this step/i }));
     expect(writeText.mock.calls[0][0]).toBe("added 1842 packages in 41s");
+  });
+});
+
+/* Provisioning is step 0 — announced as a plain line, counted as
+   StepResult{index:0}. It renders through the same component as the numbered
+   tasks: kept apart, the two drifted, and this row was left outside the flex
+   head that aligns every other one. */
+describe("the provisioning step", () => {
+  it("is laid out like every other step", async () => {
+    setLines([...PROVISION_LINES, { text: "setup [1/1]: pnpm install" }], { results: { 0: "2 files" } });
+    open();
+    const row = (await screen.findByText("provision files")).closest(".cx-step") as HTMLElement;
+    // .cx-step is display:block; .cx-step__head is the flex row that aligns
+    // the bullet, the label and the count.
+    const head = row.querySelector(".cx-step__head") as HTMLElement;
+    expect(head).not.toBeNull();
+    expect(within(head).getByText("provision files")).toBeInTheDocument();
+    expect(within(head).getByText("2 files")).toBeInTheDocument();
+    expect(head.querySelector(".cx-step__bullet")?.textContent).toBe("\u2713");
+  });
+
+  it("expands to the files it wrote, and nothing that came before it", async () => {
+    const user = userEvent.setup();
+    setLines(
+      // on create, the git work is streamed into the same buffer first
+      [{ text: "fetching origin\u2026" }, { text: "submodule frontend/ee (sharing objects)" }, ...PROVISION_LINES, { text: "setup [1/1]: pnpm install" }],
+      { results: { 0: "2 files" } },
+    );
+    open();
+    const row = (await screen.findByText("provision files")).closest(".cx-step") as HTMLElement;
+    await user.click(within(row).getByRole("button"));
+    expect(within(row).getByText(/\.env \(dotenv\)/)).toBeInTheDocument();
+    expect(within(row).getByText(/cypress\.env\.json \(json\)/)).toBeInTheDocument();
+    expect(within(row).queryByText(/sharing objects/)).toBeNull();
+  });
+
+  it("shows while it is still running, before any count arrives", async () => {
+    setLines(PROVISION_LINES, { running: true });
+    open();
+    const row = (await screen.findByText("provision files")).closest(".cx-step") as HTMLElement;
+    expect(row.className).toContain("cx-step--active");
+  });
+
+  it("is the failed step when the run dies inside it", async () => {
+    setLines([
+      ...PROVISION_LINES.slice(0, 2),
+      { text: "provision .env failed: permission denied", lv: "err" },
+    ]);
+    open();
+    const row = (await screen.findByText("provision files")).closest(".cx-step") as HTMLElement;
+    expect(row.className).toContain("cx-step--failed");
+    // a failed step opens itself — its output is why the dialog is still up
+    expect(within(row).getByText(/permission denied/)).toBeInTheDocument();
   });
 });

@@ -864,7 +864,8 @@ async fn run_tasks(
         };
 
         let one = [task.cmd.clone()];
-        let result = run_commands_in(&cwd, wt_path, repo_path, &one, vars, "setup", policy.timeout_secs, progress).await;
+        let result =
+            run_commands_in(&cwd, wt_path, repo_path, &one, vars, "setup", policy.timeout_secs, Numbering::Caller(n), progress).await;
         if let Err(e) = result {
             if !policy.continue_on_failure {
                 return Err(e);
@@ -901,7 +902,7 @@ async fn run_tasks_parallel(
     vars: &HashMap<String, String>,
     progress: &mut impl FnMut(Progress),
 ) -> Result<(), String> {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Progress>();
     let n = tasks.len();
     progress(Progress::Line(format!("setup [parallel]: running {n} tasks at once")));
 
@@ -923,21 +924,29 @@ async fn run_tasks_parallel(
         let (wt, repo, vars, tx) = (wt_path.to_string(), repo_path.to_string(), vars.clone(), tx.clone());
         let timeout = policy.timeout_secs;
         handles.push(tauri::async_runtime::spawn(async move {
-            let label = format!("setup [{}/{n}]", i + 1);
+            let step = i + 1;
+            let prefix = format!("setup [{step}/{n}]");
+            // Announced by the task itself, as it starts — which in parallel
+            // is all of them at once, and that is the honest picture.
+            let _ = tx.send(Progress::Line(format!("{prefix}: {cmd}")));
             let one = [cmd];
             let tx2 = tx.clone();
             let mut fwd = move |p: Progress| {
-                if let Progress::Line(line) = p {
-                    let _ = tx2.send(format!("{label} {line}"));
-                }
+                let _ = tx2.send(match p {
+                    // interleaved output is unreadable without saying whose it is
+                    Progress::Line(line) => Progress::Line(format!("{prefix} {line}")),
+                    // a result already carries this task's number; forwarding it
+                    // is how parallel steps get their metadata at all
+                    other => other,
+                });
             };
-            run_commands_in(&cwd, &wt, &repo, &one, &vars, "setup", timeout, &mut fwd).await
+            run_commands_in(&cwd, &wt, &repo, &one, &vars, "setup", timeout, Numbering::Caller(step), &mut fwd).await
         }));
     }
     drop(tx); // the loop below ends when every task's sender is gone
 
-    while let Some(line) = rx.recv().await {
-        progress(Progress::Line(line));
+    while let Some(p) = rx.recv().await {
+        progress(p);
     }
 
     // Every task is awaited even after one fails: leaving the others running
@@ -1021,6 +1030,41 @@ pub enum Progress {
     Line(String),
     /// step `index` (1-based) finished and produced a short quantity
     StepResult { index: usize, text: String },
+}
+
+/// Who owns the step number a command reports under.
+///
+/// `run_commands_in` used to always number over its own `cmds` array. That is
+/// right where the array IS the step list (teardown, migrate, a one-off), but
+/// setup runs ONE task per call: every task then announced itself as "[1/1]",
+/// which clobbered the run's real total ("Step 1 of 1" however many tasks
+/// there were) and — because the runner files output under the last marker it
+/// saw — piled every task's output under task 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Numbering {
+    /// Number the commands in this call: `label [i/len]`, results at `i`.
+    Own,
+    /// The caller announced this step and owns its number: emit no header of
+    /// our own, and attach results to `n`.
+    Caller(usize),
+}
+
+impl Numbering {
+    /// The header for command `i` of `len`, or None when the caller printed one.
+    fn header(self, label: &str, i: usize, len: usize, cmd: &str) -> Option<String> {
+        match self {
+            Numbering::Own => Some(format!("{label} [{}/{len}]: {cmd}", i + 1)),
+            Numbering::Caller(_) => None,
+        }
+    }
+
+    /// The step a result belongs to.
+    fn index(self, i: usize) -> usize {
+        match self {
+            Numbering::Own => i + 1,
+            Numbering::Caller(n) => n,
+        }
+    }
 }
 
 /// Group a number with thousands separators — the design writes "1,842", and
@@ -1122,7 +1166,7 @@ async fn run_commands(
     label: &str,
     progress: &mut impl FnMut(Progress),
 ) -> Result<(), String> {
-    run_commands_in(wt_path, wt_path, repo_path, cmds, vars, label, 0, progress).await
+    run_commands_in(wt_path, wt_path, repo_path, cmds, vars, label, 0, Numbering::Own, progress).await
 }
 
 /// As `run_commands`, but with an explicit working directory and per-step
@@ -1138,10 +1182,13 @@ async fn run_commands_in(
     vars: &HashMap<String, String>,
     label: &str,
     timeout_secs: u64,
+    numbering: Numbering,
     progress: &mut impl FnMut(Progress),
 ) -> Result<(), String> {
     for (i, cmd) in cmds.iter().enumerate() {
-        progress(Progress::Line(format!("{label} [{}/{}]: {cmd}", i + 1, cmds.len())));
+        if let Some(head) = numbering.header(label, i, cmds.len(), cmd) {
+            progress(Progress::Line(head));
+        }
         let wrapped = crate::toolchain::with_pinned_node(cwd, cmd);
         let (shell, shargs) = crate::toolchain::shell_argv(&wrapped);
         let mut child = Command::new(shell)
@@ -1236,7 +1283,7 @@ async fn run_commands_in(
             return Err(format!("{label} step failed: {cmd}\n{headline}{tail}"));
         }
         if let Some(text) = found {
-            progress(Progress::StepResult { index: i + 1, text });
+            progress(Progress::StepResult { index: numbering.index(i), text });
         }
     }
     Ok(())
@@ -1245,6 +1292,58 @@ async fn run_commands_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /* Step numbering — the runner builds its step list from these markers.
+
+       `run_tasks` announces each task and then runs it as a ONE-command list,
+       so the inner call must not number it again. When it did, every task
+       reported "[1/1]": the footer read "Step 1 of 1" for a five-task run, and
+       every task's output was filed under task 1. */
+    #[test]
+    fn a_caller_numbered_step_neither_renumbers_nor_re_announces() {
+        // teardown/migrate hand over the whole list, so that call numbers it
+        assert_eq!(Numbering::Own.header("setup", 0, 3, "pnpm install").as_deref(), Some("setup [1/3]: pnpm install"));
+        assert_eq!(Numbering::Own.index(0), 1);
+        assert_eq!(Numbering::Own.index(2), 3);
+
+        // setup announces the task itself, then runs it alone
+        assert_eq!(Numbering::Caller(4).header("setup", 0, 1, "pnpm install"), None);
+        assert_eq!(Numbering::Caller(4).index(0), 4, "the result belongs to task 4, not step 1");
+    }
+
+    #[tokio::test]
+    async fn every_setup_task_announces_its_own_number_exactly_once() {
+        let dir = std::env::temp_dir().join("canopy_step_numbering_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.to_str().unwrap();
+
+        let tasks = vec![
+            SetupTask::plain("echo one"),
+            SetupTask { cmd: "echo two".into(), cwd: String::new(), enabled: false },
+            SetupTask::plain("echo three"),
+        ];
+        let mut lines: Vec<String> = Vec::new();
+        run_tasks(d, d, &tasks, &SetupPolicy::default(), &HashMap::new(), false, false, &mut |p| {
+            if let Progress::Line(l) = p {
+                lines.push(l);
+            }
+        })
+        .await
+        .unwrap();
+
+        let markers: Vec<&str> = lines.iter().filter(|l| l.starts_with("setup [")).map(|s| s.as_str()).collect();
+        assert_eq!(
+            markers,
+            vec!["setup [1/2]: echo one", "setup [2/2]: echo three"],
+            "one marker per enabled task, numbered over the enabled ones — got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("skipped (disabled): echo two")),
+            "a disabled task is reported, not omitted — got {lines:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn setup_accepts_strings_and_objects_and_round_trips_plainly() {
