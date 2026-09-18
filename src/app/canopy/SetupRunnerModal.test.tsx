@@ -1,6 +1,6 @@
 // #60 — the setup runner's step list: a result per step, each step's own
 // output on request, and a failure you can copy rather than retype.
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SetupRunnerModal from "./SetupRunnerModal";
@@ -208,5 +208,50 @@ describe("attaching to a run already in flight", () => {
     open();
     await screen.findByText("preparing\u2026");
     expect(run).toHaveBeenCalledWith(WT.wtKey);
+  });
+});
+
+/* Attached runs — the create handoff mounts this dialog on a run it did not
+   start, so `failed` (set only when OUR invoke rejects) is never set. Anything
+   that asks "did this succeed?" has to read the operation buffer instead. */
+describe("a run this dialog only watched", () => {
+  const attachTo = (lines: { text: string; lv?: string }[]) => {
+    setLines(lines, { running: true });
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    open();
+  };
+  const then = (lines: { text: string; lv?: string }[], running: boolean) =>
+    act(() => {
+      setLines(lines, { running });
+    });
+
+  it("does not call a failed setup complete", async () => {
+    attachTo([{ text: "setup [1/1]: npm install" }]);
+    then(
+      [
+        { text: "setup [1/1]: npm install" },
+        { text: "npm ERR! code 1" },
+        { text: "worktree created, but setup step failed: npm install", lv: "err" },
+      ],
+      false,
+    );
+    expect(await screen.findByText("Setup failed")).toBeInTheDocument();
+    expect(screen.queryByText("Provisioned and ready.")).toBeNull();
+    expect(screen.queryByRole("button", { name: /start services/i })).toBeNull();
+  });
+
+  it("completes a run whose every task was disabled", async () => {
+    // nothing executes, so no [k/n] marker ever arrives — but the run still ends
+    attachTo([{ text: "provisioning 1 file(s)" }, { text: "setup — skipped (disabled): pnpm db:migrate" }]);
+    then(
+      [
+        { text: "provisioning 1 file(s)" },
+        { text: "setup — skipped (disabled): pnpm db:migrate" },
+        { text: "worktree ready", lv: "ok" },
+      ],
+      false,
+    );
+    expect(await screen.findByText("Setup complete")).toBeInTheDocument();
+    expect(screen.getByText("Provisioned and ready.")).toBeInTheDocument();
   });
 });

@@ -10,16 +10,13 @@
    disappears while the worktree is still being checked out; too lax and the
    npm log lands back in the tail this change exists to empty. */
 import { describe, expect, it } from "vitest";
-import { isSetupStart } from "./NewWorktreeModal";
+import { createOpAction, isSetupStart } from "./NewWorktreeModal";
 
 describe("the create/setup boundary", () => {
   it("hands over on the first line of the setup phase", () => {
     for (const line of [
       "setup [1/5]: npm --prefix frontend install --no-audit --no-fund",
       "setup [parallel]: running 3 tasks at once",
-      // a disabled first task is still the setup phase starting
-      "setup — skipped (disabled): pnpm db:migrate",
-      "setup — continuing after failure: setup step failed: pnpm build",
     ]) {
       expect(isSetupStart(line), line).toBe(true);
     }
@@ -43,9 +40,47 @@ describe("the create/setup boundary", () => {
     }
   });
 
-  it("does not hand over when no setup will run", () => {
-    // run_setup is off for this repo: there are no commands to watch, so the
-    // create dialog must see the creation through to "worktree ready" itself
+  it("does not hand over when nothing will execute", () => {
+    // run_setup is off for this repo: no commands at all
     expect(isSetupStart("setup skipped — Run setup when you're ready")).toBe(false);
+    // and a repo whose every task is disabled emits only these, then finishes —
+    // handing that over opens a runner with no step it can ever show
+    expect(isSetupStart("setup — skipped (disabled): pnpm db:migrate")).toBe(false);
+  });
+});
+
+/* Whose create is this? A create left running in the background emits on the
+   same channel, so "this dialog is busy" does not make an event its own. */
+describe("claiming a create event", () => {
+  const MINE = "/r/.worktrees/current";
+  const ctx = { destination: MINE, busy: true };
+
+  it("hands over its own setup", () => {
+    expect(createOpAction({ wtKey: MINE, detail: "setup [1/5]: npm install" }, ctx)).toBe("handoff");
+  });
+
+  it("reports its own creation inline", () => {
+    expect(createOpAction({ wtKey: MINE, detail: "provisioning 2 file(s)" }, ctx)).toBe("append");
+  });
+
+  it("ignores a create running in the background", () => {
+    // start A in the background, then create B: A's first setup marker used to
+    // close B's dialog and open a runner labelled with B's branch that would
+    // have started A's services
+    const other = { wtKey: "/r/.worktrees/other", detail: "setup [1/5]: npm install" };
+    expect(createOpAction(other, ctx)).toBe("ignore");
+    expect(createOpAction({ ...other, detail: "fetching origin…" }, ctx)).toBe("ignore");
+  });
+
+  it("keeps the stream when it cannot tell two creates apart", () => {
+    // the repo's settings could not be read, so there is no predicted path to
+    // match on — report inline rather than hand a runner the wrong worktree
+    const blind = { destination: null, busy: true };
+    expect(createOpAction({ wtKey: MINE, detail: "setup [1/5]: npm install" }, blind)).toBe("append");
+    expect(createOpAction({ wtKey: MINE, detail: "fetching origin…" }, blind)).toBe("append");
+  });
+
+  it("does not hand over before this dialog has started creating", () => {
+    expect(createOpAction({ wtKey: MINE, detail: "setup [1/5]: npm install" }, { ...ctx, busy: false })).toBe("append");
   });
 });

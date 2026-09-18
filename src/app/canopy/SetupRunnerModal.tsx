@@ -109,8 +109,20 @@ export default function SetupRunnerModal({
   // (no backend, or the backend never emitted), the dialog could not be
   // closed by keyboard at all.
   const inFlight = op?.running === true;
-  const done = !running && !failed && steps.length > 0;
   const errored = failed || (op?.lines ?? []).some((l) => l.lv === "err");
+  /* Success is read from the operation buffer, not from `failed`.
+
+     `failed` is set only when OUR invoke rejects, and the create handoff mounts
+     this dialog on a run it did not start — so a failed install left `failed`
+     false, `running` false and steps on screen, which read as success: the
+     dialog said "Setup failed" and "Provisioned and ready." at once, and
+     offered Start services (and its ⏎) for a worktree that has none.
+
+     Nor does finishing require a numbered step. A repo whose setup tasks are
+     all disabled runs to completion without ever emitting a [k/n] marker, and
+     requiring one left the dialog saying "starting…" for a run that had
+     already ended. */
+  const done = !!op && !running && !errored;
   const elapsed = ((Date.now() - startedAt.current) / 1000).toFixed(1);
   /* Rendered from the moment the line appears, not from its count: a run that
      dies while writing .env used to show no provisioning step at all, leaving
