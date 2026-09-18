@@ -5,9 +5,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SetupRunnerModal from "./SetupRunnerModal";
 import { useStore } from "../../store";
-import type { WorktreeNode } from "../../types";
+import { ipc } from "../../ipc";
 
-const WT = { wtKey: "/r1/.worktrees/fix-a", repoId: "r1", branch: "fix-a", name: "fix-a", services: [] } as unknown as WorktreeNode;
+const WT = { wtKey: "/r1/.worktrees/fix-a", branch: "fix-a" };
 
 const toasts: string[] = [];
 const writeText = vi.fn((_text: string) => Promise.resolve());
@@ -33,7 +33,7 @@ beforeEach(() => {
   } as never);
 });
 
-const open = () => render(<SetupRunnerModal wt={WT} onClose={() => {}} onStartServices={() => {}} />);
+const open = () => render(<SetupRunnerModal wtKey={WT.wtKey} branch={WT.branch} onClose={() => {}} onStartServices={() => {}} />);
 
 /** Replace the op buffer for one test. `lv` defaults to plain output. */
 const setLines = (lines: { text: string; lv?: string }[], extra: Record<string, unknown> = {}) =>
@@ -158,5 +158,30 @@ describe("the provisioning step", () => {
     expect(row.className).toContain("cx-step--failed");
     // a failed step opens itself — its output is why the dialog is still up
     expect(within(row).getByText(/permission denied/)).toBeInTheDocument();
+  });
+});
+
+/* The create dialog hands its run over the moment the setup commands start,
+   so this dialog now opens on top of a run it did not start. Invoking again
+   would provision concurrently — two `npm install`s in one directory — and
+   the backend has no per-worktree guard to catch it. */
+describe("attaching to a run already in flight", () => {
+  it("watches it rather than starting a second one", async () => {
+    const run = vi.spyOn(ipc, "runWorktreeSetup").mockResolvedValue(undefined as never);
+    // the effect only reaches the guard when there is a backend to invoke
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    setLines([{ text: "setup [1/5]: npm install" }], { running: true });
+    open();
+    expect(await screen.findByText("npm install")).toBeInTheDocument();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("starts one when nothing is running", async () => {
+    const run = vi.spyOn(ipc, "runWorktreeSetup").mockResolvedValue(undefined as never);
+    vi.stubGlobal("__TAURI_INTERNALS__", {});
+    setLines([], { running: false });
+    open();
+    await screen.findByText("preparing\u2026");
+    expect(run).toHaveBeenCalledWith(WT.wtKey);
   });
 });

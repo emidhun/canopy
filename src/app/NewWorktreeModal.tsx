@@ -5,7 +5,7 @@
    while the name is still editable. The agent handoff is optional and
    collapsed, because most worktrees don't need one, but when it's filled in
    it seeds .canopy/context.md and later becomes the PR body. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { errText, hasBackend, ipc, type Branches, type OpEvent, type WorktreePreview } from "../ipc";
 import { backgroundOp, useStore } from "../store";
@@ -21,7 +21,28 @@ import { seedWtContext } from "./WorktreeContext";
     survive, everything else becomes `_`, case preserved. */
 const sanitizeBranch = (b: string) => b.replace(/[^\p{L}\p{N}.-]/gu, "_");
 
-export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; onClose: () => void }) {
+/* The first line that belongs to the setup phase rather than to creating the
+   worktree. Creating is this dialog's job — fetching, `git worktree add`,
+   submodules, provisioning — and it ends here. The setup commands are a
+   different thing with a different shape: a numbered step list with per-step
+   output, which the setup runner already renders properly and this dialog can
+   only show as an anonymous four-line tail.
+
+   "setup skipped — Run setup when you're ready" is deliberately NOT a match:
+   no commands run, so there is nothing to hand off to. */
+const SETUP_PHASE = /^setup (\[|— )/;
+export const isSetupStart = (detail: string) => SETUP_PHASE.test(detail);
+
+export default function NewWorktreeModal({
+  repoId,
+  onClose,
+  onSetupStarted,
+}: {
+  repoId: string;
+  onClose: () => void;
+  /** hand this creation's provisioning stream over to the setup runner */
+  onSetupStarted: (wtKey: string, branch: string) => void;
+}) {
   const tree = useStore((s) => s.tree);
   const select = useStore((s) => s.select);
   const showToast = useStore((s) => s.showToast);
@@ -94,11 +115,31 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     };
   }, [repo]);
 
+  /* The listener is installed once, so it must not close over `branch` or
+     `busy` — a ref is re-pointed on every render instead. */
+  const handoff = useRef<(wtKey: string) => void>(() => {});
+  const handedOff = useRef(false);
+  useEffect(() => {
+    handoff.current = (wtKey: string) => {
+      // only OUR create: another one running in the background emits on the
+      // same channel, and its setup is not ours to hand over
+      if (!busy || handedOff.current) return;
+      handedOff.current = true;
+      // The dialog stops watching, exactly as "Run in background" does — so
+      // the outcome is still reported as a notice if the runner is closed too.
+      backgroundOp(opKey);
+      onSetupStarted(wtKey, branch);
+      onClose();
+    };
+  });
+
   useEffect(() => {
     if (!hasBackend()) return;
     let un: (() => void) | undefined;
     listen<OpEvent>("worktree:op", (e) => {
       if (e.payload.op !== "create") return;
+      // The event's own key is authoritative; opKey is only a prediction.
+      if (isSetupStart(e.payload.detail)) return handoff.current(e.payload.wtKey);
       setProgress((p) => [...p.slice(-30), e.payload.detail]);
     }).then((u) => (un = u));
     return () => un?.();

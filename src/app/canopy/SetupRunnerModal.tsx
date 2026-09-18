@@ -8,7 +8,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Cube, Play, Spinner } from "../../icons";
 import { errText, hasBackend, ipc } from "../../ipc";
 import { useStore } from "../../store";
-import type { WorktreeNode } from "../../types";
 import Modal, { Hint, Spacer, usePrimaryAction } from "./Modal";
 
 /** setup.rs emits `{label} [2/5]: pnpm install` — the operation label comes
@@ -23,15 +22,20 @@ const PROVISION = /^provisioning \d+ file/;
 const EMPTY_RESULTS: Record<number, string> = {};
 
 export default function SetupRunnerModal({
-  wt,
+  wtKey,
+  branch,
   onClose,
   onStartServices,
 }: {
-  wt: WorktreeNode;
+  /* A key and a label, not a WorktreeNode: during creation the worktree is not
+     in the tree yet — the backend rescans only once setup has finished — and
+     this dialog has to be able to watch that run. */
+  wtKey: string;
+  branch: string;
   onClose: () => void;
   onStartServices: () => void;
 }) {
-  const op = useStore((s) => s.ops[wt.wtKey]);
+  const op = useStore((s) => s.ops[wtKey]);
   const results = op?.results ?? EMPTY_RESULTS;
   const showToast = useStore((s) => s.showToast);
   const startedAt = useRef(Date.now());
@@ -47,16 +51,16 @@ export default function SetupRunnerModal({
     // Reopening after "Run in background" must ATTACH to the run in flight.
     // The backend has no per-worktree guard, so invoking again would provision
     // concurrently — two `pnpm install`s in one directory.
-    if (useStore.getState().ops[wt.wtKey]?.running) {
+    if (useStore.getState().ops[wtKey]?.running) {
       setAttached(true);
       return;
     }
-    ipc.runWorktreeSetup(wt.wtKey).catch((e) => {
+    ipc.runWorktreeSetup(wtKey).catch((e) => {
       setFailed(true);
       showToast(`Setup failed — ${errText(e)}`);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wt.wtKey]);
+  }, [wtKey]);
 
   /* Rebuild the step list from the op buffer. Every marker seen is a step;
      the highest marker is the one in flight, everything before it is done. */
@@ -130,7 +134,7 @@ export default function SetupRunnerModal({
     <Modal
       icon={Cube}
       title={errored ? "Setup failed" : done ? "Setup complete" : "Running setup"}
-      sub={wt.branch}
+      sub={branch}
       busy={inFlight && !errored}
       onClose={onClose}
       foot={
