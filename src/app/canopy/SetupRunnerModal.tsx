@@ -94,8 +94,11 @@ export default function SetupRunnerModal({
     return { steps: seen, current: seen.length ? seen[seen.length - 1].n : 0, total, output, provisioning };
   }, [op]);
 
-  // A step is expanded on request. The one that failed opens itself — its
-  // output is the reason the dialog is still on screen.
+  /* A step is expanded on request, and nothing expands itself. The failed one
+     used to open automatically, which printed its output directly above the
+     red block printing the same output again — the identical npm log twice,
+     with two copy buttons. The red block is the failure view; a step's
+     disclosure is there for the steps that did NOT fail. */
   const [openStep, setOpenStep] = useState<number | null>(null);
 
   // Optimistic for DISPLAY: before the first worktree:op event there is
@@ -117,9 +120,14 @@ export default function SetupRunnerModal({
   const copyLog = (lines: string[], what: string) => {
     const text = lines.join("\n");
     if (!text.trim()) { showToast("Nothing captured for that step"); return; }
+    /* Count the lines that land on the clipboard, not the events that carried
+       them: a failure arrives as ONE event holding the command, the headline
+       and sixty-four lines of stderr, so counting events reported "4 lines"
+       for a log that pastes as ninety. */
+    const n = text.split("\n").length;
     navigator.clipboard
       ?.writeText(text)
-      .then(() => showToast(`Copied the ${what} — ${lines.length} line${lines.length === 1 ? "" : "s"}`))
+      .then(() => showToast(`Copied the ${what} — ${n} line${n === 1 ? "" : "s"}`))
       .catch(() => showToast("Copy failed"));
   };
 
@@ -186,7 +194,7 @@ export default function SetupRunnerModal({
       {provState &&
         (() => {
           const lines = output[0] ?? [];
-          const open = openStep === 0 || (provState === "failed" && openStep === null);
+          const open = openStep === 0;
           return (
             <Step
               state={provState}
@@ -194,7 +202,7 @@ export default function SetupRunnerModal({
               meta={results[0]}
               lines={lines}
               open={open}
-              onToggle={() => setOpenStep(open ? -1 : 0)}
+              onToggle={() => setOpenStep(open ? null : 0)}
               onCopy={() => copyLog(lines, "provisioning output")}
             />
           );
@@ -203,7 +211,7 @@ export default function SetupRunnerModal({
       {steps.map((s) => {
         const state = s.n < current ? "done" : s.n === current && running ? "active" : errored && s.n === current ? "failed" : "done";
         const lines = output[s.n] ?? [];
-        const open = openStep === s.n || (state === "failed" && openStep === null);
+        const open = openStep === s.n;
         return (
           <Step
             key={s.n}
@@ -212,21 +220,24 @@ export default function SetupRunnerModal({
             meta={results[s.n]}
             lines={lines}
             open={open}
-            onToggle={() => setOpenStep(open ? -1 : s.n)}
+            onToggle={() => setOpenStep(open ? null : s.n)}
             onCopy={() => copyLog(lines, `step ${s.n}`)}
           />
         );
       })}
 
-      {/* the raw tail stays available — a failing step is read, not guessed at */}
+      {/* The failure view: the one place the log is printed, and the one place
+          it is copied from. The tail ENDS with the failure — the backend sends
+          the headline and the stderr tail as a single event — so the useful
+          part is what you land on; the block scrolls rather than stretching
+          the dialog past it. Copy takes the whole buffer, not the tail: the
+          lines that explain a failure are routinely above the ones that
+          announce it. */}
       {errored && (
         <div className="cx-alert cx-alert--error" style={{ marginTop: "var(--sp-modal-head)" }}>
           <div>
             <b>Setup did not finish.</b>
             <pre>{(op?.lines ?? []).slice(-4).map((l) => l.text).join("\n")}</pre>
-            {/* The tail above is a preview. Copy takes everything the run
-                buffered, which is what someone pastes into an issue — the
-                four visible lines are rarely the ones that explain it. */}
             <button
               className="cx-btn cx-btn--sm"
               onClick={() => copyLog((op?.lines ?? []).map((l) => l.text), "setup log")}

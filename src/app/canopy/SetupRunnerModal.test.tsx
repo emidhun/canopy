@@ -74,10 +74,35 @@ describe("the setup runner", () => {
     expect(within(step).queryByText(/QueryFailedError/)).toBeNull();
   });
 
-  it("opens the failed step without being asked", async () => {
+  /* The failed step used to open itself, printing its output directly above
+     the red block printing the same output again — the identical npm log
+     twice, with two copy buttons. The red block is the failure view. */
+  it("leaves the failed step collapsed, and prints the failure once", async () => {
+    const user = userEvent.setup();
     open();
     const failed = (await screen.findByText("pnpm db:migrate")).closest(".cx-step") as HTMLElement;
+    expect(within(failed).queryByText(/QueryFailedError/)).toBeNull();
+
+    const alert = document.querySelector(".cx-alert--error") as HTMLElement;
+    expect(within(alert).getByText(/QueryFailedError/)).toBeInTheDocument();
+
+    // still openable for anyone who wants it beside the step
+    await user.click(within(failed).getByRole("button"));
     expect(within(failed).getByText(/QueryFailedError/)).toBeInTheDocument();
+  });
+
+  it("counts the lines it copied, not the events that carried them", async () => {
+    const user = userWithClipboard();
+    // a failure arrives as ONE event holding the command, the headline and the
+    // stderr tail — counting events reported "2 lines" for a four-line paste
+    setLines([
+      { text: "setup [1/1]: pnpm build" },
+      { text: "setup step failed: pnpm build\nError: cannot find module\n  at Object.<anonymous>", lv: "err" },
+    ]);
+    open();
+    await user.click(await screen.findByRole("button", { name: /copy log/i }));
+    expect(writeText.mock.calls[0][0].split("\n")).toHaveLength(4);
+    expect(toasts[toasts.length - 1]).toMatch(/Copied the setup log — 4 lines/);
   });
 
   it("copies the whole buffered log on failure, not just the visible tail", async () => {
@@ -156,8 +181,8 @@ describe("the provisioning step", () => {
     open();
     const row = (await screen.findByText("provision files")).closest(".cx-step") as HTMLElement;
     expect(row.className).toContain("cx-step--failed");
-    // a failed step opens itself — its output is why the dialog is still up
-    expect(within(row).getByText(/permission denied/)).toBeInTheDocument();
+    // collapsed like any other: the red block below prints the error and copies it
+    expect(within(row).queryByText(/permission denied/)).toBeNull();
   });
 });
 
