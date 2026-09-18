@@ -54,6 +54,9 @@ pub async fn save_settings(app: AppHandle, new_settings: Settings) -> Result<(),
         let state = app.state::<AppState>();
         *state.settings.write() = new_settings.clone();
     }
+    // re-publish git credentials before the rescan, so the refresh it triggers
+    // already uses the key the user just chose
+    git::apply_credentials(&new_settings.security.ssh_key, &new_settings.security.credential_helper);
     settings::save_settings(&app, &new_settings).map_err(CanopyError::config)?;
     // await only the structural rebuild (the tree must reflect the new
     // services/repos when this resolves); git meta is 2 spawns per worktree
@@ -88,6 +91,11 @@ pub async fn add_repo(app: AppHandle, path: String) -> Result<RepoCfg, CanopyErr
         custom_commands: Vec::new(),
         agent_command: String::new(),
         agents: Vec::new(),
+        default_base: String::new(),
+        worktree_defaults: Default::default(),
+        agent_context: Default::default(),
+        max_parallel_agents: 0,
+        agent_idle_timeout_min: 0,
     };
 
     let updated = {
@@ -353,8 +361,8 @@ pub async fn terminal_open(
 }
 
 #[tauri::command]
-pub async fn terminal_write(table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
-    terminal::write(&table, &id, &data).map_err(CanopyError::terminal)
+pub async fn terminal_write(app: AppHandle, table: State<'_, TermTable>, id: String, data: String) -> Result<(), CanopyError> {
+    terminal::write(&app, &table, &id, &data).map_err(CanopyError::terminal)
 }
 
 #[tauri::command]
@@ -406,6 +414,14 @@ pub fn resolve_agent_command(state: State<'_, AppState>, wt_key: String) -> Stri
         Some(c) if !c.is_empty() => c,
         _ => DEFAULT_AGENT.to_string(),
     }
+}
+
+/// Every environment variable a service runs with, with its source, masked.
+/// Answers "why is this talking to the wrong database?" without printing the
+/// repo's secrets into a modal.
+#[tauri::command]
+pub fn service_env(app: AppHandle, svc_key: String) -> Result<Vec<services::EnvEntry>, CanopyError> {
+    services::resolved_env(&app, &svc_key).map_err(CanopyError::not_found)
 }
 
 #[tauri::command]
@@ -477,13 +493,13 @@ pub async fn run_migration(app: AppHandle, wt_key: String) -> Result<(), CanopyE
     let wt2 = wt_key.clone();
     emit_op(&app, &wt_key, "migrate", "progress", "running migration…");
     let result = if !settings_cmd.trim().is_empty() {
-        crate::setup::run_custom_command(&wt_key, &repo_path, &settings_cmd, &vars, move |line| {
-            emit_op(&app2, &wt2, "migrate", "progress", line)
+        crate::setup::run_custom_command(&wt_key, &repo_path, &settings_cmd, &vars, move |p| {
+            emit_progress(&app2, &wt2, "migrate", p)
         })
         .await
     } else {
-        crate::setup::run_migration(&wt_key, &repo_path, &vars, move |line| {
-            emit_op(&app2, &wt2, "migrate", "progress", line)
+        crate::setup::run_migration(&wt_key, &repo_path, &vars, move |p| {
+            emit_progress(&app2, &wt2, "migrate", p)
         })
         .await
     };
@@ -512,8 +528,8 @@ pub async fn run_custom_command(app: AppHandle, wt_key: String, command: String)
     let app2 = app.clone();
     let wt2 = wt_key.clone();
     emit_op(&app, &wt_key, "custom", "progress", format!("running: {command}"));
-    match crate::setup::run_custom_command(&wt_key, &repo_path, &command, &vars, move |line| {
-        emit_op(&app2, &wt2, "custom", "progress", line)
+    match crate::setup::run_custom_command(&wt_key, &repo_path, &command, &vars, move |p| {
+        emit_progress(&app2, &wt2, "custom", p)
     })
     .await
     {
@@ -601,6 +617,14 @@ pub fn reveal_in_finder(wt_key: String) -> Result<(), CanopyError> {
     };
     cmd.spawn().map_err(|e| CanopyError::process(e.to_string()))?;
     Ok(())
+}
+
+/// Reveal a registered repository in the file manager. Takes a repo id rather
+/// than a path so a webview cannot use it to open an arbitrary directory.
+#[tauri::command]
+pub fn reveal_repo(app: AppHandle, repo_id: String) -> Result<(), CanopyError> {
+    let path = repo_path(&app, &repo_id)?;
+    reveal_in_finder(path)
 }
 
 /// Open a terminal at the worktree root. macOS uses the configured terminal app;
@@ -694,6 +718,30 @@ pub async fn quit_app(app: AppHandle) -> Result<(), CanopyError> {
     Ok(())
 }
 
+/// Pin or unpin a worktree in the sidebar. Persists to `Settings` and
+/// republishes the tree, which is what carries the flag to every window.
+#[tauri::command]
+pub async fn set_worktree_pinned(app: AppHandle, wt_key: String, pinned: bool) -> Result<(), CanopyError> {
+    ensure_known_worktree(&app, &wt_key)?;
+    let updated = {
+        let state = app.state::<AppState>();
+        let mut s = state.settings.write();
+        let has = s.pinned_worktrees.iter().any(|k| k == &wt_key);
+        if has == pinned {
+            return Ok(()); // already in the requested state — no write, no event
+        }
+        if pinned {
+            s.pinned_worktrees.push(wt_key.clone());
+        } else {
+            s.pinned_worktrees.retain(|k| k != &wt_key);
+        }
+        s.clone()
+    };
+    settings::save_settings(&app, &updated).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(())
+}
+
 // ── worktree create / remove ──
 
 #[derive(serde::Serialize, Clone)]
@@ -703,14 +751,70 @@ struct WorktreeOpEvent {
     op: &'static str,
     state: &'static str,
     detail: String,
+    /// 1-based step this event belongs to; 0 = the provisioning phase, which
+    /// runs before the numbered commands. Only set on result events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step: Option<usize>,
+    /// short quantity the step produced ("1,842 packages"). Absent whenever the
+    /// command's output matched no known pattern — a step never claims a count
+    /// it wasn't given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<String>,
 }
 
 fn emit_op(app: &AppHandle, wt_key: &str, op: &'static str, state: &'static str, detail: impl Into<String>) {
     use tauri::Emitter;
+    let detail = detail.into();
+    // A provisioning run that finished is the one "op" worth telling someone
+    // about who isn't watching — it is the gate on the worktree being usable.
+    if matches!(op, "create") && matches!(state, "done" | "error") {
+        let branch = app.state::<AppState>().wt_context(wt_key).map(|c| c.branch).unwrap_or_else(|| wt_key.to_string());
+        crate::notify::notify(
+            app,
+            crate::notify::Kind::SetupDone,
+            wt_key,
+            if state == "error" { "Setup failed" } else { "Setup finished" },
+            &format!("{branch} — {detail}"),
+        );
+    }
     let _ = app.emit(
         "worktree:op",
-        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail: detail.into() },
+        &WorktreeOpEvent { wt_key: wt_key.to_string(), op, state, detail, step: None, result: None },
     );
+}
+
+/// Where a worktree for `branch` lands. The single definition — `create_worktree`
+/// and `preview_worktree` both call it, so the path the modal promises is the
+/// path creation uses.
+pub(crate) fn derive_worktree_path(repo: &RepoCfg, branch: &str) -> String {
+    let wt_dir = if repo.worktree_dir.trim().is_empty() {
+        format!("{}-worktrees", repo.path)
+    } else {
+        repo.worktree_dir.clone()
+    };
+    format!("{wt_dir}/{}", sanitize_branch(branch))
+}
+
+/// Forward one `setup::Progress` as a `worktree:op` event: output lines keep
+/// the existing shape, step results carry `step` + `result` instead.
+fn emit_progress(app: &AppHandle, wt_key: &str, op: &'static str, p: crate::setup::Progress) {
+    use tauri::Emitter;
+    match p {
+        crate::setup::Progress::Line(line) => emit_op(app, wt_key, op, "progress", line),
+        crate::setup::Progress::StepResult { index, text } => {
+            let _ = app.emit(
+                "worktree:op",
+                &WorktreeOpEvent {
+                    wt_key: wt_key.to_string(),
+                    op,
+                    state: "progress",
+                    detail: String::new(),
+                    step: Some(index),
+                    result: Some(text),
+                },
+            );
+        }
+    }
 }
 
 pub(crate) fn sanitize_branch(branch: &str) -> String {
@@ -734,6 +838,102 @@ fn ensure_dir_self_ignored(dir: &str) -> Result<(), String> {
         std::fs::write(&ignore, "*\n").map_err(|e| format!("write {}: {e}", ignore.display()))?;
     }
     Ok(())
+}
+
+/// One service's port in the preview, with whether anything already holds it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewPort {
+    pub service_id: String,
+    pub name: String,
+    pub port: u32,
+    /// the branch of the worktree already using this port, if any
+    pub taken_by: Option<String>,
+}
+
+/// What creating a worktree for this branch would produce. Read-only: it
+/// allocates no port index, touches no disk, and registers nothing.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreePreview {
+    pub path: String,
+    pub slug: String,
+    /// `None` when the repo's provisioning never references `${WT_DB_NAME}` —
+    /// no isolated database would be created, and naming one would be a
+    /// promise the setup doesn't keep
+    pub db_name: Option<String>,
+    pub ports: Vec<PreviewPort>,
+    /// the derived path is already on disk, so creation would be refused
+    pub path_exists: bool,
+}
+
+/// Preview a worktree before creating it.
+///
+/// Shares every derivation with `create_worktree` — the path via
+/// `derive_worktree_path`, the port index via `peek_port_index` (the same
+/// first-free-slot rule, with `assign: false`), and the database name via
+/// `derived_db_name`, which is also what `worktree_vars` exposes as
+/// `${WT_DB_NAME}`. The panel's entire value is that it matches what you
+/// actually get; a parallel implementation that drifts would be worse than no
+/// panel at all.
+#[tauri::command]
+pub fn preview_worktree(app: AppHandle, repo_id: String, branch: String) -> Result<WorktreePreview, CanopyError> {
+    let repo = {
+        let state = app.state::<AppState>();
+        let s = state.settings.read();
+        s.repos.iter().find(|r| r.id == repo_id).cloned().ok_or_else(|| CanopyError::not_found("unknown repo"))?
+    };
+    let path = derive_worktree_path(&repo, &branch);
+
+    let state = app.state::<AppState>();
+    // peek, never assign: opening the modal must not consume a port slot that
+    // a worktree created moments later from a different branch would then skip
+    let idx = {
+        let mut rt = state.runtime.write();
+        crate::state::peek_port_index(&mut rt, &repo_id, &path)
+    };
+    let overrides = state.runtime.read().port_overrides.clone();
+
+    // every port already spoken for, and by which branch
+    let held: std::collections::HashMap<u32, String> = {
+        let tree = state.tree.read();
+        tree.iter()
+            .flat_map(|r| r.worktrees.iter())
+            .flat_map(|w| w.services.iter().filter_map(|s| s.port.map(|p| (p, w.branch.clone()))))
+            .collect()
+    };
+
+    let ports = repo
+        .services
+        .iter()
+        .filter_map(|s| {
+            let base = s.base_port? as u32;
+            let key = crate::state::svc_key(&path, &s.id);
+            let port = crate::state::effective_port(&overrides, &key, base, idx);
+            Some(PreviewPort {
+                service_id: s.id.clone(),
+                name: s.name.clone(),
+                port,
+                taken_by: held.get(&port).cloned(),
+            })
+        })
+        .collect();
+
+    // Only claim a database if provisioning would actually create one.
+    let cfg = crate::setup::read_repo_config(&repo.path);
+    let uses_db = cfg
+        .provision
+        .iter()
+        .any(|p| p.keys.iter().any(|(_, tpl)| tpl.contains("${WT_DB_NAME}")));
+    let db_name = uses_db.then(|| crate::state::derived_db_name(&repo_id, &path));
+
+    Ok(WorktreePreview {
+        slug: crate::setup::wt_slug(&path),
+        path_exists: std::path::Path::new(&path).exists(),
+        path,
+        db_name,
+        ports,
+    })
 }
 
 #[tauri::command]
@@ -767,7 +967,7 @@ pub async fn create_worktree(
             format!("{}/{}", repo.path, d)
         }
     };
-    let wt_path = format!("{wt_dir}/{}", sanitize_branch(&branch));
+    let wt_path = derive_worktree_path(&repo, &branch);
     if std::path::Path::new(&wt_path).exists() {
         return Err(CanopyError::conflict(format!("Path already exists: {wt_path}")));
     }
@@ -815,18 +1015,46 @@ pub async fn create_worktree(
     // Assign the worktree's ports first so .env overrides can reference them.
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_path, false);
     // The worktree exists either way; surface setup failure but keep the tree fresh.
-    let app3 = app.clone();
-    let wt_path3 = wt_path.clone();
-    let setup_result = crate::setup::run_setup(&wt_path, &repo.path, &vars, move |line| {
-        emit_op(&app3, &wt_path3, "create", "progress", line)
-    })
-    .await;
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
+    let setup_result = if repo.worktree_defaults.run_setup {
+        let app3 = app.clone();
+        let wt_path3 = wt_path.clone();
+        crate::setup::run_setup(&wt_path, &repo.path, &vars, false, parallel, move |p| {
+            emit_progress(&app3, &wt_path3, "create", p)
+        })
+        .await
+    } else {
+        // Skipping is a choice, not a silent no-op: the worktree exists but is
+        // not provisioned, and the runner is one click away.
+        emit_op(&app, &wt_path, "create", "progress", "setup skipped — Run setup when you're ready");
+        Ok(())
+    };
+
+    // Record the outcome before the rescan, so the tree this create publishes
+    // already carries the marker rather than reading as unprovisioned until
+    // the next 60s refresh.
+    crate::setup::write_setup_marker(&wt_path, setup_result.is_ok());
+
 
     refresh_tree(&app).await.map_err(CanopyError::internal)?;
     refresh_git_meta(&app, &wt_path).await;
 
+    // installing dependencies is the single biggest change a worktree's
+    // footprint ever sees — measure it now rather than serving a stale figure
+    crate::disk::request(&app, vec![wt_path.clone()], true);
+
     match setup_result {
         Ok(()) => {
+            // Starting services is only meaningful once provisioning has run;
+            // booting a service against an unprovisioned worktree just crashes it.
+            if repo.worktree_defaults.start_services && repo.worktree_defaults.run_setup {
+                emit_op(&app, &wt_path, "create", "progress", "starting services…");
+                for key in services::worktree_svc_keys(&app, &wt_path) {
+                    if let Err(e) = services::start_service(&app, &key).await {
+                        emit_op(&app, &wt_path, "create", "progress", format!("{key} did not start: {e}"));
+                    }
+                }
+            }
             emit_op(&app, &wt_path, "create", "done", "worktree ready");
             Ok(wt_path)
         }
@@ -840,7 +1068,7 @@ pub async fn create_worktree(
 /// Manually (re)run a worktree's setup commands — for worktrees created before
 /// setup was configured, or to retry after a failure.
 #[tauri::command]
-pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), CanopyError> {
+pub async fn run_worktree_setup(app: AppHandle, wt_key: String, dry_run: bool) -> Result<(), CanopyError> {
     let ctx = app
         .state::<AppState>()
         .wt_context(&wt_key)
@@ -855,14 +1083,30 @@ pub async fn run_worktree_setup(app: AppHandle, wt_key: String) -> Result<(), Ca
     let vars = crate::state::worktree_vars(&app, &repo_id, &wt_key, is_main);
     let app3 = app.clone();
     let wt3 = wt_key.clone();
-    emit_op(&app, &wt_key, "create", "progress", "running setup…");
-    match crate::setup::run_setup(&wt_key, &repo_path, &vars, move |line| {
-        emit_op(&app3, &wt3, "create", "progress", line)
+    emit_op(&app, &wt_key, "create", "progress", if dry_run { "dry run — nothing will be executed" } else { "running setup…" });
+    let parallel = crate::diagnostics::experiment_enabled(&app, "parallel-setup");
+    let result = crate::setup::run_setup(&wt_key, &repo_path, &vars, dry_run, parallel, move |p| {
+        emit_progress(&app3, &wt3, "create", p)
     })
-    .await
-    {
+    .await;
+    // A dry run executed nothing and provisioned nothing, so it must not
+    // record that setup ran — that would mark the worktree usable on the
+    // strength of a preview.
+    if !dry_run {
+        crate::setup::write_setup_marker(&wt_key, result.is_ok());
+    }
+    // the marker is part of the tree, so republish it rather than making the
+    // caller wait for the next background refresh
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    match result {
         Ok(()) => {
-            emit_op(&app, &wt_key, "create", "done", "setup complete");
+            // Installing dependencies is the biggest change a footprint ever
+            // sees, so a real run invalidates the cached size. A dry run wrote
+            // nothing, so re-walking the tree would be pure cost.
+            if !dry_run {
+                crate::disk::request(&app, vec![wt_key.clone()], true);
+            }
+            emit_op(&app, &wt_key, "create", "done", if dry_run { "dry run complete — nothing was executed" } else { "setup complete" });
             Ok(())
         }
         Err(e) => {
@@ -938,8 +1182,8 @@ async fn remove_worktree_inner(app: &AppHandle, wt_key: &str, delete_branch: boo
         let vars = crate::state::worktree_vars(app, &repo_id, wt_key, false);
         let app_t = app.clone();
         let wt_t = wt_key.to_string();
-        if let Err(e) = crate::setup::run_teardown(wt_key, &repo_path, &vars, move |line| {
-            emit_op(&app_t, &wt_t, "remove", "progress", line)
+        if let Err(e) = crate::setup::run_teardown(wt_key, &repo_path, &vars, move |p| {
+            emit_progress(&app_t, &wt_t, "remove", p)
         })
         .await
         {
@@ -1293,12 +1537,50 @@ pub struct ProvisionEntry {
     pub keys: Vec<(String, String)>,
 }
 
+/// One setup task as exchanged with the Settings UI.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupTaskEntry {
+    pub cmd: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupPolicyEntry {
+    #[serde(default)]
+    pub continue_on_failure: bool,
+    #[serde(default)]
+    pub timeout_secs: u64,
+}
+
+impl From<crate::setup::SetupTask> for SetupTaskEntry {
+    fn from(t: crate::setup::SetupTask) -> Self {
+        SetupTaskEntry { cmd: t.cmd, cwd: t.cwd, enabled: t.enabled }
+    }
+}
+
+impl From<SetupTaskEntry> for crate::setup::SetupTask {
+    fn from(e: SetupTaskEntry) -> Self {
+        crate::setup::SetupTask { cmd: e.cmd, cwd: e.cwd, enabled: e.enabled }
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoConfig {
     /// files provisioned into each new worktree (the root `.env` is one entry)
     pub provision: Vec<ProvisionEntry>,
-    pub setup: Vec<String>,
+    pub setup: Vec<SetupTaskEntry>,
+    #[serde(default)]
+    pub setup_policy: SetupPolicyEntry,
     /// read-only in the Settings UI today — surfaced so the preview/export
     /// match what's actually on disk
     #[serde(default)]
@@ -1332,7 +1614,11 @@ pub fn get_repo_config(app: AppHandle, repo_id: String) -> Result<RepoConfig, Ca
     let c = crate::setup::read_repo_config(&path);
     Ok(RepoConfig {
         provision: c.provision.into_iter().map(Into::into).collect(),
-        setup: c.setup,
+        setup: c.setup.into_iter().map(Into::into).collect(),
+        setup_policy: SetupPolicyEntry {
+            continue_on_failure: c.setup_policy.continue_on_failure,
+            timeout_secs: c.setup_policy.timeout_secs,
+        },
         teardown: c.teardown,
         migrate: c.migrate,
     })
@@ -1351,10 +1637,117 @@ pub fn save_text_file(path: String, contents: String) -> Result<(), CanopyError>
 
 /// Write provisioned files + setup commands to the repo's `.worktreemanager.json`.
 #[tauri::command]
-pub fn save_repo_config(app: AppHandle, repo_id: String, provision: Vec<ProvisionEntry>, setup: Vec<String>) -> Result<(), CanopyError> {
+pub fn save_repo_config(
+    app: AppHandle,
+    repo_id: String,
+    provision: Vec<ProvisionEntry>,
+    setup: Vec<SetupTaskEntry>,
+    setup_policy: Option<SetupPolicyEntry>,
+) -> Result<(), CanopyError> {
     let path = repo_path(&app, &repo_id)?;
     let files: Vec<crate::setup::ProvisionFile> = provision.into_iter().map(Into::into).collect();
-    crate::setup::write_repo_config(&path, &files, &setup).map_err(CanopyError::config)
+    let tasks: Vec<crate::setup::SetupTask> = setup.into_iter().map(Into::into).collect();
+    let policy = setup_policy.map(|p| crate::setup::SetupPolicy {
+        continue_on_failure: p.continue_on_failure,
+        timeout_secs: p.timeout_secs,
+    });
+    crate::setup::write_repo_config(&path, &files, &tasks, policy.as_ref()).map_err(CanopyError::config)
+}
+
+// ── disk usage ──
+
+/// Every measurement Canopy currently holds, keyed by `wt_key`. Returns
+/// instantly from cache — a window that opens the overview gets whatever
+/// earlier scans found rather than waiting on a fresh walk.
+#[tauri::command]
+pub fn get_disk_usage(app: AppHandle) -> std::collections::HashMap<String, crate::disk::DiskUsage> {
+    crate::disk::snapshot(&app)
+}
+
+/// Queue worktrees for measurement and return immediately; results arrive as
+/// `worktree:disk` events. Unknown keys are dropped rather than walked — this
+/// is the one command that takes a caller-supplied path list, so it applies the
+/// same containment rule as every other `wt_key` entry point.
+#[tauri::command]
+pub fn scan_disk_usage(app: AppHandle, wt_keys: Vec<String>, force: bool) -> Result<(), CanopyError> {
+    let known: Vec<String> = {
+        let state = app.state::<AppState>();
+        let tree = state.tree.read();
+        wt_keys
+            .into_iter()
+            .filter(|k| tree.iter().flat_map(|r| r.worktrees.iter()).any(|w| &w.wt_key == k))
+            .collect()
+    };
+    crate::disk::request(&app, known, force);
+    Ok(())
+}
+
+// ── diagnostics / caches / reset (Settings → Advanced) ──
+
+/// An environment summary for a bug report, plus the same thing as markdown so
+/// the UI can put one string on the clipboard.
+#[tauri::command]
+pub fn gather_diagnostics(app: AppHandle) -> (crate::diagnostics::Diagnostics, String) {
+    let d = crate::diagnostics::gather(&app);
+    let md = crate::diagnostics::as_markdown(&d);
+    (d, md)
+}
+
+/// The experiments this build ships, so Settings renders the ones that exist
+/// rather than a hardcoded list that drifts from what the app honours.
+#[tauri::command]
+pub fn list_experiments() -> Vec<crate::diagnostics::Experiment> {
+    crate::diagnostics::EXPERIMENTS.to_vec()
+}
+
+/// Reveal the log directory — the thing a bug report attaches.
+#[tauri::command]
+pub fn open_log_dir(app: AppHandle) -> Result<(), CanopyError> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| CanopyError::not_found(format!("no log directory: {e}")))?;
+    std::fs::create_dir_all(&dir).map_err(|e| CanopyError::internal(e.to_string()))?;
+    reveal_in_finder(dir.to_string_lossy().into_owned())
+}
+
+/// Delete Canopy's own regenerable files (rotated service logs). Never touches
+/// a worktree, a database, a repository or a settings file.
+#[tauri::command]
+pub fn clear_caches(app: AppHandle) -> crate::diagnostics::ClearedCaches {
+    crate::diagnostics::clear_caches(&app)
+}
+
+/// Restore default settings, keeping registered repositories. The confirmation
+/// lives in the UI; this command is the irreversible half and does exactly
+/// what its name says.
+#[tauri::command]
+pub async fn reset_settings(app: AppHandle) -> Result<Settings, CanopyError> {
+    crate::diagnostics::reset_settings(&app).map_err(CanopyError::config)?;
+    refresh_tree(&app).await.map_err(CanopyError::internal)?;
+    Ok(app.state::<AppState>().settings.read().clone())
+}
+
+/// Check GitHub for a newer release now, regardless of the auto-check
+/// preference — pressing the button IS the consent.
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<crate::updates::UpdateStatus, CanopyError> {
+    Ok(crate::updates::check_now(&app).await)
+}
+
+/// How many crash reports are on disk, so the UI offers the folder only when
+/// there is something in it.
+#[tauri::command]
+pub fn crash_report_count(app: AppHandle) -> usize {
+    crate::updates::crash_report_count(&app)
+}
+
+/// Reveal the crash-report folder. Reports never leave the machine, so this is
+/// the only way to hand one to a bug report.
+#[tauri::command]
+pub fn open_crash_reports(app: AppHandle) -> Result<(), CanopyError> {
+    let dir = crate::updates::crash_dir(&app).ok_or_else(|| CanopyError::not_found("no log directory"))?;
+    reveal_in_finder(dir.to_string_lossy().into_owned())
 }
 
 /// `git fetch --all --prune` then return the refreshed branch lists.
@@ -1367,12 +1760,72 @@ pub async fn fetch_branches(app: AppHandle, repo_id: String) -> Result<git::Bran
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_branch;
+    use super::{detect_repo, sanitize_branch};
+    use crate::git::run_git;
 
     #[test]
     fn sanitize_branch_maps_separators() {
         assert_eq!(sanitize_branch("feature/foo-bar"), "feature_foo-bar");
         assert_eq!(sanitize_branch("v1.2.3"), "v1.2.3");
         assert_eq!(sanitize_branch("fix db reset"), "fix_db_reset");
+    }
+
+    fn tmp(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("canopy-cmd-{tag}-{}", std::process::id()))
+    }
+
+    async fn init(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let d = dir.to_str().unwrap();
+        run_git(d, &["init"]).await.unwrap();
+        run_git(d, &["config", "user.email", "t@localhost"]).await.unwrap();
+        run_git(d, &["config", "user.name", "t"]).await.unwrap();
+        run_git(d, &["config", "commit.gpgsign", "false"]).await.unwrap();
+    }
+
+    /// The add-repo-from-sidebar flow (#122) shows detect_repo's result — name,
+    /// stack, package.json scripts, and a normalized origin — before adding.
+    #[tokio::test]
+    async fn detect_repo_reads_name_stack_scripts_and_normalizes_origin() {
+        let dir = tmp("detect");
+        let _ = std::fs::remove_dir_all(&dir);
+        init(&dir).await;
+        let d = dir.to_str().unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"scripts":{"dev":"vite","build":"tsc"}}"#).unwrap();
+        run_git(d, &["add", "."]).await.unwrap();
+        run_git(d, &["commit", "-m", "init"]).await.unwrap();
+        // an ssh remote to exercise the origin normalization
+        run_git(d, &["remote", "add", "origin", "git@github.com:acme/widgets.git"]).await.unwrap();
+
+        let det = detect_repo(d.to_string()).await.unwrap();
+        assert_eq!(det.name, dir.file_name().unwrap().to_string_lossy());
+        assert_eq!(det.stack, "node");
+        assert_eq!(det.origin, "github.com/acme/widgets", "git@…:…git → github.com/…");
+        let names: Vec<&str> = det.scripts.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"dev") && names.contains(&"build"), "scripts parsed: {names:?}");
+        assert!(!det.branch.is_empty(), "branch resolved: {:?}", det.branch);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cargo.toml wins the stack sniff over package.json, and a non-repo path
+    /// is rejected (the same guard validate_repo enforces).
+    #[tokio::test]
+    async fn detect_repo_prefers_rust_and_rejects_non_repos() {
+        let dir = tmp("detect-rs");
+        let _ = std::fs::remove_dir_all(&dir);
+        init(&dir).await;
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        let det = detect_repo(dir.to_str().unwrap().to_string()).await.unwrap();
+        assert_eq!(det.stack, "rust", "Cargo.toml is checked before package.json");
+
+        let plain = tmp("detect-plain");
+        let _ = std::fs::remove_dir_all(&plain);
+        std::fs::create_dir_all(&plain).unwrap();
+        assert!(detect_repo(plain.to_str().unwrap().to_string()).await.is_err(), "a non-repo must error");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&plain);
     }
 }

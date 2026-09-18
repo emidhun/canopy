@@ -2,8 +2,11 @@ mod commands;
 #[cfg(test)]
 mod csp;
 mod db;
+mod disk;
+mod diagnostics;
 mod error;
 mod git;
+mod notify;
 mod proc;
 mod services;
 mod settings;
@@ -14,6 +17,7 @@ mod stats;
 mod suite;
 mod terminal;
 mod toolchain;
+mod updates;
 mod tray;
 
 use services::ProcTable;
@@ -82,7 +86,8 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init());
     // NSPanel plugin is macOS-only; other platforms use a plain popover window.
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
@@ -90,12 +95,20 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tray::init(&handle)?;
-            app.manage(AppState::new(
-                settings::load_settings(&handle),
-                settings::load_runtime(&handle),
-            ));
+            let loaded = settings::load_settings(&handle);
+            // git credentials are process-wide (see git.rs) — publish them
+            // before anything can run a git command
+            git::apply_credentials(&loaded.security.ssh_key, &loaded.security.credential_helper);
+            app.manage(AppState::new(loaded, settings::load_runtime(&handle)));
             app.manage(ProcTable::default());
             app.manage(TermTable::default());
+            app.manage(disk::DiskCache::default());
+            app.manage(notify::NotifyState::default());
+
+            // crash reports + the update check need AppState for their
+            // preferences, so both are installed after it is managed
+            updates::install_panic_hook(handle.clone());
+            updates::spawn_check_task(handle.clone());
 
             // kill process groups left over from a crashed previous run
             services::sweep_orphans(&handle);
@@ -103,7 +116,14 @@ pub fn run() {
 
             stats::spawn_stats_task(handle.clone());
 
-            // 1s visibility poll feeding the WINDOWS_VISIBLE cache
+            // 1s visibility poll feeding the WINDOWS_VISIBLE cache, plus the
+            // agent-activity sweep. Both are cheap and want the same cadence:
+            // "an agent is waiting on you" is the second-highest priority
+            // state in the app, so a second is about the longest it can go
+            // unnoticed and still feel immediate. The sweep runs even while
+            // every window is hidden — the tray badge and the attention queue
+            // are exactly what someone checks when the app isn't on screen —
+            // and it emits only on a transition, never on the tick.
             {
                 let handle = handle.clone();
                 tauri::async_runtime::spawn(async move {
@@ -113,6 +133,7 @@ pub fn run() {
                             any_window_visible(&handle),
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        terminal::poll_states(&handle);
                     }
                 });
             }
@@ -131,7 +152,7 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
                         if let Some(table) = handle.try_state::<TermTable>() {
-                            terminal::sweep_idle(&table);
+                            terminal::sweep_idle(&handle, &table);
                         }
                     }
                 });
@@ -289,6 +310,7 @@ pub fn run() {
             commands::terminal_close,
             commands::write_worktree_context,
             commands::resolve_agent_command,
+            commands::service_env,
             commands::service_start,
             commands::service_stop,
             commands::service_restart,
@@ -298,10 +320,12 @@ pub fn run() {
             commands::open_in_editor,
             commands::open_file_in_editor,
             commands::reveal_in_finder,
+            commands::reveal_repo,
             commands::open_terminal,
             commands::open_port,
             commands::show_main_window,
             commands::quit_app,
+            commands::preview_worktree,
             commands::create_worktree,
             commands::run_worktree_setup,
             commands::worktree_dirty_report,
@@ -322,6 +346,17 @@ pub fn run() {
             commands::set_service_port,
             commands::run_migration,
             commands::run_custom_command,
+            commands::get_disk_usage,
+            commands::scan_disk_usage,
+            commands::set_worktree_pinned,
+            commands::gather_diagnostics,
+            commands::list_experiments,
+            commands::open_log_dir,
+            commands::clear_caches,
+            commands::reset_settings,
+            commands::check_for_update,
+            commands::open_crash_reports,
+            commands::crash_report_count,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

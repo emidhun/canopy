@@ -115,7 +115,7 @@ struct StatusEvent<'a> {
 
 pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Option<u64>, exit_code: Option<i32>) {
     let state = app.state::<AppState>();
-    state.statuses.write().insert(key.to_string(), status);
+    let previous = state.statuses.write().insert(key.to_string(), status);
     // patch cached tree so late get_tree calls see fresh statuses
     {
         let mut tree = state.tree.write();
@@ -130,6 +130,32 @@ pub fn set_status(app: &AppHandle, key: &str, status: SvcStatus, started_at: Opt
         }
     }
     let _ = app.emit("service:status", &StatusEvent { svc_key: key, status, started_at, exit_code });
+
+    // Notify on the TRANSITION into error, not on the state: a status
+    // re-broadcast (a tree rebuild, a refresh) would otherwise re-notify about
+    // a crash the user already knows about.
+    if status == SvcStatus::Error && previous != Some(SvcStatus::Error) {
+        let name = {
+            let tree = state.tree.read();
+            tree.iter()
+                .flat_map(|r| r.worktrees.iter())
+                .flat_map(|w| w.services.iter().map(move |s| (w, s)))
+                .find(|(_, s)| s.svc_key == key)
+                .map(|(w, s)| format!("{} · {}", s.name, w.branch))
+                .unwrap_or_else(|| key.to_string())
+        };
+        crate::notify::notify(
+            app,
+            crate::notify::Kind::ServiceCrash,
+            key,
+            "A service crashed",
+            &match exit_code {
+                Some(c) => format!("{name} exited with code {c}"),
+                None => format!("{name} exited"),
+            },
+        );
+    }
+    crate::notify::refresh_badge(app);
 }
 
 
@@ -300,27 +326,134 @@ fn resolve_service(app: &AppHandle, key: &str) -> Result<(ServiceCfg, String, Ha
                         .ok_or("service gone")?
                         .clone();
                     let mut env = cfg.env.clone();
+                    // A service command must see exactly the variables setup saw
+                    // — same builder, no second implementation to drift from it
+                    // (see state::build_wt_vars).
+                    let siblings: Vec<(String, String, u32)> = w
+                        .services
+                        .iter()
+                        .filter_map(|sib| Some((sib.service_id.clone(), sib.name.clone(), sib.port?)))
+                        .collect();
+                    let idx = crate::state::existing_port_index(app, &r.repo_id, &w.path);
+                    let db = crate::state::resolve_db_name(app, &r.repo_id, &w.path);
+                    env.extend(crate::state::build_wt_vars(&w.path, idx, db, &siblings));
                     if let Some(port) = s.port {
                         env.insert("PORT".into(), port.to_string());
                     }
-                    // expose every sibling service's port under both names: the
-                    // documented WT_<ID>_PORT and the back-compat WM_PORT_<ID>,
-                    // matching what setup/custom commands see (see setup.rs).
-                    for sib in w.services.iter() {
-                        if let Some(p) = sib.port {
-                            let id = sib.service_id.to_uppercase();
-                            env.insert(format!("WT_{id}_PORT"), p.to_string());
-                            env.insert(format!("WM_PORT_{id}"), p.to_string());
-                        }
-                    }
-                    // per-worktree identifier, matching what setup saw (e.g. for DB names)
-                    env.insert("WM_WT_SLUG".into(), crate::setup::wt_slug(&w.path));
                     return Ok((cfg, w.path.clone(), env));
                 }
             }
         }
     }
     Err(format!("unknown service: {key}"))
+}
+
+// ── resolved environment (the Service detail modal) ───────────────────
+//
+// "Why is this service talking to the wrong database?" is the most common
+// worktree-isolation bug, and it is unanswerable without seeing the values the
+// process actually runs with. Two things contribute, and telling them apart is
+// most of the answer:
+//
+//   spawn  — what Canopy puts in the child's environment (`resolve_service`)
+//   dotenv — what setup provisioned into the worktree's .env files, which the
+//            process loads itself
+//
+// Spawn wins on a collision, because a dotenv loader does not overwrite an
+// already-set process variable by default.
+
+/// One resolved environment variable, with where it came from.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvEntry {
+    pub key: String,
+    /// masked when the key looks secret, or when a URL carries credentials
+    pub value: String,
+    /// "spawn" | "dotenv"
+    pub source: &'static str,
+    /// the real value was withheld — the UI says so rather than implying the
+    /// process runs with literal bullets
+    pub masked: bool,
+}
+
+/// Key fragments that mean "this is a credential". Matched case-insensitively
+/// as substrings, so `GITHUB_TOKEN`, `jwtSecret` and `DB_PASSWORD` all hit.
+const SECRET_HINTS: [&str; 9] =
+    ["secret", "token", "password", "passwd", "apikey", "api_key", "private", "credential", "signing"];
+
+fn looks_secret(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    SECRET_HINTS.iter().any(|h| k.contains(h))
+}
+
+/// Redact `scheme://user:password@host` in place, leaving everything else
+/// readable. A repo `.env` routinely holds a DATABASE_URL whose password is the
+/// only secret in it — masking the whole value would hide the database name,
+/// which is the single thing this panel exists to show.
+fn redact_url_credentials(value: &str) -> Option<String> {
+    let (scheme, rest) = value.split_once("://")?;
+    let (authority, tail) = match rest.split_once('/') {
+        Some((a, t)) => (a, Some(t)),
+        None => (rest, None),
+    };
+    let (userinfo, host) = authority.split_once('@')?;
+    let (user, _pass) = userinfo.split_once(':')?;
+    let mut out = format!("{scheme}://{user}:••••@{host}");
+    if let Some(t) = tail {
+        out.push('/');
+        out.push_str(t);
+    }
+    Some(out)
+}
+
+fn mask(key: &str, value: &str) -> (String, bool) {
+    if value.is_empty() {
+        return (value.to_string(), false);
+    }
+    if looks_secret(key) {
+        return ("••••••••".to_string(), true);
+    }
+    match redact_url_credentials(value) {
+        Some(v) => (v, true),
+        None => (value.to_string(), false),
+    }
+}
+
+/// Every variable a service runs (or would run) with, ordered spawn-first and
+/// masked. Works whether or not the service is running: this is the resolved
+/// configuration, not a snapshot of a live process.
+pub fn resolved_env(app: &AppHandle, key: &str) -> Result<Vec<EnvEntry>, String> {
+    let (cfg, wt_path, spawn_env) = resolve_service(app, key)?;
+
+    let mut out: Vec<EnvEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // spawn env first — it is what actually wins
+    let mut spawn: Vec<(String, String)> = spawn_env.into_iter().collect();
+    spawn.sort_by(|a, b| a.0.cmp(&b.0));
+    for (k, v) in spawn {
+        let (value, masked) = mask(&k, &v);
+        seen.insert(k.clone());
+        out.push(EnvEntry { key: k, value, source: "spawn", masked });
+    }
+
+    // then the dotenvs the process loads itself: the worktree root, and the
+    // service's own working directory when it has one (e.g. `server/.env`)
+    let mut dotenv_paths = vec![std::path::Path::new(&wt_path).join(".env")];
+    if !cfg.cwd.trim().is_empty() {
+        dotenv_paths.push(std::path::Path::new(&wt_path).join(&cfg.cwd).join(".env"));
+    }
+    for path in dotenv_paths {
+        let Ok(txt) = std::fs::read_to_string(&path) else { continue };
+        for (k, v) in crate::setup::parse_dotenv(&txt) {
+            if !seen.insert(k.clone()) {
+                continue; // already set in the spawn env, which takes precedence
+            }
+            let (value, masked) = mask(&k, &v);
+            out.push(EnvEntry { key: k, value, source: "dotenv", masked });
+        }
+    }
+    Ok(out)
 }
 
 pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
@@ -393,9 +526,44 @@ pub async fn start_service(app: &AppHandle, key: &str) -> Result<(), String> {
     };
     persist_orphans(app);
 
-    set_status(app, key, SvcStatus::Running, Some(started_unix), None);
-    if let Some(port) = env.get("PORT") {
-        push_log(app, key, LogLine::now("ok", format!("spawned — expecting http://localhost:{port}")));
+    let port = env.get("PORT").and_then(|p| p.parse::<u32>().ok());
+    let health = cfg.health.trim().to_string();
+    match (port, health.is_empty()) {
+        (Some(p), false) => {
+            // Stay in Starting and let the probe decide. The dot going green
+            // then means "it answered", not "the shell forked".
+            push_log(app, key, LogLine::now("info", format!("spawned — probing http://localhost:{p}{health}")));
+            let app2 = app.clone();
+            let key2 = key.to_string();
+            let h = health.clone();
+            tauri::async_runtime::spawn(async move {
+                if await_ready(&app2, &key2, p, &h, generation).await {
+                    set_status(&app2, &key2, SvcStatus::Running, Some(started_unix), None);
+                    push_log(&app2, &key2, LogLine::now("ok", format!("ready — http://localhost:{p}{h}")));
+                } else {
+                    // Only report a failure if this generation is still the
+                    // live one: a stop or restart while probing is not an error.
+                    let still_ours = {
+                        let table = app2.state::<ProcTable>();
+                        let procs = table.procs.lock();
+                        procs.get(&key2).is_some_and(|e| e.generation == generation)
+                    };
+                    if still_ours {
+                        push_log(&app2, &key2, LogLine::now("err", format!("never became ready — {h} did not answer on :{p}")));
+                        set_status(&app2, &key2, SvcStatus::Error, None, None);
+                    }
+                }
+            });
+        }
+        // No probe (or no port): Running as soon as the process exists — the
+        // behaviour before health checks, and the only honest answer when
+        // there is nothing to ask.
+        _ => {
+            set_status(app, key, SvcStatus::Running, Some(started_unix), None);
+            if let Some(p) = port {
+                push_log(app, key, LogLine::now("ok", format!("spawned — expecting http://localhost:{p}")));
+            }
+        }
     }
 
     // ── log pumps (batched) ──
@@ -765,6 +933,128 @@ pub(crate) fn proc_start_time_matches(pid: u32, recorded_secs: u64) -> bool {
     actual != 0 && actual.abs_diff(recorded_secs) <= 5
 }
 
+// ── readiness probes ──────────────────────────────────────────────────
+//
+// A spawned process is not a working service. `pnpm dev` returns instantly
+// and then spends thirty seconds compiling; marking it "running" the moment
+// the shell forks is why the dot goes green before anything answers the port.
+//
+// When a service declares a health path, Canopy holds it in `Starting` until
+// that path answers, and only then calls it Running.
+//
+// The probe is a hand-rolled HTTP/1.1 GET over TcpStream rather than an HTTP
+// client dependency: the target is always `127.0.0.1:<own port>`, so there is
+// no TLS, no redirects, no proxies and no DNS. A crate for this would be a
+// large dependency to answer "did localhost return a 2xx".
+
+/// How long to keep probing before calling the start a failure. Generous: a
+/// cold TypeScript build legitimately takes this long.
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
+/// Gap between attempts. Short enough to feel immediate, long enough not to
+/// spin while a compiler is using the CPU.
+const PROBE_INTERVAL: Duration = Duration::from_millis(400);
+/// A single attempt's budget — a server accepting the connection but never
+/// replying must not stall the whole probe loop.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// One GET against `127.0.0.1:port`. `Ok(true)` only for a 2xx or 3xx status.
+async fn probe_once(port: u32, path: &str) -> Result<bool, String> {
+    use tokio::io::AsyncWriteExt;
+    let path = if path.starts_with('/') { path.to_string() } else { format!("/{path}") };
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port as u16))
+        .await
+        .map_err(|e| e.to_string())?;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: Canopy\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).await.map_err(|e| e.to_string())?;
+
+    // Only the status line is needed, and reading it alone means a health
+    // endpoint returning a large body costs nothing.
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.map_err(|e| e.to_string())?;
+    let code: u16 = line.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+    Ok((200..400).contains(&code))
+}
+
+/// Poll a service's health path until it answers, the deadline passes, or the
+/// process dies. Returns whether the service became ready.
+///
+/// The process check matters: without it, a service that crashes two seconds
+/// after spawning would sit in `Starting` for the full two minutes instead of
+/// reporting the failure immediately.
+pub async fn await_ready(app: &AppHandle, key: &str, port: u32, path: &str, generation: u64) -> bool {
+    let started = Instant::now();
+    let mut announced = false;
+    while started.elapsed() < READY_TIMEOUT {
+        // stopped, restarted, or exited — nothing left to wait for
+        let alive = {
+            let table = app.state::<ProcTable>();
+            let procs = table.procs.lock();
+            procs.get(key).is_some_and(|p| p.generation == generation)
+        };
+        if !alive {
+            return false;
+        }
+        match tokio::time::timeout(PROBE_TIMEOUT, probe_once(port, path)).await {
+            Ok(Ok(true)) => return true,
+            _ => {
+                if !announced {
+                    push_log(app, key, LogLine::now("info", format!("waiting for {path} on :{port}…")));
+                    announced = true;
+                }
+            }
+        }
+        tokio::time::sleep(PROBE_INTERVAL).await;
+    }
+    false
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::{looks_secret, mask, redact_url_credentials};
+
+    #[test]
+    fn secret_looking_keys_are_masked_whole() {
+        assert!(looks_secret("GITHUB_TOKEN"));
+        assert!(looks_secret("jwtSecret"), "case-insensitive substring");
+        assert!(looks_secret("DB_PASSWORD"));
+        assert!(looks_secret("STRIPE_API_KEY"));
+        assert!(!looks_secret("PORT"));
+        assert!(!looks_secret("PG_DB"));
+        assert!(!looks_secret("TOOLJET_HOST"));
+
+        let (v, masked) = mask("GITHUB_TOKEN", "ghp_realvalue");
+        assert_eq!(v, "••••••••");
+        assert!(masked);
+        assert!(!v.contains("ghp_"), "the real value never leaves the backend");
+    }
+
+    #[test]
+    fn urls_keep_everything_but_the_password() {
+        // the database NAME is the one thing this panel exists to show, so a
+        // whole-value mask here would defeat the feature
+        let redacted = redact_url_credentials("postgres://admin:hunter2@localhost:5432/tj_history").unwrap();
+        assert!(redacted.contains("tj_history"), "database name survives: {redacted}");
+        assert!(redacted.contains("admin"), "user survives: {redacted}");
+        assert!(redacted.contains("localhost:5432"), "host survives: {redacted}");
+        assert!(!redacted.contains("hunter2"), "password does not: {redacted}");
+
+        // a credential-free URL is left completely alone
+        assert!(redact_url_credentials("postgres://localhost/tj_history").is_none());
+        let (v, masked) = mask("DATABASE_URL", "postgres://localhost/tj_history");
+        assert_eq!(v, "postgres://localhost/tj_history");
+        assert!(!masked, "nothing was withheld, so nothing is claimed to be");
+    }
+
+    #[test]
+    fn ordinary_values_pass_through() {
+        assert_eq!(mask("PORT", "3160"), ("3160".to_string(), false));
+        assert_eq!(mask("TOOLJET_HOST", "http://localhost:8242"), ("http://localhost:8242".to_string(), false));
+        // an empty value is not a secret worth bulleting — it's just empty
+        assert_eq!(mask("SECRET_KEY", ""), (String::new(), false));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{classify_line, log_file_stem, LOG_NAME_MAX};
@@ -836,5 +1126,72 @@ mod tests {
                 assert_eq!(unpack_offset(pack_offset(ts, off)), (ts, off), "ts={ts} off={off}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod health_probe_tests {
+    use super::probe_once;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Serve one connection with `status_line`, and hand back the request's
+    /// first line so a test can assert what was actually asked for.
+    async fn stub(status_line: &'static str) -> (u32, tokio::task::JoinHandle<String>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port() as u32;
+        let handle = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 512];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).to_string();
+            let _ = sock.write_all(status_line.as_bytes()).await;
+            req.lines().next().unwrap_or("").to_string()
+        });
+        (port, handle)
+    }
+
+    #[tokio::test]
+    async fn a_2xx_status_is_healthy() {
+        let (port, _h) = stub("HTTP/1.1 200 OK\r\n\r\n").await;
+        assert_eq!(probe_once(port, "/api/health").await, Ok(true));
+    }
+
+    #[tokio::test]
+    async fn a_4xx_status_is_not_healthy() {
+        let (port, _h) = stub("HTTP/1.1 404 Not Found\r\n\r\n").await;
+        assert_eq!(probe_once(port, "/api/health").await, Ok(false));
+    }
+
+    /// 3xx counts as healthy — a dev server that redirects is answering.
+    #[tokio::test]
+    async fn a_redirect_is_healthy() {
+        let (port, _h) = stub("HTTP/1.1 301 Moved Permanently\r\n\r\n").await;
+        assert_eq!(probe_once(port, "/").await, Ok(true));
+    }
+
+    /// Fail closed: an unparseable status line must read as unhealthy rather
+    /// than marking a service green because the probe got confused.
+    #[tokio::test]
+    async fn a_malformed_status_line_is_not_healthy() {
+        let (port, _h) = stub("garbage\r\n\r\n").await;
+        assert_eq!(probe_once(port, "/api/health").await, Ok(false));
+    }
+
+    /// Nothing listening is an error, not a false "healthy".
+    #[tokio::test]
+    async fn a_closed_port_is_an_error() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port() as u32;
+        drop(listener);
+        assert!(probe_once(port, "/api/health").await.is_err());
+    }
+
+    /// The config field is a path, and a user will write it either way.
+    #[tokio::test]
+    async fn a_path_without_a_leading_slash_still_requests_an_absolute_one() {
+        let (port, h) = stub("HTTP/1.1 200 OK\r\n\r\n").await;
+        assert_eq!(probe_once(port, "api/health").await, Ok(true));
+        assert_eq!(h.await.unwrap(), "GET /api/health HTTP/1.1");
     }
 }
