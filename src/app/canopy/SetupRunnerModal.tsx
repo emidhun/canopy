@@ -224,7 +224,7 @@ export default function SetupRunnerModal({
                 buffered, which is what someone pastes into an issue — the
                 four visible lines are rarely the ones that explain it. */}
             <button
-              className="btn sm"
+              className="cx-btn cx-btn--sm"
               onClick={() => copyLog((op?.lines ?? []).map((l) => l.text), "setup log")}
             >
               Copy log
@@ -301,7 +301,7 @@ function Step({
         <div className="cx-step__body">
           <pre>{lines.join("\n")}</pre>
           <button
-            className="btn sm gh"
+            className="cx-btn cx-btn--sm cx-btn--ghost"
             onClick={(e) => {
               e.stopPropagation();
               onCopy();
