@@ -72,6 +72,11 @@ export default function App() {
   const [showDirty, setShowDirty] = useState(false);
   const [showDb, setShowDb] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
+  /* A setup run handed over by the create dialog. Kept separate from
+     `showSetup` because the worktree is not in the tree yet — the backend
+     rescans only once setup has finished — so there is no `sel` to render
+     from, only the key the run is emitting under. */
+  const [setupFor, setSetupFor] = useState<{ wtKey: string; branch: string } | null>(null);
   const [showCtx, setShowCtx] = useState(false);
   const [svcDetail, setSvcDetail] = useState<string | null>(null);
   const [removeWtFor, setRemoveWtFor] = useState<WorktreeNode | null>(null);
@@ -511,9 +516,18 @@ export default function App() {
       {showDb && sel && <DatabaseModal wt={sel.wt} onClose={() => setShowDb(false)} />}
       {showSetup && sel && (
         <SetupRunnerModal
-          wt={sel.wt}
+          wtKey={sel.wt.wtKey}
+          branch={sel.wt.branch}
           onClose={() => setShowSetup(false)}
           onStartServices={() => startAll(sel.wt.wtKey)}
+        />
+      )}
+      {setupFor && (
+        <SetupRunnerModal
+          wtKey={setupFor.wtKey}
+          branch={setupFor.branch}
+          onClose={() => setSetupFor(null)}
+          onStartServices={() => startAll(setupFor.wtKey)}
         />
       )}
       {svcDetail && sel && <ServiceDetailModal wt={sel.wt} svcKey={svcDetail} onClose={() => setSvcDetail(null)} />}
@@ -529,7 +543,13 @@ export default function App() {
           }}
         />
       )}
-      {showNewWt && <NewWorktreeModal repoId={sel?.repo.repoId ?? ""} onClose={() => setShowNewWt(false)} />}
+      {showNewWt && (
+        <NewWorktreeModal
+          repoId={sel?.repo.repoId ?? ""}
+          onClose={() => setShowNewWt(false)}
+          onSetupStarted={(wtKey, branch) => setSetupFor({ wtKey, branch })}
+        />
+      )}
       {removeWtFor && <RemoveWorktreeModal wt={removeWtFor} onClose={() => setRemoveWtFor(null)} />}
       {removeWtsFor && removeWtsFor.length > 0 && (
         <RemoveWorktreesModal wts={removeWtsFor} onClose={() => setRemoveWtsFor(null)} />

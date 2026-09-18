@@ -138,7 +138,7 @@ export default function Overview({
                   <span className="muted" title="Measuring…">…</span>
                 ) : (
                   <button
-                    className="btn sm gh"
+                    className="cxs-measure"
                     title="Measure this worktree's disk usage"
                     onClick={(e) => { e.stopPropagation(); measure(wt.wtKey); }}
                   >

@@ -5,7 +5,7 @@
    while the name is still editable. The agent handoff is optional and
    collapsed, because most worktrees don't need one, but when it's filled in
    it seeds .canopy/context.md and later becomes the PR body. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { errText, hasBackend, ipc, type Branches, type OpEvent, type WorktreePreview } from "../ipc";
 import { backgroundOp, useStore } from "../store";
@@ -21,7 +21,56 @@ import { seedWtContext } from "./WorktreeContext";
     survive, everything else becomes `_`, case preserved. */
 const sanitizeBranch = (b: string) => b.replace(/[^\p{L}\p{N}.-]/gu, "_");
 
-export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; onClose: () => void }) {
+/* The first line that belongs to the setup phase rather than to creating the
+   worktree. Creating is this dialog's job — fetching, `git worktree add`,
+   submodules, provisioning — and it ends here. The setup commands are a
+   different thing with a different shape: a numbered step list with per-step
+   output, which the setup runner already renders properly and this dialog can
+   only show as an anonymous four-line tail.
+
+   It matches a numbered step and nothing else, because a numbered step is the
+   only line that promises a step list to hand over to. "setup — skipped
+   (disabled): …" is not one: a repo whose tasks are ALL disabled emits those
+   and then finishes, and handing that over opened a runner with no step to
+   show. Nor is "setup skipped — Run setup when you're ready", which means no
+   commands will run at all. */
+const SETUP_PHASE = /^setup \[/;
+export const isSetupStart = (detail: string) => SETUP_PHASE.test(detail);
+
+/** What a `create` event means to the dialog that is creating a worktree. */
+export type CreateOpAction = "ignore" | "append" | "handoff";
+
+/* Whose create is this?
+
+   A create left running in the background emits on the same channel, so "this
+   dialog is busy" is not enough to claim an event: start A in the background,
+   then create B, and A's first setup marker would close B's dialog and open a
+   runner labelled with B's branch whose Start services targets A.
+
+   `destination` is derived by the same backend function `create_worktree`
+   uses, so where we have it the match is exact. Where we don't — the repo's
+   settings could not be read — two concurrent creates are indistinguishable,
+   so the stream stays in this dialog rather than being handed to a runner that
+   might be watching the wrong worktree. */
+export function createOpAction(
+  ev: { wtKey: string; detail: string },
+  ctx: { destination: string | null; busy: boolean },
+): CreateOpAction {
+  if (ctx.destination && ev.wtKey !== ctx.destination) return "ignore";
+  if (!isSetupStart(ev.detail)) return "append";
+  return ctx.busy && ctx.destination ? "handoff" : "append";
+}
+
+export default function NewWorktreeModal({
+  repoId,
+  onClose,
+  onSetupStarted,
+}: {
+  repoId: string;
+  onClose: () => void;
+  /** hand this creation's provisioning stream over to the setup runner */
+  onSetupStarted: (wtKey: string, branch: string) => void;
+}) {
   const tree = useStore((s) => s.tree);
   const select = useStore((s) => s.select);
   const showToast = useStore((s) => s.showToast);
@@ -94,12 +143,35 @@ export default function NewWorktreeModal({ repoId, onClose }: { repoId: string; 
     };
   }, [repo]);
 
+  /* The listener is installed once, so it must not close over `branch`,
+     `busy` or `destination` — a ref is re-pointed on every render instead. */
+  const onOp = useRef<(ev: { wtKey: string; detail: string }) => void>(() => {});
+  const handedOff = useRef(false);
+  useEffect(() => {
+    onOp.current = (ev) => {
+      switch (createOpAction(ev, { destination, busy })) {
+        case "ignore":
+          return;
+        case "append":
+          return setProgress((p) => [...p.slice(-30), ev.detail]);
+        case "handoff":
+          if (handedOff.current) return;
+          handedOff.current = true;
+          // The dialog stops watching, exactly as "Run in background" does — so
+          // the outcome is still reported as a notice if the runner is closed too.
+          backgroundOp(opKey);
+          onSetupStarted(ev.wtKey, branch);
+          onClose();
+      }
+    };
+  });
+
   useEffect(() => {
     if (!hasBackend()) return;
     let un: (() => void) | undefined;
     listen<OpEvent>("worktree:op", (e) => {
       if (e.payload.op !== "create") return;
-      setProgress((p) => [...p.slice(-30), e.payload.detail]);
+      onOp.current(e.payload);
     }).then((u) => (un = u));
     return () => un?.();
   }, []);
