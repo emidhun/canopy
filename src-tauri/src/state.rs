@@ -310,10 +310,88 @@ pub fn effective_port(overrides: &HashMap<String, u32>, svc_key: &str, base_port
     overrides.get(svc_key).copied().unwrap_or(base_port + idx * 10)
 }
 
+/// Uppercase slug for an env-var name segment: non-alphanumerics become '_',
+/// leading/trailing '_' trimmed. Mirrors `envSlug` in the onboarding UI.
+pub fn env_slug(s: &str) -> String {
+    let up: String = s
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+        .collect();
+    up.trim_matches('_').to_string()
+}
+
+/// Build the `WT_*` / `WM_*` variables a worktree's commands see: WT_SLUG,
+/// WT_INDEX, WT_DB_NAME, and each service's port under both its id and its
+/// human name. `services` is (service_id, service_name, resolved_port).
+///
+/// EVERY path that hands these to a command must come through here. The
+/// provisioning path and the service-runtime path each built their own map
+/// once, and drifted: the name-slug ports were added to provisioning only, so
+/// `$WT_SERVER_PORT` resolved in a setup command and was empty in a service
+/// command for the same service.
+/// The database name ${WT_DB_NAME} resolves to. With per-worktree databases
+/// off it is the MAIN checkout's PG_DB, so provisioning points this worktree
+/// at the shared database instead of naming one of its own; falling back to
+/// the derived name when the main checkout has no PG_DB keeps the worktree
+/// working rather than provisioning an empty name.
+///
+/// Both the provisioning path and the service-runtime path call this, for the
+/// same reason they share build_wt_vars: two implementations of one name is
+/// how $WT_DB_NAME would come to mean different things in a setup command and
+/// in a service command.
+pub fn resolve_db_name(app: &AppHandle, repo_id: &str, wt_key: &str) -> String {
+    let state = app.state::<AppState>();
+    let derived = derived_db_name(repo_id, wt_key);
+    let isolated = {
+        let s = state.settings.read();
+        s.repos.iter().find(|r| r.id == repo_id).map(|r| r.worktree_defaults.isolated_database).unwrap_or(true)
+    };
+    if isolated {
+        return derived;
+    }
+    let main_path = state.settings.read().repos.iter().find(|r| r.id == repo_id).map(|r| r.path.clone());
+    main_path.and_then(|p| env_value(&p, "PG_DB")).unwrap_or(derived)
+}
+
+/// `db_name` is resolved by the caller, which is the only side with access to
+/// settings: with per-worktree databases off it is the MAIN checkout's PG_DB
+/// rather than the derived name. Passing it in keeps this function pure, and
+/// therefore directly testable — which is the point of having one builder.
+pub fn build_wt_vars(
+    wt_key: &str,
+    idx: u32,
+    db_name: String,
+    services: &[(String, String, u32)],
+) -> HashMap<String, String> {
+    let slug = crate::setup::wt_slug(wt_key);
+
+    let mut m = HashMap::new();
+    m.insert("WT_SLUG".into(), slug.clone());
+    m.insert("WT_INDEX".into(), idx.to_string());
+    m.insert("WT_DB_NAME".into(), db_name);
+    m.insert("WM_WT_SLUG".into(), slug); // back-compat alias
+
+    for (id, name, port) in services {
+        let port = port.to_string();
+        let id_up = id.to_uppercase();
+        m.insert(format!("WT_{id_up}_PORT"), port.clone());
+        m.insert(format!("WM_PORT_{id_up}"), port.clone()); // back-compat alias
+        // Also expose the port under the service's human NAME, so an .env
+        // template can use `${WT_SERVER_PORT}` for a service named "Server"
+        // regardless of its internal id (ids like `svc-19` never matched a
+        // human-authored template). Additive: `or_insert` never clobbers an
+        // id-based var, and a name collision keeps the first service's port.
+        let name_slug = env_slug(name);
+        if !name_slug.is_empty() {
+            m.entry(format!("WT_{name_slug}_PORT")).or_insert(port);
+        }
+    }
+    m
+}
+
 /// Assign (or look up) the worktree's port index and return the variables setup
-/// can use to provision isolated resources: WT_SLUG, WT_INDEX, WT_DB_NAME, and
-/// WT_<SERVICE>_PORT (plus WM_* aliases for back-compat). Idempotent; persists
-/// the index. Called before setup so .env overrides can reference these.
+/// can use to provision isolated resources. Idempotent; persists the index.
+/// Called before setup so .env overrides can reference these.
 pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool) -> HashMap<String, String> {
     let state = app.state::<AppState>();
     let idx = {
@@ -324,59 +402,36 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
         let rt = state.runtime.read().clone();
         let _ = crate::settings::save_runtime(app, &rt);
     }
-    let slug = crate::setup::wt_slug(wt_key);
-
-    // With per-worktree databases off, ${WT_DB_NAME} resolves to the MAIN
-    // checkout's PG_DB, so provisioning points this worktree at the shared
-    // database instead of naming one of its own. Falling back to the derived
-    // name when the main checkout has no PG_DB keeps the worktree working
-    // rather than provisioning an empty database name.
-    let isolated = {
-        let s = state.settings.read();
-        s.repos.iter().find(|r| r.id == repo_id).map(|r| r.worktree_defaults.isolated_database).unwrap_or(true)
-    };
-    let derived_db = derived_db_name(repo_id, wt_key);
-    let db_name = if isolated {
-        derived_db
-    } else {
-        let main_path = state.settings.read().repos.iter().find(|r| r.id == repo_id).map(|r| r.path.clone());
-        main_path.and_then(|p| env_value(&p, "PG_DB")).unwrap_or(derived_db)
-    };
-
-    let mut m = HashMap::new();
-    m.insert("WT_SLUG".into(), slug.clone());
-    m.insert("WT_INDEX".into(), idx.to_string());
-    m.insert("WT_DB_NAME".into(), db_name);
-    m.insert("WM_WT_SLUG".into(), slug); // back-compat alias
 
     let overrides = state.runtime.read().port_overrides.clone();
-    let settings = state.settings.read();
-    if let Some(repo) = settings.repos.iter().find(|r| r.id == repo_id) {
-        for s in &repo.services {
-            if let Some(bp) = s.base_port {
-                let key = svc_key(wt_key, &s.id);
-                let port = effective_port(&overrides, &key, bp as u32, idx).to_string();
-                let id_up = s.id.to_uppercase();
-                m.insert(format!("WT_{id_up}_PORT"), port.clone());
-                m.insert(format!("WM_PORT_{id_up}"), port.clone()); // back-compat alias
-                // Also expose the port under the service's human NAME, so an .env
-                // template can use `${WT_SERVER_PORT}` for a service named "Server"
-                // regardless of its internal id (ids like `svc-19` never matched a
-                // human-authored template). Additive: `or_insert` never clobbers an
-                // id-based var, and a name collision keeps the first service's port.
-                let name_slug: String = s
-                    .name
-                    .chars()
-                    .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
-                    .collect();
-                let name_slug = name_slug.trim_matches('_');
-                if !name_slug.is_empty() {
-                    m.entry(format!("WT_{name_slug}_PORT")).or_insert(port);
-                }
-            }
-        }
-    }
-    m
+    let services: Vec<(String, String, u32)> = {
+        let settings = state.settings.read();
+        settings
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|repo| {
+                repo.services
+                    .iter()
+                    .filter_map(|s| {
+                        let bp = s.base_port?;
+                        let key = svc_key(wt_key, &s.id);
+                        Some((s.id.clone(), s.name.clone(), effective_port(&overrides, &key, bp as u32, idx)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    build_wt_vars(wt_key, idx, resolve_db_name(app, repo_id, wt_key), &services)
+}
+
+/// The worktree's already-assigned port index, without allocating or persisting
+/// one. Service startup happens long after setup claimed the index; 0 (the main
+/// checkout's slot) is the only sane fallback if it is somehow absent.
+pub fn existing_port_index(app: &AppHandle, repo_id: &str, wt_key: &str) -> u32 {
+    let state = app.state::<AppState>();
+    let rt = state.runtime.read();
+    rt.port_indices.get(repo_id).and_then(|m| m.get(wt_key)).copied().unwrap_or(0)
 }
 
 /// Rebuild the structural tree (repos -> worktrees -> services) from settings +
@@ -622,6 +677,46 @@ mod tests {
         // the same value the ${WT_DB_NAME} template resolves to
         assert_eq!(derived_db_name("ToolJet", "/w/.worktrees/Feature-X.2"), "tooljet_feature_x_2");
         assert_eq!(derived_db_name("my repo", "/w/plain"), "my_repo_plain");
+    }
+
+    #[test]
+    fn env_slug_uppercases_and_trims() {
+        assert_eq!(env_slug("Server"), "SERVER");
+        assert_eq!(env_slug("ToolJet Server"), "TOOLJET_SERVER");
+        assert_eq!(env_slug("api:dev"), "API_DEV");
+        assert_eq!(env_slug("  "), "", "all-separator names slug to empty and are skipped");
+    }
+
+    #[test]
+    fn wt_vars_expose_ports_under_both_id_and_name() {
+        let services = vec![
+            ("svc-19".to_string(), "Server".to_string(), 3150u32),
+            ("frontend".to_string(), "Front End".to_string(), 8232u32),
+        ];
+        let m = build_wt_vars("/repo/.worktrees/lts-3.16", 4, derived_db_name("ToolJet-CE", "/repo/.worktrees/lts-3.16"), &services);
+
+        assert_eq!(m.get("WT_SLUG").unwrap(), "lts_3_16");
+        assert_eq!(m.get("WT_INDEX").unwrap(), "4");
+        assert_eq!(m.get("WT_DB_NAME").unwrap(), "tooljet_ce_lts_3_16");
+        assert_eq!(m.get("WM_WT_SLUG").unwrap(), "lts_3_16", "back-compat alias");
+
+        // the id form, its WM_ alias, and the human-name form all resolve
+        assert_eq!(m.get("WT_SVC-19_PORT").unwrap(), "3150");
+        assert_eq!(m.get("WM_PORT_SVC-19").unwrap(), "3150");
+        assert_eq!(m.get("WT_SERVER_PORT").unwrap(), "3150", "a template can say ${{WT_SERVER_PORT}}");
+        assert_eq!(m.get("WT_FRONT_END_PORT").unwrap(), "8232");
+    }
+
+    #[test]
+    fn name_slug_never_clobbers_an_id_var() {
+        // a service literally named after another service's id must not steal it
+        let services = vec![
+            ("server".to_string(), "Server".to_string(), 3000u32),
+            ("svc-2".to_string(), "server".to_string(), 4000u32),
+        ];
+        let m = build_wt_vars("/w/main", 0, derived_db_name("r", "/w/main"), &services);
+        assert_eq!(m.get("WT_SERVER_PORT").unwrap(), "3000", "id-based var wins");
+
     }
 
     #[test]
