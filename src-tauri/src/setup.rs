@@ -923,7 +923,7 @@ async fn run_tasks_parallel(
     for (i, (cmd, cwd)) in prepared.into_iter().enumerate() {
         let (wt, repo, vars, tx) = (wt_path.to_string(), repo_path.to_string(), vars.clone(), tx.clone());
         let timeout = policy.timeout_secs;
-        handles.push(tauri::async_runtime::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let step = i + 1;
             let prefix = format!("setup [{step}/{n}]");
             // Announced by the task itself, as it starts — which in parallel

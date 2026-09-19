@@ -21,7 +21,7 @@
 // leaves the machine, and the UI says so.
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::runtime::RuntimeContext;
 
 /// Where release metadata comes from. The repository is public, so this needs
 /// no token; unauthenticated GitHub API requests are rate-limited to 60/hour
@@ -116,7 +116,7 @@ async fn fetch_latest() -> Result<GhRelease, String> {
 }
 
 /// Run one check and emit `app:update` with the result.
-pub async fn check_now(app: &AppHandle) -> UpdateStatus {
+pub async fn check_now(app: &RuntimeContext) -> UpdateStatus {
     let current = current_version().to_string();
     let status = match fetch_latest().await {
         Ok(rel) => UpdateStatus {
@@ -143,8 +143,8 @@ pub async fn check_now(app: &AppHandle) -> UpdateStatus {
 /// Background loop honouring `Settings.updates.auto_check`. The preference is
 /// re-read every tick rather than captured, so turning it off takes effect
 /// without a restart.
-pub fn spawn_check_task(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
+pub fn spawn_check_task(app: RuntimeContext) {
+    app.executor().spawn(async move {
         // let the app finish starting before spending anything on the network
         tokio::time::sleep(std::time::Duration::from_secs(20)).await;
         loop {
@@ -163,7 +163,7 @@ pub fn spawn_check_task(app: AppHandle) {
 // ── crash reports ─────────────────────────────────────────────────────
 
 /// `<app-log-dir>/crashes`.
-pub fn crash_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+pub fn crash_dir(app: &RuntimeContext) -> Option<std::path::PathBuf> {
     let dir = app.path().app_log_dir().ok()?.join("crashes");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
@@ -172,7 +172,7 @@ pub fn crash_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 /// Install the panic hook. It always chains to the previous hook (so the
 /// existing stderr/log output is untouched) and only writes a report when the
 /// preference is on — read at panic time, so toggling it needs no restart.
-pub fn install_panic_hook(app: AppHandle) {
+pub fn install_panic_hook(app: RuntimeContext) {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let enabled = app
@@ -189,7 +189,7 @@ pub fn install_panic_hook(app: AppHandle) {
     }));
 }
 
-fn write_report(app: &AppHandle, info: &std::panic::PanicHookInfo<'_>) -> Result<(), String> {
+fn write_report(app: &RuntimeContext, info: &std::panic::PanicHookInfo<'_>) -> Result<(), String> {
     let dir = crash_dir(app).ok_or("no log directory")?;
     let path = dir.join(format!("crash-{}.txt", now_secs()));
     let mut f = std::fs::File::create(&path).map_err(|e| e.to_string())?;
@@ -209,7 +209,7 @@ fn write_report(app: &AppHandle, info: &std::panic::PanicHookInfo<'_>) -> Result
 
 /// How many reports are on disk, so the UI can offer to open the folder only
 /// when there is something in it.
-pub fn crash_report_count(app: &AppHandle) -> usize {
+pub fn crash_report_count(app: &RuntimeContext) -> usize {
     crash_dir(app)
         .and_then(|d| std::fs::read_dir(d).ok())
         .map(|rd| rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "txt")).count())

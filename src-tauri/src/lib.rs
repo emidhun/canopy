@@ -1,33 +1,44 @@
+#[cfg(feature = "desktop")]
 mod commands;
+#[cfg(feature = "desktop")]
+mod desktop_host;
+pub mod operations;
+pub mod runtime;
 #[cfg(test)]
 mod csp;
-mod db;
-mod disk;
-mod diagnostics;
-mod error;
-mod git;
-mod notify;
-mod ownership;
-mod proc;
-mod services;
-mod settings;
-mod setup;
-mod state;
-mod stats;
-#[cfg(feature = "devtools")]
+pub mod db;
+pub mod disk;
+pub mod diagnostics;
+pub mod error;
+pub mod git;
+pub mod notify;
+pub mod ownership;
+pub mod proc;
+pub mod services;
+pub mod settings;
+pub mod setup;
+pub mod state;
+pub mod stats;
+#[cfg(all(feature = "devtools", feature = "desktop"))]
 mod suite;
-mod terminal;
-mod toolchain;
-mod updates;
+pub mod terminal;
+pub mod toolchain;
+pub mod updates;
+#[cfg(feature = "desktop")]
 mod tray;
 
+#[cfg(all(unix, feature = "devtools", feature = "desktop"))]
 use services::ProcTable;
+#[cfg(feature = "desktop")]
 use state::AppState;
+#[cfg(feature = "desktop")]
 use tauri::Manager;
+#[cfg(feature = "desktop")]
 use terminal::TermTable;
 
 /// Is any Canopy window (main / popover / detached terminal) on screen?
 /// Queries the OS — used only by the 1s poll below; hot paths read the cache.
+#[cfg(feature = "desktop")]
 pub(crate) fn any_window_visible(app: &tauri::AppHandle) -> bool {
     app.webview_windows()
         .values()
@@ -39,18 +50,22 @@ pub(crate) fn any_window_visible(app: &tauri::AppHandle) -> bool {
 /// WebKit/WebView2 processes hot for work nobody can see — the log pump and
 /// PTY reader consult this per emit, so it must be an atomic read, not an
 /// OS query marshalled to the main thread per 32KB chunk.
+#[cfg(feature = "desktop")]
 static WINDOWS_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+#[cfg(feature = "desktop")]
 pub(crate) fn windows_visible() -> bool {
     WINDOWS_VISIBLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Called by every path that shows a window, so the ≤1s cache staleness can
 /// never swallow the first events after a show.
+#[cfg(feature = "desktop")]
 pub(crate) fn note_window_shown() {
     WINDOWS_VISIBLE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // GUI apps on macOS get a bare PATH; fix it so git/node/nvm resolve.
@@ -102,15 +117,24 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             app.manage(owner);
             tray::init(&handle)?;
-            let loaded = settings::load_settings(&handle);
+            let paths = runtime::RuntimePaths {
+                config: handle.path().app_config_dir()?,
+                data: handle.path().app_data_dir()?,
+                logs: handle.path().app_log_dir()?,
+            };
+            let loaded = settings::load_settings(&paths);
             // git credentials are process-wide (see git.rs) — publish them
             // before anything can run a git command
             git::apply_credentials(&loaded.security.ssh_key, &loaded.security.credential_helper);
-            app.manage(AppState::new(loaded, settings::load_runtime(&handle)));
-            app.manage(ProcTable::default());
-            app.manage(TermTable::default());
-            app.manage(disk::DiskCache::default());
-            app.manage(notify::NotifyState::default());
+            let context = runtime::RuntimeContext::new(
+                AppState::new(loaded, settings::load_runtime(&paths)),
+                paths,
+                tauri::async_runtime::handle().inner().clone(),
+                std::sync::Arc::new(desktop_host::DesktopHost(handle.clone())),
+            );
+            app.manage(context.clone());
+            let desktop = handle;
+            let handle = context;
 
             // crash reports + the update check need AppState for their
             // preferences, so both are installed after it is managed
@@ -137,7 +161,7 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         WINDOWS_VISIBLE.store(
-                            any_window_visible(&handle),
+                            any_window_visible(&desktop),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         terminal::poll_states(&handle);
@@ -159,7 +183,7 @@ pub fn run() {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
                         if let Some(table) = handle.try_state::<TermTable>() {
-                            terminal::sweep_idle(&handle, &table);
+                            terminal::sweep_idle(&handle, table);
                         }
                     }
                 });
@@ -183,14 +207,14 @@ pub fn run() {
             // headless end-to-end suite: WTM_SUITE=<repoId>
             #[cfg(feature = "devtools")]
             if let Ok(repo_id) = std::env::var("WTM_SUITE") {
-                suite::run(app.handle().clone(), repo_id);
+                suite::run(app.state::<runtime::RuntimeContext>().inner().clone(), repo_id);
             }
 
             // headless smoke test of the process layer: WTM_SELFTEST=<svcKey>
             // (Unix-only: it pokes pgids with killpg to verify the group died)
             #[cfg(all(unix, feature = "devtools"))]
             if let Ok(key) = std::env::var("WTM_SELFTEST") {
-                let handle = app.handle().clone();
+                let handle = app.state::<runtime::RuntimeContext>().inner().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     eprintln!("[selftest] starting {key}");
@@ -223,7 +247,7 @@ pub fn run() {
             // headless create+start test: WTM_SELFTEST_CREATE="repoId|branch|serviceId"
             #[cfg(feature = "devtools")]
             if let Ok(spec) = std::env::var("WTM_SELFTEST_CREATE") {
-                let handle = app.handle().clone();
+                let handle = app.state::<runtime::RuntimeContext>().inner().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let parts: Vec<&str> = spec.split('|').collect();
@@ -233,7 +257,7 @@ pub fn run() {
                     }
                     let (repo_id, branch, service_id) = (parts[0], parts[1], parts[2]);
                     eprintln!("[ct] create_worktree repo={repo_id} branch={branch}");
-                    match commands::create_worktree(
+                    match operations::create_worktree(
                         handle.clone(),
                         repo_id.to_string(),
                         branch.to_string(),
@@ -371,10 +395,8 @@ pub fn run() {
             // Cmd-Q / app exit: kill every spawned process group before dying
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 // kill embedded terminal shells before their host process dies
-                if let Some(table) = app.try_state::<TermTable>() {
-                    terminal::close_all(&table);
-                }
-                let handle = app.clone();
+                let handle = app.state::<runtime::RuntimeContext>().inner().clone();
+                terminal::close_all(handle.state::<TermTable>());
                 tauri::async_runtime::block_on(async move {
                     services::stop_all(&handle).await;
                 });

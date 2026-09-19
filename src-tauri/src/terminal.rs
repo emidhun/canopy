@@ -22,7 +22,7 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use crate::runtime::RuntimeContext;
 
 /// Per-session scrollback cap (bytes). Big enough for a screenful of history on
 /// rehydrate, small enough to stay cheap across many idle worktrees.
@@ -145,13 +145,6 @@ pub struct BufferSnapshot {
     pub seq: u64,
 }
 
-
-/// Terminal bytes go to the windows that render terminals: the main window
-/// and detached `term-*` windows — never the popover.
-fn terminal_windows(t: &tauri::EventTarget) -> bool {
-    matches!(t, tauri::EventTarget::WebviewWindow { label }
-        if label == "main" || label.starts_with("term-"))
-}
 
 /// The user's home directory, for "don't open in the worktree root".
 fn home_dir() -> Option<String> {
@@ -285,7 +278,7 @@ fn looks_like_prompt(tail: &str, extra: &[String]) -> bool {
 /// ones that changed. Cheap by construction: it inspects at most `TAIL_BYTES`
 /// of already-resident scrollback per agent session and allocates only for
 /// sessions that are quiet.
-pub fn poll_states(app: &AppHandle) {
+pub fn poll_states(app: &RuntimeContext) {
     let Some(table) = app.try_state::<TermTable>() else { return };
     let mut changes: Vec<(String, Activity)> = Vec::new();
     {
@@ -328,7 +321,7 @@ pub fn poll_states(app: &AppHandle) {
 /// prompt, so the profile whose command the launch starts with is the one.
 /// This keeps detection per-profile — as the issue asks — without threading a
 /// new argument through the whole terminal-open call chain.
-fn patterns_for(app: &AppHandle, cwd: &str, command: Option<&str>) -> Vec<String> {
+fn patterns_for(app: &RuntimeContext, cwd: &str, command: Option<&str>) -> Vec<String> {
     let Some(command) = command.map(str::trim).filter(|c| !c.is_empty()) else { return Vec::new() };
     let Some(state) = app.try_state::<AppState>() else { return Vec::new() };
     let Some(ctx) = state.wt_context(cwd) else { return Vec::new() };
@@ -350,7 +343,7 @@ fn patterns_for(app: &AppHandle, cwd: &str, command: Option<&str>) -> Vec<String
 /// The whole check→spawn→insert runs under the sessions lock so two concurrent
 /// attaches for one id (StrictMode remount, pop-out) can't both spawn.
 pub fn open(
-    app: &AppHandle,
+    app: &RuntimeContext,
     table: &TermTable,
     id: &str,
     cwd: &str,
@@ -532,8 +525,8 @@ pub fn open(
                     // resyncs from the snapshot on show / on the next chunk's
                     // seq-gap check — the same race-free cursor rehydrate
                     // mechanism it already uses on mount.
-                    if ours && crate::windows_visible() {
-                        let _ = app.emit_filter("terminal:data", &DataEvent { id: &id, data: b64(chunk), seq }, terminal_windows);
+                    if ours && app.interested(crate::runtime::Audience::Terminals) {
+                        let _ = app.emit_to(crate::runtime::Audience::Terminals, "terminal:data", &DataEvent { id: &id, data: b64(chunk), seq });
                     }
                 }
                 Err(_) => break,
@@ -569,7 +562,7 @@ pub fn open(
         };
         if removed {
             persist_orphans(&app);
-            let _ = app.emit_filter("terminal:exit", &ExitEvent { id: &id }, terminal_windows);
+            let _ = app.emit_to(crate::runtime::Audience::TerminalState, "terminal:exit", &ExitEvent { id: &id });
         }
     });
 
@@ -578,7 +571,7 @@ pub fn open(
 
 /// Write user input (keystrokes, or a command the UI injects such as the agent
 /// CLI) to a session.
-pub fn write(app: &AppHandle, table: &TermTable, id: &str, data: &str) -> Result<(), String> {
+pub fn write(app: &RuntimeContext, table: &TermTable, id: &str, data: &str) -> Result<(), String> {
     // clone the writer handle out, then release the table lock BEFORE the
     // (potentially blocking) write — see the field comment on `writer`.
     let (writer, answered) = {
@@ -638,14 +631,14 @@ pub fn close(table: &TermTable, id: &str) {
 }
 
 /// Close a session and refresh the persisted orphan list (command path).
-pub fn close_and_persist(app: &AppHandle, table: &TermTable, id: &str) {
+pub fn close_and_persist(app: &RuntimeContext, table: &TermTable, id: &str) {
     close(table, id);
     persist_orphans(app);
 }
 
 /// Close every terminal belonging to a worktree (called before it's removed, so
 /// no shell/agent lingers with no UI to stop it).
-pub fn close_worktree(app: &AppHandle, table: &TermTable, wt_key: &str) {
+pub fn close_worktree(app: &RuntimeContext, table: &TermTable, wt_key: &str) {
     let prefix = format!("{wt_key}::");
     let ids: Vec<String> = table.sessions.lock().keys().filter(|k| k.starts_with(&prefix)).cloned().collect();
     for id in &ids {
@@ -670,7 +663,7 @@ pub fn close_all(table: &TermTable) {
 /// cleaned up on next launch (mirrors the service orphan sweep). Unix-only — see
 /// `sweep_orphans`.
 #[cfg(unix)]
-fn persist_orphans(app: &AppHandle) {
+fn persist_orphans(app: &RuntimeContext) {
     let table = app.state::<TermTable>();
     let orphans: Vec<TermOrphan> = table
         .sessions
@@ -688,17 +681,17 @@ fn persist_orphans(app: &AppHandle) {
 }
 
 #[cfg(windows)]
-fn persist_orphans(_app: &AppHandle) {}
+fn persist_orphans(_app: &RuntimeContext) {}
 
 /// Startup: kill terminal process groups left over from a crashed previous run
 /// (only when the group leader still exists and its start time matches). Unix-only
 /// — on Windows portable-pty's ConPTY child is killed directly and there is no
 /// pgid to sweep (a documented limitation: PTY grandchildren may linger).
 #[cfg(windows)]
-pub fn sweep_orphans(_app: &AppHandle) {}
+pub fn sweep_orphans(_app: &RuntimeContext) {}
 
 #[cfg(unix)]
-pub fn sweep_orphans(app: &AppHandle) {
+pub fn sweep_orphans(app: &RuntimeContext) {
     let orphans = {
         let state = app.state::<AppState>();
         let rt = state.runtime.read();
@@ -729,7 +722,7 @@ pub fn sweep_orphans(app: &AppHandle) {
 /// child makes its reader hit EOF, which removes the session and emits
 /// `terminal:exit`. Agent sessions are exempt — a quiet agent may just be
 /// waiting for the user, and killing it would lose work.
-pub fn sweep_idle(app: &AppHandle, table: &TermTable) {
+pub fn sweep_idle(app: &RuntimeContext, table: &TermTable) {
     // Per-repo agent timeout, keyed by the repo's worktree paths. Resolved
     // once per sweep rather than per session — the sweep runs every 5 minutes
     // and this is two lock acquisitions instead of one per open terminal.

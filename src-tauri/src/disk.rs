@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use crate::runtime::RuntimeContext;
 
 /// A completed measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -73,12 +73,12 @@ fn now_secs() -> i64 {
 /// Every measurement Canopy currently holds. Read by `get_disk_usage` so a
 /// window that opens the overview late gets what earlier scans already found
 /// instead of waiting for a re-scan.
-pub fn snapshot(app: &AppHandle) -> HashMap<String, DiskUsage> {
+pub fn snapshot(app: &RuntimeContext) -> HashMap<String, DiskUsage> {
     app.try_state::<DiskCache>().map(|c| c.usage.lock().clone()).unwrap_or_default()
 }
 
 /// Drop a worktree's measurement (it was removed, or something invalidated it).
-pub fn forget(app: &AppHandle, wt_key: &str) {
+pub fn forget(app: &RuntimeContext, wt_key: &str) {
     if let Some(cache) = app.try_state::<DiskCache>() {
         cache.usage.lock().remove(wt_key);
         cache.queue.lock().retain(|k| k != wt_key);
@@ -87,7 +87,7 @@ pub fn forget(app: &AppHandle, wt_key: &str) {
 
 /// Queue `wt_keys` for measurement, skipping any whose cached figure is still
 /// fresh unless `force`. Returns immediately — results arrive as `worktree:disk`.
-pub fn request(app: &AppHandle, wt_keys: Vec<String>, force: bool) {
+pub fn request(app: &RuntimeContext, wt_keys: Vec<String>, force: bool) {
     let Some(cache) = app.try_state::<DiskCache>() else { return };
     let now = now_secs();
     {
@@ -114,7 +114,7 @@ pub fn request(app: &AppHandle, wt_keys: Vec<String>, force: bool) {
         return;
     }
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    app.executor().spawn(async move {
         loop {
             let next = {
                 let Some(cache) = app.try_state::<DiskCache>() else { break };
@@ -138,7 +138,7 @@ pub fn request(app: &AppHandle, wt_keys: Vec<String>, force: bool) {
                 }
             };
             let path = next.clone();
-            let measured = tauri::async_runtime::spawn_blocking(move || measure(&path)).await;
+            let measured = app.executor().spawn_blocking(move || measure(&path)).await;
             let Ok(usage) = measured else { continue };
             if let Some(cache) = app.try_state::<DiskCache>() {
                 cache.usage.lock().insert(next.clone(), usage);
