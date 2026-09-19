@@ -60,8 +60,9 @@ mod tests {
         fs::write(dir.join("runtime.lock"), "existing metadata").unwrap();
         let first = RuntimeOwner::acquire(&dir).unwrap();
         assert!(RuntimeOwner::acquire(&dir).err().unwrap().contains("another Canopy backend"));
-        assert_eq!(fs::read_to_string(dir.join("runtime.lock")).unwrap(), "existing metadata");
         drop(first);
+        // Windows enforces byte-range locks on reads as well as writes.
+        assert_eq!(fs::read_to_string(dir.join("runtime.lock")).unwrap(), "existing metadata");
         let next = RuntimeOwner::acquire(&dir).unwrap();
         assert!(dir.join("runtime.lock").is_file());
         drop(next);
