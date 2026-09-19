@@ -64,7 +64,7 @@ pub fn notify(app: &RuntimeContext, kind: Kind, subject: &str, title: &str, body
         return;
     }
     // Someone looking at Canopy has already been told, twice.
-    if app.interested(crate::runtime::Audience::Main) {
+    if app.host().interested(crate::runtime::Audience::Main) {
         return;
     }
     if let Some(state) = app.try_state::<NotifyState>() {

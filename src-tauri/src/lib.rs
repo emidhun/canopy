@@ -10,6 +10,7 @@ pub mod db;
 pub mod disk;
 pub mod diagnostics;
 pub mod error;
+pub mod events;
 pub mod git;
 pub mod notify;
 pub mod ownership;

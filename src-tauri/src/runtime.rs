@@ -40,6 +40,7 @@ struct Inner {
     executor: tokio::runtime::Handle,
     host: Arc<dyn Host>,
     service_logs: std::sync::OnceLock<Option<PathBuf>>,
+    events: crate::events::EventHub,
 }
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ impl RuntimeContext {
             processes: ProcTable::default(), terminals: TermTable::default(),
             disk: DiskCache::default(), notifications: NotifyState::default(),
             service_logs: std::sync::OnceLock::new(),
+            events: crate::events::EventHub::default(),
         }))
     }
 
@@ -61,17 +63,31 @@ impl RuntimeContext {
     pub fn try_state<T: RuntimeState>(&self) -> Option<&T> { Some(self.state()) }
     pub fn path(&self) -> &RuntimePaths { &self.0.paths }
     pub fn executor(&self) -> tokio::runtime::Handle { self.0.executor.clone() }
-    pub fn interested(&self, audience: Audience) -> bool { self.0.host.interested(audience) }
+    pub fn interested(&self, audience: Audience) -> bool {
+        self.0.host.interested(audience) || match audience {
+            Audience::Main => self.0.events.has_application_subscribers(),
+            Audience::Terminals => self.0.events.has_terminal_subscribers(),
+            Audience::All | Audience::TerminalState => self.0.events.has_application_subscribers()
+                || self.0.events.has_terminal_subscribers(),
+        }
+    }
     pub fn host(&self) -> &dyn Host { self.0.host.as_ref() }
+    pub fn events(&self) -> &crate::events::EventHub { &self.0.events }
 
     pub fn emit<T: Serialize>(&self, event: &str, value: &T) -> Result<(), String> {
         self.emit_to(Audience::All, event, value)
     }
 
     pub fn emit_to<T: Serialize>(&self, audience: Audience, event: &str, value: &T) -> Result<(), String> {
-        if !self.interested(audience) { return Ok(()) }
+        let native = self.0.host.interested(audience);
+        if !native && !self.0.events.interested(audience, event) { return Ok(()) }
         let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
-        self.0.host.publish(audience, event, value)
+        let _ = self.0.events.publish(audience, event, &value);
+        // Subscribers observe gaps through recv(ResnapshotRequired), never
+        // through an operation's result, even when there is no native host.
+        // A lagging remote consumer must not suppress desktop delivery.
+        if native { self.0.host.publish(audience, event, value)?; }
+        Ok(())
     }
 
     pub fn service_log_dir(&self) -> Option<&PathBuf> {
@@ -164,6 +180,35 @@ mod tests {
         let payload = serde_json::json!({"svcKey": "worktree::web", "status": "running"});
         app.emit_to(Audience::Main, "service:status", &payload).unwrap();
         assert_eq!(&*host.events.lock(), &[("service:status".into(), payload)]);
+    }
+
+    #[tokio::test]
+    async fn subscribers_receive_events_without_a_native_host() {
+        let host = Arc::new(RecordingHost::default());
+        let app = context(host.clone());
+        assert!(!app.interested(Audience::Main));
+        let mut client = app.events().subscribe(crate::events::SubscriptionKind::Application).unwrap();
+        assert!(app.interested(Audience::Main));
+        app.emit("tree:changed", &serde_json::json!({"repos": []})).unwrap();
+        let frame = client.recv().await.unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&frame.json).unwrap();
+        assert_eq!(payload["event"], "tree:changed");
+        assert_eq!(payload["payload"], serde_json::json!({"repos": []}));
+        assert!(host.events.lock().is_empty());
+        drop(client);
+        assert!(!app.interested(Audience::Main));
+    }
+
+    #[tokio::test]
+    async fn remote_resnapshot_never_fails_native_emit() {
+        for native in [false, true] {
+        let host = Arc::new(RecordingHost { interested: native, ..Default::default() });
+        let app = context(host.clone());
+        let mut subscriber = app.events().subscribe(crate::events::SubscriptionKind::Application).unwrap();
+        app.emit("tree:changed", &"x".repeat(crate::events::MAX_EVENT_BYTES)).unwrap();
+        assert_eq!(host.events.lock().len(), usize::from(native));
+        assert_eq!(subscriber.recv().await.unwrap_err(), crate::events::EventError::ResnapshotRequired);
+        }
     }
 
     #[test]
