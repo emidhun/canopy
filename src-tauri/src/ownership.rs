@@ -25,7 +25,7 @@ impl RuntimeOwner {
         }
         let file = options.open(&path)
             .map_err(|e| format!("open runtime lock {}: {e}", path.display()))?;
-        if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        if !file.metadata().map_err(|e| format!("stat runtime lock {}: {e}", path.display()))?.is_file() {
             return Err(format!("runtime lock is not a regular file: {}", path.display()));
         }
         file.try_lock().map_err(|e| match e {
