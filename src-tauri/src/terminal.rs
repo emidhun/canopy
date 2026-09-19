@@ -703,9 +703,11 @@ pub fn sweep_orphans(app: &RuntimeContext) {
             continue;
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
-        if alive && crate::services::proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
-            if !crate::ownership::orphan_parent_verified(o.pgid as u32) {
-                log::warn!("leaving process group {} alone: parent is not verified as init", o.pgid);
+        if alive {
+            if o.spawn_time_secs == 0
+                || !crate::services::proc_start_time_matches(o.pgid as u32, o.spawn_time_secs)
+                || !crate::ownership::orphan_parent_verified(o.pgid as u32) {
+                log::warn!("leaving process group {} alone: identity or orphan parent is unverified", o.pgid);
                 retained.push(o.clone());
                 continue;
             }

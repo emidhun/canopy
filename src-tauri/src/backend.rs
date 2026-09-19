@@ -193,8 +193,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn a_live_legacy_child_is_never_recovered_as_an_orphan() {
+    #[tokio::test]
+    async fn a_live_legacy_child_is_never_recovered_as_an_orphan() {
         use std::os::unix::process::CommandExt;
         let mut child = std::process::Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
         let pid = child.id();
@@ -207,9 +207,21 @@ mod tests {
         };
         let rejected = ownership::verify_recovery(&state).is_err();
         let parent_rejected = !ownership::orphan_parent_verified(pid);
+        let fixture = Fixture::new();
+        let mut persisted = state.clone();
+        persisted.orphans.push(settings::OrphanProc { pgid: pid as i32, spawn_time_secs: 1, ..Default::default() });
+        persisted.terminal_orphans = persisted.orphans.iter().map(|o| settings::TermOrphan {
+            id: "legacy".into(), pgid: o.pgid, spawn_time_secs: o.spawn_time_secs,
+        }).collect();
+        let app = RuntimeContext::new(AppState::new(settings::Settings::default(), persisted), fixture.paths(),
+            tokio::runtime::Handle::current(), Arc::new(HeadlessHost));
+        crate::services::sweep_orphans(&app);
+        crate::terminal::sweep_orphans(&app);
+        let retained = app.state::<AppState>().runtime.read().orphans.len() == 2
+            && app.state::<AppState>().runtime.read().terminal_orphans.len() == 2;
         let still_alive = child.try_wait().unwrap().is_none();
         child.kill().unwrap();
         child.wait().unwrap();
-        assert!(rejected && parent_rejected && still_alive);
+        assert!(rejected && parent_rejected && still_alive && retained);
     }
 }
