@@ -83,6 +83,8 @@ impl RuntimeContext {
         if !native && !self.0.events.interested(audience, event) { return Ok(()) }
         let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
         let _ = self.0.events.publish(audience, event, &value);
+        // Subscribers observe gaps through recv(ResnapshotRequired), never
+        // through an operation's result, even when there is no native host.
         // A lagging remote consumer must not suppress desktop delivery.
         if native { self.0.host.publish(audience, event, value)?; }
         Ok(())
@@ -199,12 +201,14 @@ mod tests {
 
     #[tokio::test]
     async fn remote_resnapshot_never_fails_native_emit() {
-        let host = Arc::new(RecordingHost { interested: true, ..Default::default() });
+        for native in [false, true] {
+        let host = Arc::new(RecordingHost { interested: native, ..Default::default() });
         let app = context(host.clone());
         let mut subscriber = app.events().subscribe(crate::events::SubscriptionKind::Application).unwrap();
         app.emit("tree:changed", &"x".repeat(crate::events::MAX_EVENT_BYTES)).unwrap();
-        assert_eq!(host.events.lock().len(), 1);
+        assert_eq!(host.events.lock().len(), usize::from(native));
         assert_eq!(subscriber.recv().await.unwrap_err(), crate::events::EventError::ResnapshotRequired);
+        }
     }
 
     #[test]
