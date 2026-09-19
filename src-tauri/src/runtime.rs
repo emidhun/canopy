@@ -82,10 +82,10 @@ impl RuntimeContext {
         let native = self.0.host.interested(audience);
         if !native && !self.0.events.interested(audience, event) { return Ok(()) }
         let value = serde_json::to_value(value).map_err(|e| e.to_string())?;
-        let subscribers = self.0.events.publish(audience, event, &value);
+        let _ = self.0.events.publish(audience, event, &value);
         // A lagging remote consumer must not suppress desktop delivery.
         if native { self.0.host.publish(audience, event, value)?; }
-        subscribers.map_err(|e| format!("event delivery requires a new snapshot: {e:?}"))
+        Ok(())
     }
 
     pub fn service_log_dir(&self) -> Option<&PathBuf> {
@@ -195,6 +195,16 @@ mod tests {
         assert!(host.events.lock().is_empty());
         drop(client);
         assert!(!app.interested(Audience::Main));
+    }
+
+    #[tokio::test]
+    async fn remote_resnapshot_never_fails_native_emit() {
+        let host = Arc::new(RecordingHost { interested: true, ..Default::default() });
+        let app = context(host.clone());
+        let mut subscriber = app.events().subscribe(crate::events::SubscriptionKind::Application).unwrap();
+        app.emit("tree:changed", &"x".repeat(crate::events::MAX_EVENT_BYTES)).unwrap();
+        assert_eq!(host.events.lock().len(), 1);
+        assert_eq!(subscriber.recv().await.unwrap_err(), crate::events::EventError::ResnapshotRequired);
     }
 
     #[test]
