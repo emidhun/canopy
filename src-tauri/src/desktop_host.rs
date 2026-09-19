@@ -5,12 +5,18 @@ use tauri_plugin_notification::NotificationExt;
 
 pub struct DesktopHost(pub AppHandle);
 
+fn interested(audience: Audience, visible: bool) -> bool {
+    // Terminal lifecycle changes must reach hidden terminal windows too. Only
+    // the byte stream is rehydrated from a snapshot when a window reappears.
+    matches!(audience, Audience::All | Audience::TerminalState) || visible
+}
+
 impl Host for DesktopHost {
     fn interested(&self, audience: Audience) -> bool {
         // Preserve delivery of state changes to hidden windows. High-volume
         // streams retain the existing visibility gate until event subscriptions
         // replace the desktop cache in the next runtime slice.
-        matches!(audience, Audience::All) || crate::windows_visible()
+        interested(audience, crate::windows_visible())
     }
 
     fn publish(&self, audience: Audience, event: &str, payload: serde_json::Value) -> Result<(), String> {
@@ -19,7 +25,7 @@ impl Host for DesktopHost {
             Audience::Main => self.0.emit_filter(event, payload, |target| {
                 matches!(target, tauri::EventTarget::WebviewWindow { label } if label == "main")
             }),
-            Audience::Terminals => self.0.emit_filter(event, payload, |target| {
+            Audience::Terminals | Audience::TerminalState => self.0.emit_filter(event, payload, |target| {
                 matches!(target, tauri::EventTarget::WebviewWindow { label } if label == "main" || label.starts_with("term-"))
             }),
         };
@@ -44,5 +50,19 @@ impl Host for DesktopHost {
             }
             _ => { let _ = win.set_badge_count(if count > 0 { Some(count) } else { None }); }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_windows_receive_terminal_lifecycle_but_not_stream_bytes() {
+        assert!(interested(Audience::TerminalState, false));
+        assert!(interested(Audience::All, false));
+        assert!(!interested(Audience::Terminals, false));
+        assert!(!interested(Audience::Main, false));
+        assert!(interested(Audience::Terminals, true));
     }
 }

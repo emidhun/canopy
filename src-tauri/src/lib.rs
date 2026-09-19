@@ -19,7 +19,7 @@ pub mod settings;
 pub mod setup;
 pub mod state;
 pub mod stats;
-#[cfg(feature = "devtools")]
+#[cfg(all(feature = "devtools", feature = "desktop"))]
 mod suite;
 pub mod terminal;
 pub mod toolchain;
@@ -27,7 +27,7 @@ pub mod updates;
 #[cfg(feature = "desktop")]
 mod tray;
 
-#[cfg(all(feature = "devtools", feature = "desktop"))]
+#[cfg(all(unix, feature = "devtools", feature = "desktop"))]
 use services::ProcTable;
 #[cfg(feature = "desktop")]
 use state::AppState;

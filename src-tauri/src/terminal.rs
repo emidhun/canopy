@@ -562,7 +562,7 @@ pub fn open(
         };
         if removed {
             persist_orphans(&app);
-            let _ = app.emit_to(crate::runtime::Audience::Terminals, "terminal:exit", &ExitEvent { id: &id });
+            let _ = app.emit_to(crate::runtime::Audience::TerminalState, "terminal:exit", &ExitEvent { id: &id });
         }
     });
 

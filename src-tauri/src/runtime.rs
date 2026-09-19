@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Clone, Copy)]
-pub enum Audience { All, Main, Terminals }
+pub enum Audience { All, Main, Terminals, TerminalState }
 
 pub trait Host: Send + Sync {
     fn interested(&self, audience: Audience) -> bool;
@@ -176,5 +176,54 @@ mod tests {
         // This is how a synchronous native command schedules backend work.
         let task = app.executor().spawn(async { 42 });
         assert_eq!(executor.block_on(task).unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn real_service_execution_and_logs_work_without_tauri() {
+        use crate::settings::{RepoCfg, ServiceCfg};
+        use crate::state::{RepoNode, ServiceNode, SvcStatus, WorktreeNode};
+        let dir = std::env::temp_dir().join(format!("canopy-core-service-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        let key = format!("{path}::smoke");
+        let state = AppState::new(Settings {
+            repos: vec![RepoCfg {
+                id: "fixture".into(), path: path.clone(),
+                services: vec![ServiceCfg {
+                    id: "smoke".into(), name: "Smoke".into(), command: "printf canopy-core-smoke".into(),
+                    ..Default::default()
+                }], ..Default::default()
+            }], ..Default::default()
+        }, PersistedState::default());
+        *state.tree.write() = vec![RepoNode {
+            repo_id: "fixture".into(), name: "Fixture".into(), path: path.clone(),
+            worktrees: vec![WorktreeNode {
+                wt_key: path.clone(), branch: "main".into(), path, is_main: true, git: None,
+                db_name: None, setup: None, setup_configured: false, pinned: false,
+                services: vec![ServiceNode {
+                    svc_key: key.clone(), service_id: "smoke".into(), name: "Smoke".into(),
+                    kind: "worker".into(), port: None, derived_port: None, status: SvcStatus::Stopped,
+                }],
+            }],
+        }];
+        let app = RuntimeContext::new(state, RuntimePaths {
+            config: dir.clone(), data: dir.clone(), logs: dir.clone(),
+        }, tokio::runtime::Handle::current(), Arc::new(RecordingHost::default()));
+        let started = crate::operations::service_start(app.clone(), key.clone()).await;
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let output = crate::operations::get_logs(app.state::<ProcTable>(), key.clone());
+                if output.iter().any(|line| line.text.contains("canopy-core-smoke"))
+                    && app.state::<ProcTable>().procs.lock().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await;
+        crate::services::stop_all(&app).await;
+        drop(app);
+        let _ = std::fs::remove_dir_all(dir);
+        started.unwrap();
+        observed.expect("service output/reaping did not reach the shared tables");
     }
 }
