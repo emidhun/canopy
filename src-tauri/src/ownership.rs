@@ -11,6 +11,16 @@ pub struct RuntimeOwner {
     _lock: File,
 }
 
+impl Drop for RuntimeOwner {
+    fn drop(&mut self) {
+        // On Unix a concurrent fork briefly inherits this descriptor until
+        // exec closes CLOEXEC files. Explicit unlock makes intentional owner
+        // release immediate even during that window. Context clones retain
+        // the owner itself, so this runs only after the final runtime user.
+        let _ = self._lock.unlock();
+    }
+}
+
 impl RuntimeOwner {
     pub fn acquire(data_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(data_dir)
@@ -37,6 +47,60 @@ impl RuntimeOwner {
         })?;
         Ok(Self { _lock: file })
     }
+}
+
+/// Legacy desktops predate runtime.lock. Refuse a second engine while one is
+/// visible in the process table, even if it might use another data directory.
+/// A false positive is recoverable; allowing it to mutate shared state is not.
+pub fn refuse_legacy_desktop() -> Result<(), String> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let own = Pid::from_u32(std::process::id());
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    if system.process(own).is_none() {
+        return Err("cannot inspect the process table; refusing backend takeover".into());
+    }
+    for (pid, process) in system.processes() {
+        if *pid != own && legacy_name(&process.name().to_string_lossy()) {
+            return Err(format!("a Canopy desktop may still own runtime state (pid {pid}); quit it before starting the backend"));
+        }
+    }
+    Ok(())
+}
+
+fn legacy_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("canopy") || name.eq_ignore_ascii_case("canopy.exe")
+}
+
+/// Only init-parented Unix processes are demonstrably detached from their old
+/// owner. Containers with a subreaper deliberately fail closed rather than
+/// guessing whether the reaper is an old live desktop. Missing parent metadata
+/// is not permission to signal a process group.
+#[cfg(unix)]
+pub(crate) fn orphan_parent_verified(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, ProcessRefreshKind::nothing());
+    system.process(pid).and_then(|p| p.parent()).is_some_and(|p| p.as_u32() == 1)
+}
+
+/// Check all recorded candidates before either sweeper writes state.json.
+/// PID identity checks alone cannot distinguish legacy live children.
+pub fn verify_recovery(state: &crate::settings::RuntimeState) -> Result<(), String> {
+    #[cfg(unix)]
+    for (pid, started) in state.orphans.iter().map(|o| (o.pgid, o.spawn_time_secs))
+        .chain(state.terminal_orphans.iter().map(|o| (o.pgid, o.spawn_time_secs))) {
+        if pid <= 1 { continue }
+        let live = unsafe { libc::killpg(pid, 0) == 0 };
+        if live && (started == 0 || (crate::services::proc_start_time_matches(pid as u32, started)
+            && !orphan_parent_verified(pid as u32))) {
+            return Err(format!("cannot safely recover recorded process group {pid}: its previous owner may still be alive; stop the previous Canopy instance and its children first"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = state;
+    Ok(())
 }
 
 #[cfg(test)]

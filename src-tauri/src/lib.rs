@@ -2,6 +2,7 @@
 mod commands;
 #[cfg(feature = "desktop")]
 mod desktop_host;
+pub mod backend;
 pub mod operations;
 pub mod runtime;
 #[cfg(test)]
