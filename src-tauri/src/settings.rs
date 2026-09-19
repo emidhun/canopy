@@ -474,6 +474,18 @@ fn save_json<T: Serialize>(path: &PathBuf, value: &T) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| format!("rename {} → {}: {e}", tmp.display(), path.display()))
 }
 
+/// Backend startup must distinguish a fresh install from unreadable/corrupt
+/// existing state. In particular, never quarantine or overwrite another host's
+/// files while deciding whether it is safe to take ownership.
+pub fn load_checked<T: for<'a> Deserialize<'a> + Default>(path: &std::path::Path) -> Result<T, String> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parse {}: {e}; repair the file before starting the backend", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(format!("read {}: {e}", path.display())),
+    }
+}
+
 pub fn load_settings(app: &crate::runtime::RuntimePaths) -> Settings {
     load_json(&settings_path(app))
 }

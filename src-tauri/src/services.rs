@@ -876,12 +876,18 @@ pub fn sweep_orphans(app: &RuntimeContext) {
         let rt = state.runtime.read();
         rt.orphans.clone()
     };
+    let mut retained = Vec::new();
     for o in &orphans {
         if o.pgid <= 1 {
             continue;
         }
         let alive = unsafe { libc::killpg(o.pgid, 0) == 0 };
         if alive && proc_start_time_matches(o.pgid as u32, o.spawn_time_secs) {
+            if !crate::ownership::orphan_parent_verified(o.pgid as u32) {
+                log::warn!("leaving process group {} alone: parent is not verified as init", o.pgid);
+                retained.push(o.clone());
+                continue;
+            }
             log::warn!("sweeping orphan pgid {} ({})", o.pgid, o.svc_key);
             unsafe {
                 libc::killpg(o.pgid, libc::SIGTERM);
@@ -891,7 +897,7 @@ pub fn sweep_orphans(app: &RuntimeContext) {
     let state = app.state::<AppState>();
     let runtime = {
         let mut rt = state.runtime.write();
-        rt.orphans.clear();
+        rt.orphans = retained;
         rt.clone()
     };
     let _ = crate::settings::save_runtime(app, &runtime);
