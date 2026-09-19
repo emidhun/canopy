@@ -7,6 +7,7 @@ mod diagnostics;
 mod error;
 mod git;
 mod notify;
+mod ownership;
 mod proc;
 mod services;
 mod settings;
@@ -94,6 +95,12 @@ pub fn run() {
     builder
         .setup(|app| {
             let handle = app.handle().clone();
+            // Cross-executable ownership must precede every runtime read and
+            // orphan sweep. The desktop single-instance plugin alone cannot
+            // exclude a headless host using the same data directory.
+            let owner = ownership::RuntimeOwner::acquire(&handle.path().app_data_dir()?)
+                .map_err(std::io::Error::other)?;
+            app.manage(owner);
             tray::init(&handle)?;
             let loaded = settings::load_settings(&handle);
             // git credentials are process-wide (see git.rs) — publish them
