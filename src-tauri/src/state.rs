@@ -3,7 +3,7 @@ use crate::settings::{RepoCfg, RuntimeState, Settings};
 use serde::Serialize;
 use std::collections::HashMap;
 use parking_lot::{Mutex, RwLock};
-use tauri::{AppHandle, Emitter, Manager};
+use crate::runtime::RuntimeContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -102,7 +102,7 @@ pub struct AppState {
 /// two creates could TOCTOU the same path, and a restore could race a
 /// snapshot. Dropped (including on panic/early return) it frees the slot.
 pub struct OpLease {
-    app: AppHandle,
+    app: RuntimeContext,
     key: String,
 }
 
@@ -117,7 +117,7 @@ impl Drop for OpLease {
 /// port index (so the slot is reclaimed and derived ports stop creeping up),
 /// its port overrides, its statuses, and its in-memory log buffers. Persists
 /// the runtime file. Idempotent.
-pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
+pub fn release_worktree_runtime(app: &RuntimeContext, repo_id: &str, wt_key: &str) {
     let state = app.state::<AppState>();
     let prefix = format!("{wt_key}::");
     let runtime = {
@@ -155,7 +155,7 @@ pub fn release_worktree_runtime(app: &AppHandle, repo_id: &str, wt_key: &str) {
 
 /// Take the operation lease for `wt_key`, or fail with a conflict naming the
 /// operation already running.
-pub fn try_lease(app: &AppHandle, wt_key: &str, op: &'static str) -> Result<OpLease, crate::error::CanopyError> {
+pub fn try_lease(app: &RuntimeContext, wt_key: &str, op: &'static str) -> Result<OpLease, crate::error::CanopyError> {
     let state = app.state::<AppState>();
     let mut ops = state.ops.lock();
     if let Some(existing) = ops.get(wt_key) {
@@ -339,7 +339,7 @@ pub fn env_slug(s: &str) -> String {
 /// same reason they share build_wt_vars: two implementations of one name is
 /// how $WT_DB_NAME would come to mean different things in a setup command and
 /// in a service command.
-pub fn resolve_db_name(app: &AppHandle, repo_id: &str, wt_key: &str) -> String {
+pub fn resolve_db_name(app: &RuntimeContext, repo_id: &str, wt_key: &str) -> String {
     let state = app.state::<AppState>();
     let derived = derived_db_name(repo_id, wt_key);
     let isolated = {
@@ -392,7 +392,7 @@ pub fn build_wt_vars(
 /// Assign (or look up) the worktree's port index and return the variables setup
 /// can use to provision isolated resources. Idempotent; persists the index.
 /// Called before setup so .env overrides can reference these.
-pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool) -> HashMap<String, String> {
+pub fn worktree_vars(app: &RuntimeContext, repo_id: &str, wt_key: &str, is_main: bool) -> HashMap<String, String> {
     let state = app.state::<AppState>();
     let idx = {
         let mut rt = state.runtime.write();
@@ -428,7 +428,7 @@ pub fn worktree_vars(app: &AppHandle, repo_id: &str, wt_key: &str, is_main: bool
 /// The worktree's already-assigned port index, without allocating or persisting
 /// one. Service startup happens long after setup claimed the index; 0 (the main
 /// checkout's slot) is the only sane fallback if it is somehow absent.
-pub fn existing_port_index(app: &AppHandle, repo_id: &str, wt_key: &str) -> u32 {
+pub fn existing_port_index(app: &RuntimeContext, repo_id: &str, wt_key: &str) -> u32 {
     let state = app.state::<AppState>();
     let rt = state.runtime.read();
     rt.port_indices.get(repo_id).and_then(|m| m.get(wt_key)).copied().unwrap_or(0)
@@ -437,7 +437,7 @@ pub fn existing_port_index(app: &AppHandle, repo_id: &str, wt_key: &str) -> u32 
 /// Rebuild the structural tree (repos -> worktrees -> services) from settings +
 /// `git worktree list`. Git meta is carried over from the previous snapshot and
 /// refreshed separately. Emits `tree:changed`.
-pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
+pub async fn refresh_tree(app: &RuntimeContext) -> Result<Vec<RepoNode>, String> {
     let state = app.state::<AppState>();
     let repos_cfg: Vec<RepoCfg> = state.settings.read().repos.clone();
 
@@ -547,7 +547,7 @@ pub async fn refresh_tree(app: &AppHandle) -> Result<Vec<RepoNode>, String> {
 }
 
 /// Refresh git meta for one worktree; updates the cached tree and emits `worktree:git`.
-pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
+pub async fn refresh_git_meta(app: &RuntimeContext, wt_path: &str) {
     if let Ok(meta) = git::git_meta(wt_path).await {
         let state = app.state::<AppState>();
         let mut changed = false;
@@ -598,7 +598,7 @@ pub async fn refresh_git_meta(app: &AppHandle, wt_path: &str) {
 /// 60s loop, the tray catch-up paths and show_main_window can all fire at
 /// once (tray click + window show is exactly that), and each full refresh is
 /// 2 git spawns per worktree — no reason to run three copies concurrently.
-pub async fn refresh_all(app: &AppHandle) {
+pub async fn refresh_all(app: &RuntimeContext) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
     if IN_FLIGHT.swap(true, Ordering::AcqRel) {
@@ -613,7 +613,7 @@ pub async fn refresh_all(app: &AppHandle) {
 /// per-worktree refreshes run concurrently (chunked so a many-worktree setup
 /// doesn't fork dozens of git processes at once) — the old sequential loop
 /// could take longer than the 60s refresh interval on large repos.
-pub async fn refresh_all_git_meta(app: &AppHandle) {
+pub async fn refresh_all_git_meta(app: &RuntimeContext) {
     let paths: Vec<String> = {
         let state = app.state::<AppState>();
         let tree = state.tree.read();
@@ -627,7 +627,7 @@ pub async fn refresh_all_git_meta(app: &AppHandle) {
             .map(|p| {
                 let app = app.clone();
                 let p = p.clone();
-                tauri::async_runtime::spawn(async move { refresh_git_meta(&app, &p).await })
+                app.executor().spawn(async move { refresh_git_meta(&app, &p).await })
             })
             .collect();
         for h in handles {

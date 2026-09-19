@@ -17,8 +17,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use parking_lot::Mutex;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_notification::NotificationExt;
+use crate::runtime::RuntimeContext;
 
 /// Minimum gap between notifications about the same subject.
 const COOLDOWN: Duration = Duration::from_secs(60);
@@ -42,7 +41,7 @@ pub enum Kind {
     BranchMoved,
 }
 
-fn enabled(app: &AppHandle, kind: Kind) -> (bool, bool) {
+fn enabled(app: &RuntimeContext, kind: Kind) -> (bool, bool) {
     let Some(state) = app.try_state::<crate::state::AppState>() else { return (false, false) };
     let cfg = state.settings.read().notifications.clone();
     let on = match kind {
@@ -59,13 +58,13 @@ fn enabled(app: &AppHandle, kind: Kind) -> (bool, bool) {
 ///
 /// `subject` is the dedupe key — a service key, a session id — NOT the title,
 /// so a crash-looping service is one notification however its message varies.
-pub fn notify(app: &AppHandle, kind: Kind, subject: &str, title: &str, body: &str) {
+pub fn notify(app: &RuntimeContext, kind: Kind, subject: &str, title: &str, body: &str) {
     let (on, sound) = enabled(app, kind);
     if !on {
         return;
     }
     // Someone looking at Canopy has already been told, twice.
-    if crate::windows_visible() {
+    if app.interested(crate::runtime::Audience::Main) {
         return;
     }
     if let Some(state) = app.try_state::<NotifyState>() {
@@ -82,13 +81,7 @@ pub fn notify(app: &AppHandle, kind: Kind, subject: &str, title: &str, body: &st
         }
     }
 
-    let mut builder = app.notification().builder().title(title).body(body);
-    if sound {
-        builder = builder.sound("default");
-    }
-    if let Err(e) = builder.show() {
-        // A refused notification (permission denied on macOS, no daemon on
-        // Linux) is not an app failure — the in-app queue still has it.
+    if let Err(e) = app.host().notify(title, body, sound) {
         log::debug!("notification not shown: {e}");
     }
 }
@@ -99,7 +92,7 @@ pub fn notify(app: &AppHandle, kind: Kind, subject: &str, title: &str, body: &st
 /// The count is computed here rather than sent from the frontend so it stays
 /// correct while no window is open — which is precisely when a badge is the
 /// only thing communicating it.
-pub fn refresh_badge(app: &AppHandle) {
+pub fn refresh_badge(app: &RuntimeContext) {
     let Some(state) = app.try_state::<crate::state::AppState>() else { return };
     let mode = state.settings.read().notifications.badge.clone();
 
@@ -117,22 +110,5 @@ pub fn refresh_badge(app: &AppHandle) {
     let waiting = 0usize;
     let total = (crashed + waiting) as i64;
 
-    let Some(win) = app.get_webview_window("main") else { return };
-    match mode.as_str() {
-        "off" => {
-            let _ = win.set_badge_count(None);
-        }
-        "dot" => {
-            // A dot is "something needs you" without the number. Not every
-            // platform has one, so fall back to a count of 1 — which carries
-            // the same meaning — rather than showing nothing.
-            #[cfg(target_os = "macos")]
-            let _ = win.set_badge_label(if total > 0 { Some("●".to_string()) } else { None });
-            #[cfg(not(target_os = "macos"))]
-            let _ = win.set_badge_count(if total > 0 { Some(1) } else { None });
-        }
-        _ => {
-            let _ = win.set_badge_count(if total > 0 { Some(total) } else { None });
-        }
-    }
+    app.host().badge(&mode, total);
 }
